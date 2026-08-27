@@ -42,6 +42,20 @@ describe('loadConfig', () => {
     expect(cfg.mcpUrl.href).toBe('http://localhost:3000/mcp');
   });
 
+  it('pins the ConfigError.invalid contract: bare variable names only', () => {
+    let error: unknown;
+    try {
+      loadConfig({ PUBLIC_URL: 'http://localhost:3000' });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(ConfigError);
+    const ce = error as ConfigError;
+    expect(ce.invalid).toEqual(['PUBLIC_URL']);
+    expect(ce.missing).toEqual([]);
+    expect(ce.message).toContain('ALLOW_INSECURE_PUBLIC_URL');
+  });
+
   it('rejects invalid PORT, LOG_LEVEL and MCP_LEGACY_MODE values', () => {
     expect(() => loadConfig({ ...base, PORT: 'abc' })).toThrow(ConfigError);
     expect(() => loadConfig({ ...base, LOG_LEVEL: 'loud' })).toThrow(ConfigError);

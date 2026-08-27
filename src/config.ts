@@ -16,10 +16,11 @@ export class ConfigError extends Error {
   readonly missing: string[];
   readonly invalid: string[];
 
-  constructor(missing: string[], invalid: string[]) {
+  constructor(missing: string[], invalid: string[], hint?: string) {
     const parts: string[] = [];
     if (missing.length > 0) parts.push(`missing required env vars: ${missing.join(', ')}`);
     if (invalid.length > 0) parts.push(`invalid env vars: ${invalid.join(', ')}`);
+    if (hint) parts.push(hint);
     super(`Configuration error — ${parts.join('; ')}`);
     this.name = 'ConfigError';
     this.missing = missing;
@@ -54,11 +55,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   publicUrl.search = '';
   publicUrl.pathname = publicUrl.pathname.replace(/\/+$/, '');
   if (publicUrl.protocol !== 'https:' && parsed.data.ALLOW_INSECURE_PUBLIC_URL !== 'true') {
-    throw new ConfigError([], ['PUBLIC_URL (must be https unless ALLOW_INSECURE_PUBLIC_URL=true)']);
+    throw new ConfigError(
+      [],
+      ['PUBLIC_URL'],
+      'PUBLIC_URL must be https unless ALLOW_INSECURE_PUBLIC_URL=true',
+    );
   }
-  const mcpUrlPath =
-    publicUrl.pathname === '' || publicUrl.pathname === '/' ? '/mcp' : `${publicUrl.pathname}/mcp`;
-  const mcpUrl = new URL(publicUrl.origin + mcpUrlPath);
+  const mcpUrl = new URL(publicUrl);
+  mcpUrl.pathname = `${publicUrl.pathname === '/' ? '' : publicUrl.pathname}/mcp`;
 
   return {
     publicUrl,
