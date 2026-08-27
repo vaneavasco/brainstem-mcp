@@ -154,6 +154,7 @@ coverage/
 !.env.example
 *.log
 .DS_Store
+.superpowers/
 ```
 
 `.node-version`:
