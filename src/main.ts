@@ -16,7 +16,10 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel);
   const running = await startServer(config, logger);
 
+  let shuttingDown = false;
   const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info({ signal }, 'shutting down');
     const timer = setTimeout(() => process.exit(1), 10_000);
     running
@@ -34,4 +37,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-void main();
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});

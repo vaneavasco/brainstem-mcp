@@ -31,13 +31,16 @@ export async function startServer(
   });
   logger.info({ port: listenPort, publicUrl: config.publicUrl.href }, 'brainstem-mcp listening');
 
+  httpServer.on('error', (error) => logger.error({ err: error }, 'http server error'));
+
   return {
     httpServer,
     async close() {
+      await handler.close(); // abort in-flight MCP exchanges first so sockets can drain
+      httpServer.closeIdleConnections(); // drop idle keep-alive sockets held by the Heroku router
       await new Promise<void>((resolve, reject) =>
         httpServer.close((error) => (error ? reject(error) : resolve())),
       );
-      await handler.close();
     },
   };
 }
