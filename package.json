@@ -28,7 +28,7 @@
     "url": "https://github.com/vaneavasco/brainstem-mcp/issues"
   },
   "homepage": "https://github.com/vaneavasco/brainstem-mcp#readme",
-  "private": "true",
+  "private": true,
   "engines": {
     "node": "24.x"
   },
