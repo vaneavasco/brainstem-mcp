@@ -1,11 +1,15 @@
+import { promises as fs } from 'node:fs';
 import type { Server } from 'node:http';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
+import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
 
 const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
 const logger = createLogger('fatal');
@@ -13,9 +17,13 @@ const logger = createLogger('fatal');
 let server: Server;
 let baseUrl: string;
 let port: number;
+let runtime: VaultRuntime;
+let vaultRoot: string;
 
 beforeAll(async () => {
-  const { app } = createApp(config, logger);
+  vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-app-'));
+  runtime = await createLocalRuntime({ vaultPath: vaultRoot, ripgrepPath: null });
+  const { app } = createApp(config, logger, async () => runtime);
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -25,6 +33,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  await runtime.close();
+  await fs.rm(vaultRoot, { recursive: true, force: true });
 });
 
 describe('GET /health', () => {
@@ -215,7 +225,7 @@ describe('legacy mode reject', () => {
   let rejectBaseUrl: string;
 
   beforeAll(async () => {
-    const { app } = createApp(rejectConfig, logger);
+    const { app } = createApp(rejectConfig, logger, async () => runtime);
     rejectServer = await new Promise<Server>((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });

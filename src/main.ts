@@ -1,6 +1,7 @@
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './logger.ts';
 import { startServer } from './server.ts';
+import { createLocalRuntime } from './vault/runtime.ts';
 
 async function main(): Promise<void> {
   let config: ReturnType<typeof loadConfig>;
@@ -14,7 +15,9 @@ async function main(): Promise<void> {
     throw error;
   }
   const logger = createLogger(config.logLevel);
-  const running = await startServer(config, logger);
+  // TODO(task 15): config-driven runtime wiring (per-tenant Drive/local resolution).
+  const runtime = await createLocalRuntime({ vaultPath: process.env.VAULT_PATH ?? './vault-dev' });
+  const running = await startServer(config, logger, async () => runtime);
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -22,8 +25,9 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, 'shutting down');
     const timer = setTimeout(() => process.exit(1), 10_000);
-    running
+    runtime
       .close()
+      .then(() => running.close())
       .then(() => {
         clearTimeout(timer);
         process.exit(0);

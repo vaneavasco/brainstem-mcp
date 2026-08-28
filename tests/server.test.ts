@@ -1,16 +1,33 @@
+import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
 import { startServer } from '../src/server.ts';
+import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
+
+let runtime: VaultRuntime;
+let vaultRoot: string;
+
+beforeEach(async () => {
+  vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-server-'));
+  runtime = await createLocalRuntime({ vaultPath: vaultRoot, ripgrepPath: null });
+});
+
+afterEach(async () => {
+  await runtime.close();
+  await fs.rm(vaultRoot, { recursive: true, force: true });
+});
 
 describe('startServer', () => {
   it('listens with Heroku-compatible keep-alive settings and closes cleanly', async () => {
     const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
-    const running = await startServer(config, createLogger('fatal'), 0);
+    const running = await startServer(config, createLogger('fatal'), async () => runtime, 0);
     try {
       const { port } = running.httpServer.address() as AddressInfo;
       expect(port).toBeGreaterThan(0);
@@ -27,7 +44,7 @@ describe('startServer', () => {
 
   it('closes promptly even when an idle keep-alive connection is open', async () => {
     const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
-    const running = await startServer(config, createLogger('fatal'), 0);
+    const running = await startServer(config, createLogger('fatal'), async () => runtime, 0);
     const { port } = running.httpServer.address() as AddressInfo;
     const agent = new http.Agent({ keepAlive: true });
     await new Promise<void>((resolve, reject) => {
@@ -49,7 +66,9 @@ describe('startServer', () => {
 
   it('aborts a still-open exchange after the drain window', async () => {
     const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
-    const running = await startServer(config, createLogger('fatal'), 0, { drainMs: 300 });
+    const running = await startServer(config, createLogger('fatal'), async () => runtime, 0, {
+      drainMs: 300,
+    });
     const { port } = running.httpServer.address() as AddressInfo;
 
     const socket = net.connect({ host: '127.0.0.1', port });

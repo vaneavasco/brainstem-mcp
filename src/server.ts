@@ -2,6 +2,7 @@ import http from 'node:http';
 import { createApp } from './app.ts';
 import type { Config } from './config.ts';
 import type { Logger } from './logger.ts';
+import type { RuntimeResolver } from './vault/runtime.ts';
 
 export interface RunningServer {
   httpServer: http.Server;
@@ -11,11 +12,12 @@ export interface RunningServer {
 export async function startServer(
   config: Config,
   logger: Logger,
+  resolveRuntime: RuntimeResolver,
   listenPort: number = config.port,
   opts: { drainMs?: number } = {},
 ): Promise<RunningServer> {
   const drainMs = opts.drainMs ?? 7_000;
-  const { app, handler } = createApp(config, logger);
+  const { app, handler } = createApp(config, logger, resolveRuntime);
   const httpServer = http.createServer(app);
 
   // Heroku router keeps idle connections for 90 s; a shorter dyno-side timeout causes H13/H18.

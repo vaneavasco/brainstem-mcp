@@ -5,6 +5,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import type { Config } from './config.ts';
 import type { Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
+import type { RuntimeResolver } from './vault/runtime.ts';
 import { SERVER_INFO } from './version.ts';
 
 export interface AppBundle {
@@ -42,8 +43,12 @@ function errorShape(type: string | undefined): { code: number; message: string }
   }
 }
 
-export function createApp(config: Config, logger: Logger): AppBundle {
-  const handler = createMcpHandler((ctx) => createVaultServer(ctx), {
+export function createApp(
+  config: Config,
+  logger: Logger,
+  resolveRuntime: RuntimeResolver,
+): AppBundle {
+  const handler = createMcpHandler((ctx) => createVaultServer(ctx, { resolveRuntime, logger }), {
     legacy: config.legacyMode,
     keepAliveMs: 15_000, // Heroku closes idle streams after 55 s
     onerror: (error) => logger.warn({ err: error }, 'mcp handler error'),

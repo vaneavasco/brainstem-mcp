@@ -1,6 +1,14 @@
 import { type McpRequestContext, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { Logger } from '../logger.ts';
+import { registerVaultTools } from '../tools/register.ts';
+import type { RuntimeResolver } from '../vault/runtime.ts';
 import { SERVER_INFO } from '../version.ts';
+
+export interface FactoryDeps {
+  resolveRuntime: RuntimeResolver;
+  logger: Logger;
+}
 
 const PingOutput = z.object({
   server: z.string(),
@@ -9,14 +17,14 @@ const PingOutput = z.object({
   now: z.string(),
 });
 
-/**
- * Builds a fresh McpServer for one request. Stateless by design (MCP 2026-07-28):
- * nothing created here may outlive the request.
- */
-export function createVaultServer(ctx: McpRequestContext): McpServer {
+/** Builds a fresh McpServer for one request (stateless per MCP 2026-07-28). */
+export async function createVaultServer(
+  ctx: McpRequestContext,
+  deps: FactoryDeps,
+): Promise<McpServer> {
   const server = new McpServer(SERVER_INFO, {
     instructions:
-      'brainstem-mcp gives Claude read/write access to a personal markdown vault. Phase 0 exposes only a ping tool.',
+      "brainstem-mcp gives you read/write access to the user's personal markdown vault. Paths are vault-relative. Prefer vault_edit/vault_append over rewriting whole notes. Deleting requires confirm=true and only moves files to .trash/.",
     cacheHints: {
       'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
     },
@@ -42,12 +50,14 @@ export function createVaultServer(ctx: McpRequestContext): McpServer {
         era: ctx.era,
         now: new Date().toISOString(),
       };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out) }],
-        structuredContent: out,
-      };
+      return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
     },
   );
 
+  const runtime = await deps.resolveRuntime(ctx);
+  registerVaultTools(server, {
+    runtime,
+    log: (error) => deps.logger.error({ err: error }, 'tool failure'),
+  });
   return server;
 }
