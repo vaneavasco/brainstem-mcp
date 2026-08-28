@@ -6,7 +6,8 @@ function countOccurrences(haystack: string, needle: string): number {
   let idx = haystack.indexOf(needle);
   while (idx !== -1) {
     count += 1;
-    idx = haystack.indexOf(needle, idx + needle.length);
+    // Advance by 1 to detect overlapping matches; they count as separate ambiguities
+    idx = haystack.indexOf(needle, idx + 1);
   }
   return count;
 }

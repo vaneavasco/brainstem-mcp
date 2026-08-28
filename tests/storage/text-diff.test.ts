@@ -36,6 +36,12 @@ describe('applyTextPatches', () => {
     const r = applyTextPatches('l1\nl2\nl3\n', [{ find: 'l2\n', replace: '' }]);
     expect(r.content).toBe('l1\nl3\n');
   });
+
+  it('treats overlapping occurrences as ambiguous', () => {
+    expect(() => applyTextPatches('aaa', [{ find: 'aa', replace: 'X' }])).toThrow(/2 times/);
+    expect(() => applyTextPatches('papapa', [{ find: 'apa', replace: 'X' }])).toThrow(/2 times/);
+    expect(applyTextPatches('a-b', [{ find: 'a-b', replace: 'ok' }]).content).toBe('ok');
+  });
 });
 
 describe('unifiedDiff', () => {
