@@ -82,12 +82,20 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const d = parsed.data;
   if (d.STORAGE_BACKEND === 'localfs' && !d.VAULT_PATH) {
-    throw new ConfigError(['VAULT_PATH (required when STORAGE_BACKEND=localfs)'], []);
+    throw new ConfigError(
+      ['VAULT_PATH'],
+      [],
+      'VAULT_PATH is required when STORAGE_BACKEND=localfs',
+    );
   }
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: d.VAULT_TIMEZONE });
   } catch {
-    throw new ConfigError([], ['VAULT_TIMEZONE (unknown IANA timezone)']);
+    throw new ConfigError(
+      [],
+      ['VAULT_TIMEZONE'],
+      'VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Chisinau)',
+    );
   }
   const storage: StorageConfig =
     d.STORAGE_BACKEND === 'localfs'

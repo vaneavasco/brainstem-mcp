@@ -84,7 +84,16 @@ describe('storage and vault settings', () => {
   });
 
   it('requires VAULT_PATH for localfs and parses vault settings', () => {
-    expect(() => loadConfig({ ...base, STORAGE_BACKEND: 'localfs' })).toThrow(ConfigError);
+    let err: unknown;
+    try {
+      loadConfig({ ...base, STORAGE_BACKEND: 'localfs' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).missing).toEqual(['VAULT_PATH']);
+    expect((err as ConfigError).invalid).toEqual([]);
+    expect((err as ConfigError).message).toContain('STORAGE_BACKEND=localfs');
     const cfg = loadConfig({
       ...base,
       STORAGE_BACKEND: 'localfs',
@@ -108,7 +117,16 @@ describe('storage and vault settings', () => {
   });
 
   it('rejects an unknown timezone or backend', () => {
-    expect(() => loadConfig({ ...base, VAULT_TIMEZONE: 'Mars/Olympus' })).toThrow(ConfigError);
+    let err: unknown;
+    try {
+      loadConfig({ ...base, VAULT_TIMEZONE: 'Mars/Olympus' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).invalid).toEqual(['VAULT_TIMEZONE']);
+    expect((err as ConfigError).missing).toEqual([]);
+    expect((err as ConfigError).message).toContain('IANA');
     expect(() => loadConfig({ ...base, STORAGE_BACKEND: 's3' })).toThrow(ConfigError);
   });
 });
