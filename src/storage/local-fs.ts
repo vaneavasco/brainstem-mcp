@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { watch as chokidarWatch } from 'chokidar';
+import picomatch from 'picomatch';
 import {
   applyFrontmatterUpdate,
   joinFrontmatter,
@@ -14,17 +16,31 @@ import {
   assertWithinSize,
   BINARY_MIME_ALLOWLIST,
   extensionAllowedFor,
+  MAX_SEARCH_RESULTS,
 } from './limits.ts';
-import { isMarkdownPath, normalizeVaultPath } from './path-policy.ts';
+import {
+  baseName,
+  isMarkdownPath,
+  normalizeVaultPath,
+  parentDir,
+  TRASH_DIR,
+} from './path-policy.ts';
 import { applyTextPatches, unifiedDiff } from './text-diff.ts';
 import {
   type BatchReadResult,
   type BatchResult,
   type Caps,
+  type ChangeEvent,
   type EditResult,
+  type Entry,
   type FmUpdate,
+  type ListOpts,
+  type Match,
   type Note,
+  type SearchOpts,
+  type StorageAdapter,
   type TextPatch,
+  type Unsubscribe,
   VaultError,
   type WriteOpts,
 } from './types.ts';
@@ -58,7 +74,16 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
-export class LocalFSAdapter {
+export class LocalFSAdapter implements StorageAdapter {
+  private static readonly TEXT_EXTENSIONS = new Set([
+    '.md',
+    '.markdown',
+    '.txt',
+    '.canvas',
+    '.json',
+    '.csv',
+  ]);
+
   readonly root: string;
   private readonly rg: string | null;
 
@@ -282,5 +307,207 @@ export class LocalFSAdapter {
       }
     }
     return result;
+  }
+
+  // ---- navigation ----------------------------------------------------------
+
+  async list(prefix = '', opts: ListOpts = {}): Promise<Entry[]> {
+    const base = normalizeVaultPath(prefix);
+    const depth = opts.depth ?? 1;
+    const includeFiles = opts.includeFiles ?? true;
+    const includeDirs = opts.includeDirs ?? true;
+    const matcher = opts.glob ? picomatch(opts.glob, { dot: false }) : null;
+
+    const baseAbs = this.abs(base);
+    await this.assertInsideRoot(baseAbs);
+    const baseStat = await this.statOrNull(baseAbs);
+    if (!baseStat) throw new VaultError('NOT_FOUND', `${base || '/'} does not exist.`);
+    if (!baseStat.isDirectory())
+      throw new VaultError('INVALID_INPUT', `${base} is a file, not a folder.`);
+
+    const out: Entry[] = [];
+    const walk = async (dir: string, level: number): Promise<void> => {
+      const dirents = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      dirents.sort((a, b) => a.name.localeCompare(b.name, 'en'));
+      for (const dirent of dirents) {
+        if (dirent.name.startsWith('.')) continue;
+        const rel = dir === '' ? dirent.name : `${dir}/${dirent.name}`;
+        const relToBase = base === '' ? rel : rel.slice(base.length + 1);
+        const matches = matcher === null || matcher(relToBase);
+        if (dirent.isDirectory()) {
+          if (includeDirs && matches) out.push({ path: rel, kind: 'dir' });
+          if (level < depth) await walk(rel, level + 1);
+        } else if (dirent.isFile() && includeFiles && matches) {
+          const stat = await fs.stat(this.abs(rel));
+          out.push({
+            path: rel,
+            kind: 'file',
+            size: stat.size,
+            modifiedAt: stat.mtime.toISOString(),
+          });
+        }
+      }
+    };
+    await walk(base, 1);
+    return out;
+  }
+
+  async move(fromInput: string, toInput: string): Promise<void> {
+    const from = requireFilePath(fromInput);
+    const to = requireFilePath(toInput);
+    const fromAbs = this.abs(from);
+    const toAbs = this.abs(to);
+    await this.assertInsideRoot(fromAbs);
+    await this.assertInsideRoot(toAbs);
+    if (!(await this.statOrNull(fromAbs)))
+      throw new VaultError('NOT_FOUND', `${from} does not exist.`);
+    if (await this.statOrNull(toAbs))
+      throw new VaultError('ALREADY_EXISTS', `${to} already exists.`);
+    await fs.mkdir(path.dirname(toAbs), { recursive: true });
+    try {
+      await fs.rename(fromAbs, toAbs);
+    } catch {
+      throw new VaultError('IO', `Failed to move ${from} to ${to}.`);
+    }
+  }
+
+  async softDelete(inputPath: string, confirm: boolean): Promise<void> {
+    if (confirm !== true) {
+      throw new VaultError(
+        'CONFIRM_REQUIRED',
+        'Deletion requires confirm=true. The file is moved to .trash/ (not erased) and can be restored manually.',
+      );
+    }
+    const p = requireFilePath(inputPath);
+    const fromAbs = this.abs(p);
+    await this.assertInsideRoot(fromAbs);
+    if (!(await this.statOrNull(fromAbs)))
+      throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+
+    let target = normalizeVaultPath(`${TRASH_DIR}/${p}`, { allowInternal: true });
+    if (await this.statOrNull(this.abs(target))) {
+      const name = baseName(p);
+      const dot = name.lastIndexOf('.');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const stamped =
+        dot > 0 ? `${name.slice(0, dot)}.${stamp}${name.slice(dot)}` : `${name}.${stamp}`;
+      const dir = parentDir(p);
+      target = normalizeVaultPath(`${TRASH_DIR}/${dir === '' ? stamped : `${dir}/${stamped}`}`, {
+        allowInternal: true,
+      });
+    }
+    const toAbs = this.abs(target);
+    await fs.mkdir(path.dirname(toAbs), { recursive: true });
+    try {
+      await fs.rename(fromAbs, toAbs);
+    } catch {
+      throw new VaultError('IO', `Failed to move ${p} to trash.`);
+    }
+  }
+
+  // ---- search --------------------------------------------------------------
+
+  async search(query: string, opts: SearchOpts = {}): Promise<Match[]> {
+    if (typeof query !== 'string' || query.trim() === '') {
+      throw new VaultError('INVALID_INPUT', 'Search query must not be empty.');
+    }
+    const limit = Math.max(1, Math.min(opts.limit ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS));
+    const prefix = normalizeVaultPath(opts.pathPrefix ?? '');
+    const caseSensitive = opts.caseSensitive ?? false;
+    const matches = this.rg
+      ? await this.searchRipgrep(query, prefix, limit, caseSensitive)
+      : await this.searchJs(query, prefix, limit, caseSensitive);
+    return matches.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
+  }
+
+  private async searchJs(
+    query: string,
+    prefix: string,
+    limit: number,
+    caseSensitive: boolean,
+  ): Promise<Match[]> {
+    const files = await this.list(prefix, { depth: Number.POSITIVE_INFINITY, includeDirs: false });
+    const needle = caseSensitive ? query : query.toLowerCase();
+    const out: Match[] = [];
+    for (const file of files) {
+      if (!LocalFSAdapter.TEXT_EXTENSIONS.has(path.extname(file.path).toLowerCase())) continue;
+      let text: string;
+      try {
+        text = strictUtf8.decode(await fs.readFile(this.abs(file.path)));
+      } catch {
+        continue;
+      }
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length && out.length < limit; i += 1) {
+        const line = lines[i] ?? '';
+        const haystack = caseSensitive ? line : line.toLowerCase();
+        if (haystack.includes(needle))
+          out.push({ path: file.path, line: i + 1, text: line.trimEnd() });
+      }
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  private async searchRipgrep(
+    query: string,
+    prefix: string,
+    limit: number,
+    caseSensitive: boolean,
+  ): Promise<Match[]> {
+    if (!this.rg) return [];
+    const args = [
+      '--json',
+      '--fixed-strings',
+      '--no-messages',
+      caseSensitive ? '--case-sensitive' : '--ignore-case',
+      '--glob',
+      '!.*',
+      '--glob',
+      '!**/.*/**',
+      ...[...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`]),
+      '--',
+      query,
+      this.abs(prefix),
+    ];
+    let stdout = '';
+    try {
+      ({ stdout } = await execFileAsync(this.rg, args, { maxBuffer: 16 * 1024 * 1024 }));
+    } catch (error) {
+      const e = error as { code?: number; stdout?: string };
+      if (e.code === 1) return []; // ripgrep: no matches
+      throw new VaultError('IO', 'Search failed.');
+    }
+    const out: Match[] = [];
+    for (const line of stdout.split('\n')) {
+      if (out.length >= limit || line === '') continue;
+      const event = JSON.parse(line) as {
+        type: string;
+        data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
+      };
+      if (event.type !== 'match' || !event.data?.path?.text) continue;
+      out.push({
+        path: this.rel(event.data.path.text),
+        line: event.data.line_number ?? 0,
+        text: (event.data.lines?.text ?? '').replace(/\r?\n$/, ''),
+      });
+    }
+    return out;
+  }
+
+  // ---- watch ---------------------------------------------------------------
+
+  watch(onChange: (event: ChangeEvent) => void): Unsubscribe {
+    const watcher = chokidarWatch(this.root, {
+      ignoreInitial: true,
+      ignored: (absPath: string) => absPath !== this.root && path.basename(absPath).startsWith('.'),
+      awaitWriteFinish: false,
+    });
+    watcher.on('add', (abs) => onChange({ type: 'create', path: this.rel(abs) }));
+    watcher.on('change', (abs) => onChange({ type: 'update', path: this.rel(abs) }));
+    watcher.on('unlink', (abs) => onChange({ type: 'delete', path: this.rel(abs) }));
+    return () => {
+      void watcher.close();
+    };
   }
 }
