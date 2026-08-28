@@ -6,7 +6,7 @@ Spec: `../implementation-plan.md` (v1.1). Every plan follows the superpowers `wr
 
 | Phase | Plan | Status | Notes |
 |---|---|---|---|
-| 0 — Scaffold | [2026-08-28-phase-0-scaffold.md](2026-08-28-phase-0-scaffold.md) | planned | 7 tasks. Express 5.2 + SDK 2.0.0, both protocol eras, Heroku + Postgres provisioned, CI, ADR 0001–0003. |
+| 0 — Scaffold | [2026-08-28-phase-0-scaffold.md](2026-08-28-phase-0-scaffold.md) | code complete 2026-08-28 (26 tests); Heroku deploy + public Inspector check pending `heroku login` | 7 tasks + final-review fix wave (JSON-RPC error shaping, drain-then-abort shutdown, reject-mode tests, Dependabot). Local acceptance: MCP Inspector CLI mode against `npm run dev` — `tools/list` shows `brainstem_ping` with annotations/outputSchema, `tools/call` returns `structuredContent` (Inspector CLI negotiates the 2025 era → `era: legacy`; the modern era is covered by `tests/app.test.ts`). Spec §9 also names DB-layer and Drive path-mapping ADRs — they move to Phase 2 / Phase 3 where those decisions are actually made. |
 | 1 — Core tools on LocalFS | [2026-08-28-phase-1-core-tools-localfs.md](2026-08-28-phase-1-core-tools-localfs.md) | planned | 15 tasks. StorageAdapter contract, path policy, frontmatter (ADR 0004), LocalFSAdapter, index, daily notes (tz-aware), canvas, analytics, all 20 tools, env wiring. |
 | 2 — Auth | *written at Phase 1 exit* | outline below | Longest phase (3.5 d). |
 | 3 — GoogleDriveAdapter | *written at Phase 2 exit* | outline below | |
