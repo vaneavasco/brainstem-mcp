@@ -38,9 +38,23 @@ const STRFTIME: Record<string, string> = {
   '%': '%',
 };
 
+// Moment-style tokens accepted when the format has no strftime '%' escapes, translated to their
+// date-fns equivalents in longest-first order (YYYY before YY) so a four-Y run isn't left with a
+// stray "YY". This is a narrow compatibility shim — only these three tokens are recognized — so
+// that Obsidian's own Daily Notes default ("YYYY-MM-DD") works untranslated when pasted in.
+const MOMENT_TOKENS: readonly [RegExp, string][] = [
+  [/YYYY/g, 'yyyy'],
+  [/YY/g, 'yy'],
+  [/DD/g, 'dd'],
+];
+
 export function toDateFnsFormat(fmt: string): string {
-  if (!fmt.includes('%')) return fmt;
-  return fmt.replace(/%([A-Za-z%])/g, (whole, token: string) => STRFTIME[token] ?? whole);
+  if (fmt.includes('%')) {
+    return fmt.replace(/%([A-Za-z%])/g, (whole, token: string) => STRFTIME[token] ?? whole);
+  }
+  let out = fmt;
+  for (const [pattern, replacement] of MOMENT_TOKENS) out = out.replace(pattern, replacement);
+  return out;
 }
 
 function inZone(date: Date, timezone: string): TZDate {
@@ -59,7 +73,8 @@ function inZone(date: Date, timezone: string): TZDate {
 export function formatInVaultZone(date: Date, fmt: string, timezone: string): string {
   const zoned = inZone(date, timezone);
   try {
-    return format(zoned, toDateFnsFormat(fmt));
+    // useAdditionalDayOfYearTokens lets %j -> DDD (day-of-year) format without a console warning.
+    return format(zoned, toDateFnsFormat(fmt), { useAdditionalDayOfYearTokens: true });
   } catch (error) {
     const message =
       error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);

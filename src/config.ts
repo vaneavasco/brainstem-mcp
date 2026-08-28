@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { normalizeVaultPath } from './storage/path-policy.ts';
+import { resolveDailyNotePath } from './vault/daily-notes.ts';
 
 export type LegacyMode = 'stateless' | 'reject';
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
@@ -112,6 +114,25 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       .map((s) => s.trim())
       .filter(Boolean),
   };
+
+  try {
+    normalizeVaultPath(vaultSettings.dailyNotes.folder);
+  } catch {
+    throw new ConfigError(
+      [],
+      ['DAILY_NOTES_FOLDER'],
+      'DAILY_NOTES_FOLDER must be a vault-relative folder (no .., no hidden folders)',
+    );
+  }
+  try {
+    resolveDailyNotePath(vaultSettings.dailyNotes, new Date());
+  } catch {
+    throw new ConfigError(
+      [],
+      ['DAILY_NOTES_FORMAT'],
+      'DAILY_NOTES_FORMAT is not a valid date-fns/strftime pattern',
+    );
+  }
 
   return {
     publicUrl,

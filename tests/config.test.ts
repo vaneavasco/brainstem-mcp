@@ -129,4 +129,41 @@ describe('storage and vault settings', () => {
     expect((err as ConfigError).message).toContain('IANA');
     expect(() => loadConfig({ ...base, STORAGE_BACKEND: 's3' })).toThrow(ConfigError);
   });
+
+  it("accepts a moment-style DAILY_NOTES_FORMAT like Obsidian's own default", () => {
+    const cfg = loadConfig({ ...base, DAILY_NOTES_FORMAT: 'YYYY-MM-DD' });
+    expect(cfg.vaultSettings.dailyNotes.format).toBe('YYYY-MM-DD');
+  });
+
+  it('rejects a DAILY_NOTES_FORMAT that is not a valid date-fns/strftime pattern', () => {
+    // date-fns escapes literal text with 'quotes', not moment's [brackets]; an unescaped letter
+    // inside brackets is therefore an invalid token, not a literal.
+    let err: unknown;
+    try {
+      loadConfig({ ...base, DAILY_NOTES_FORMAT: 'YYYY-MM-DD [note]' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    const ce = err as ConfigError;
+    expect(ce.invalid).toEqual(['DAILY_NOTES_FORMAT']);
+    expect(ce.missing).toEqual([]);
+    expect(ce.message).toContain('DAILY_NOTES_FORMAT');
+  });
+
+  it('rejects a DAILY_NOTES_FOLDER that would escape the vault or reach a hidden folder', () => {
+    for (const folder of ['../x', '.obsidian']) {
+      let err: unknown;
+      try {
+        loadConfig({ ...base, DAILY_NOTES_FOLDER: folder });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ConfigError);
+      const ce = err as ConfigError;
+      expect(ce.invalid).toEqual(['DAILY_NOTES_FOLDER']);
+      expect(ce.missing).toEqual([]);
+      expect(ce.message).toContain('DAILY_NOTES_FOLDER');
+    }
+  });
 });

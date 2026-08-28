@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { VaultError } from '../../src/storage/types.ts';
 import {
   DEFAULT_DAILY_NOTE_SETTINGS,
+  formatInVaultZone,
   parseDateArg,
   renderDailyTemplate,
   resolveDailyNotePath,
@@ -19,6 +20,23 @@ describe('toDateFnsFormat', () => {
     );
     expect(toDateFnsFormat('yyyy-MM-dd')).toBe('yyyy-MM-dd');
     expect(toDateFnsFormat("yyyy-'W'II")).toBe("yyyy-'W'II");
+  });
+
+  it("translates moment-style YYYY/YY/DD so Obsidian's default daily-note format is accepted", () => {
+    expect(toDateFnsFormat('YYYY-MM-DD')).toBe('yyyy-MM-dd');
+    expect(toDateFnsFormat('YY/DD')).toBe('yy/dd');
+    // Only YYYY/YY/DD are translated; anything else is assumed to already be date-fns.
+    expect(toDateFnsFormat('YYYY-MM-DD HH:mm')).toBe('yyyy-MM-dd HH:mm');
+  });
+
+  it('does not warn for %j (day-of-year, translated to DDD) since useAdditionalDayOfYearTokens is set', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      formatInVaultZone(lateUtc, '%j', 'UTC');
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -43,6 +61,19 @@ describe('resolveDailyNotePath', () => {
     expect(() =>
       resolveDailyNotePath({ ...DEFAULT_DAILY_NOTE_SETTINGS, folder: '../outside' }, lateUtc),
     ).toThrow(VaultError);
+  });
+
+  it('accepts a moment-style YYYY-MM-DD format, producing the same path as yyyy-MM-dd', () => {
+    const moment = resolveDailyNotePath(
+      { ...DEFAULT_DAILY_NOTE_SETTINGS, format: 'YYYY-MM-DD' },
+      lateUtc,
+    );
+    const dateFns = resolveDailyNotePath(
+      { ...DEFAULT_DAILY_NOTE_SETTINGS, format: 'yyyy-MM-dd' },
+      lateUtc,
+    );
+    expect(moment).toBe(dateFns);
+    expect(moment).toBe('2026-08-28.md');
   });
 });
 
