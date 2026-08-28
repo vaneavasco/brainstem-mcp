@@ -1,5 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import net from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
@@ -43,5 +45,45 @@ describe('startServer', () => {
     agent.destroy();
     expect(closed).toBe('closed');
     expect(running.httpServer.listening).toBe(false);
+  });
+
+  it('aborts a still-open exchange after the drain window', async () => {
+    const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
+    const running = await startServer(config, createLogger('fatal'), 0, { drainMs: 300 });
+    const { port } = running.httpServer.address() as AddressInfo;
+
+    const socket = net.connect({ host: '127.0.0.1', port });
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', () => resolve());
+      socket.once('error', reject);
+    });
+    let socketClosed = false;
+    const socketClosedPromise = new Promise<void>((resolve) => {
+      socket.once('close', () => {
+        socketClosed = true;
+        resolve();
+      });
+    });
+    // Start a request but never finish the body: a permanently in-flight exchange.
+    socket.write(
+      'POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"jsonrpc"',
+    );
+
+    const start = performance.now();
+    const closed = await Promise.race([
+      running.close().then(() => 'closed' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 5_000)),
+    ]);
+    const elapsed = performance.now() - start;
+    // The FIN triggered by closeAllConnections() reaches the client socket asynchronously
+    // (a loopback round trip after the server side has already resolved close()).
+    await Promise.race([socketClosedPromise, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+
+    expect(closed).toBe('closed');
+    expect(socketClosed).toBe(true);
+    expect(running.httpServer.listening).toBe(false);
+    expect(elapsed).toBeGreaterThanOrEqual(250);
+
+    socket.destroy();
   });
 });

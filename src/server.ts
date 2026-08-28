@@ -12,7 +12,9 @@ export async function startServer(
   config: Config,
   logger: Logger,
   listenPort: number = config.port,
+  opts: { drainMs?: number } = {},
 ): Promise<RunningServer> {
+  const drainMs = opts.drainMs ?? 7_000;
   const { app, handler } = createApp(config, logger);
   const httpServer = http.createServer(app);
 
@@ -36,11 +38,20 @@ export async function startServer(
   return {
     httpServer,
     async close() {
-      await handler.close(); // abort in-flight MCP exchanges first so sockets can drain
-      httpServer.closeIdleConnections(); // drop idle keep-alive sockets held by the Heroku router
-      await new Promise<void>((resolve, reject) =>
+      // 1. Stop accepting; Node marks new responses `Connection: close` and closes idle sockets.
+      const closing = new Promise<void>((resolve, reject) =>
         httpServer.close((error) => (error ? reject(error) : resolve())),
       );
+      httpServer.closeIdleConnections(); // belt-and-braces for Node < 19; close() already does this
+      // 2. Give in-flight exchanges up to drainMs to finish on their own.
+      const drained = await Promise.race([
+        closing.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), drainMs).unref()),
+      ]);
+      // 3. Abort what is still running (long-lived SSE streams) and force remaining sockets shut.
+      await handler.close();
+      if (!drained) httpServer.closeAllConnections();
+      await closing;
     },
   };
 }
