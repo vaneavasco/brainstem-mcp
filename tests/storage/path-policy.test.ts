@@ -46,6 +46,17 @@ describe('normalizeVaultPath', () => {
     rejects('file:///etc/passwd');
   });
 
+  it('rejects Obsidian-forbidden characters and disguised URI schemes', () => {
+    rejects('file:\\etc\\passwd');
+    rejects('file:/etc/passwd');
+    rejects('notes/a:b.md');
+    rejects('what?.md');
+    rejects('a|b.md');
+    rejects('"quoted".md');
+    rejects('<tag>.md');
+    rejects('star*.md');
+  });
+
   it('rejects NUL bytes, control characters and over-long paths', () => {
     rejects('a\u0000b.md');
     rejects('a\nb.md');
