@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
