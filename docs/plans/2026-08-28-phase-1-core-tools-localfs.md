@@ -3566,7 +3566,7 @@ runtime = await createLocalRuntime({ vaultPath: root, ripgrepPath: null });
 const { app } = createApp(config, logger, async () => runtime);
 // in afterAll: await runtime.close();
 ```
-(declare `let runtime: VaultRuntime;` next to `let server: Server;`). Also update `tests/server.test.ts` → `startServer(config, logger, resolver, 0)` after Task 15 changes the signature; until then leave `server.test.ts` untouched and let Task 15 fix it (mark it `it.skip` temporarily with a `// TODO(task 15)` comment is NOT allowed — instead do the signature change now in `src/server.ts`: `startServer(config, logger, resolveRuntime, listenPort?)` and pass `async () => runtime` in the test, building the runtime the same way).
+(declare `let runtime: VaultRuntime;` next to `let server: Server;`). Also update `tests/server.test.ts` → `startServer(config, logger, resolver, 0)` after Task 15 changes the signature; until then leave `server.test.ts` untouched and let Task 15 fix it (mark it `it.skip` temporarily with a `// TODO(task 15)` comment is NOT allowed — instead do the signature change now in `src/server.ts`: `startServer(config, logger, resolveRuntime, listenPort?, opts?)` (keep the trailing `opts: { drainMs?: number }` parameter added by the Phase 0 fix wave) and pass `async () => runtime` in the test, building the runtime the same way).
 
 - [ ] **Step 8: Run all tests, typecheck, lint, commit**
 
@@ -4392,7 +4392,7 @@ and return `storage, vaultSettings` in the object.
 
 - [ ] **Step 3: Wire main.ts and server.ts**
 
-`src/server.ts`: signature becomes `startServer(config, logger, resolveRuntime: RuntimeResolver, listenPort = config.port)` and passes `resolveRuntime` to `createApp`. Update `tests/server.test.ts` accordingly (build a temp local runtime like `tests/app.test.ts`).
+`src/server.ts`: signature is `startServer(config, logger, resolveRuntime: RuntimeResolver, listenPort = config.port, opts: { drainMs?: number } = {})` (already changed in Task 12; keep the trailing opts) and passes `resolveRuntime` to `createApp`. Update `tests/server.test.ts` accordingly (build a temp local runtime like `tests/app.test.ts`).
 
 `src/main.ts` — after `createLogger`:
 ```ts
