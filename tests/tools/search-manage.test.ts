@@ -96,16 +96,19 @@ describe('vault_list', () => {
   });
 
   it('caps entries at MAX_LIST_ENTRIES and sets truncated', async () => {
+    // Plain .txt files written in parallel batches: they are ignored by the frontmatter index,
+    // so this exercises the list cap without a 2005-event watcher/index storm (slow on CI).
     const dir = path.join(h.root, 'bulk');
     await fs.mkdir(dir, { recursive: true });
-    for (let i = 0; i < 2005; i += 1) {
-      await fs.writeFile(path.join(dir, `n${i}.md`), 'x');
+    const names = Array.from({ length: 2005 }, (_, i) => `n${i}.txt`);
+    for (let i = 0; i < names.length; i += 250) {
+      await Promise.all(names.slice(i, i + 250).map((n) => fs.writeFile(path.join(dir, n), 'x')));
     }
     const r = await h.call('vault_list', { path: 'bulk', depth: 1 });
     const sc = r.structuredContent as { entries: unknown[]; truncated: boolean };
     expect(sc.entries).toHaveLength(2000);
     expect(sc.truncated).toBe(true);
-  });
+  }, 60_000);
 });
 
 describe('vault_move / vault_delete', () => {
