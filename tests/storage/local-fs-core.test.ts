@@ -131,6 +131,19 @@ describe('LocalFSAdapter core', () => {
     expect(await code(vault.batchRead(new Array(21).fill('a.md')))).toBe('INVALID_INPUT');
   });
 
+  it('normalizes failed[].path when the raw input path can be normalized', async () => {
+    await fs.writeFile(path.join(root, 'bad.md'), Buffer.from([0xff, 0xfe]));
+    const r = await vault.batchRead(['./bad.md']);
+    expect(r.failed).toEqual([{ path: 'bad.md', error: expect.stringContaining('UTF-8') }]);
+  });
+
+  it('falls back to the raw path in failed[] when the path itself is invalid', async () => {
+    const r = await vault.batchRead(['..']);
+    expect(r.failed).toEqual([
+      { path: '..', error: expect.stringContaining('Invalid vault path') },
+    ]);
+  });
+
   it('batch-updates frontmatter without touching bodies', async () => {
     await vault.write('x.md', '---\nstatus: draft\nkeep: 1\n---\nBody\n');
     await vault.write('y.md', 'No frontmatter body\n');
@@ -138,10 +151,12 @@ describe('LocalFSAdapter core', () => {
       { path: 'x.md', set: { status: 'done' }, unset: ['keep'] },
       { path: 'y.md', set: { type: 'note' } },
       { path: 'missing.md', set: { a: 1 } },
+      { path: '..', set: { a: 1 } },
     ]);
     expect(r.updated).toEqual(['x.md', 'y.md']);
     expect(r.failed).toEqual([
       { path: 'missing.md', error: expect.stringContaining('missing.md') },
+      { path: '..', error: expect.stringContaining('Invalid vault path') },
     ]);
     expect(await vault.read('x.md')).toMatchObject({
       frontmatter: { status: 'done' },

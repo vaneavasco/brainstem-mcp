@@ -1,7 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
 import { promisify } from 'node:util';
 import { watch as chokidarWatch } from 'chokidar';
 import picomatch from 'picomatch';
@@ -74,6 +75,15 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
+/** Best-effort normalization for error reporting: falls back to the raw input when it doesn't even normalize. */
+function normalizedOrRaw(raw: unknown): string {
+  try {
+    return normalizeVaultPath(raw);
+  } catch {
+    return String(raw);
+  }
+}
+
 export class LocalFSAdapter implements StorageAdapter {
   private static readonly TEXT_EXTENSIONS = new Set([
     '.md',
@@ -113,7 +123,16 @@ export class LocalFSAdapter implements StorageAdapter {
     return path.relative(this.root, absPath).split(path.sep).join('/');
   }
 
-  /** Resolves symlinks of the deepest existing ancestor and asserts it stays inside the vault root. */
+  /**
+   * Resolves symlinks of the deepest existing ancestor and asserts it stays inside the vault root.
+   *
+   * Accepted TOCTOU window: this is a check, not a lock. Between this check and the subsequent
+   * mkdir/writeFile/rename, a directory in the path could in principle be swapped for a symlink
+   * and redirect the write outside the root. In this single-user local-vault threat model (no
+   * concurrent untrusted writers to the filesystem itself) that window is not considered
+   * exploitable; revisit with real locking if this adapter is ever used multi-tenant on a shared
+   * filesystem.
+   */
   protected async assertInsideRoot(absPath: string): Promise<void> {
     let probe = absPath;
     for (;;) {
@@ -193,7 +212,7 @@ export class LocalFSAdapter implements StorageAdapter {
         if (error instanceof VaultError && error.code === 'NOT_FOUND') {
           result.missing.push(normalizeVaultPath(raw));
         } else if (error instanceof VaultError) {
-          result.failed.push({ path: String(raw), error: error.message });
+          result.failed.push({ path: normalizedOrRaw(raw), error: error.message });
         } else {
           throw error;
         }
@@ -300,7 +319,7 @@ export class LocalFSAdapter implements StorageAdapter {
         result.updated.push(p);
       } catch (error) {
         if (error instanceof VaultError) {
-          result.failed.push({ path: String(update.path), error: error.message });
+          result.failed.push({ path: normalizedOrRaw(update.path), error: error.message });
         } else {
           throw error;
         }
@@ -397,6 +416,7 @@ export class LocalFSAdapter implements StorageAdapter {
       });
     }
     const toAbs = this.abs(target);
+    await this.assertInsideRoot(toAbs);
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     try {
       await fs.rename(fromAbs, toAbs);
@@ -414,6 +434,14 @@ export class LocalFSAdapter implements StorageAdapter {
     const limit = Math.max(1, Math.min(opts.limit ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS));
     const prefix = normalizeVaultPath(opts.pathPrefix ?? '');
     const caseSensitive = opts.caseSensitive ?? false;
+
+    const prefixAbs = this.abs(prefix);
+    await this.assertInsideRoot(prefixAbs);
+    const st = await this.statOrNull(prefixAbs);
+    if (!st) throw new VaultError('NOT_FOUND', `${prefix || '/'} does not exist.`);
+    if (!st.isDirectory())
+      throw new VaultError('INVALID_INPUT', `${prefix} is a file, not a folder.`);
+
     const matches = this.rg
       ? await this.searchRipgrep(query, prefix, limit, caseSensitive)
       : await this.searchJs(query, prefix, limit, caseSensitive);
@@ -460,7 +488,10 @@ export class LocalFSAdapter implements StorageAdapter {
       '--json',
       '--fixed-strings',
       '--no-messages',
+      '--no-ignore',
       caseSensitive ? '--case-sensitive' : '--ignore-case',
+      '--max-count',
+      String(limit),
       '--glob',
       '!.*',
       '--glob',
@@ -470,29 +501,56 @@ export class LocalFSAdapter implements StorageAdapter {
       query,
       this.abs(prefix),
     ];
-    let stdout = '';
-    try {
-      ({ stdout } = await execFileAsync(this.rg, args, { maxBuffer: 16 * 1024 * 1024 }));
-    } catch (error) {
-      const e = error as { code?: number; stdout?: string };
-      if (e.code === 1) return []; // ripgrep: no matches
-      throw new VaultError('IO', 'Search failed.');
-    }
+    const rg = this.rg;
     const out: Match[] = [];
-    for (const line of stdout.split('\n')) {
-      if (out.length >= limit || line === '') continue;
-      const event = JSON.parse(line) as {
-        type: string;
-        data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
+    return await new Promise<Match[]>((resolve, reject) => {
+      const child = spawn(rg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let killedForLimit = false;
+      let settled = false;
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        fn();
       };
-      if (event.type !== 'match' || !event.data?.path?.text) continue;
-      out.push({
-        path: this.rel(event.data.path.text),
-        line: event.data.line_number ?? 0,
-        text: (event.data.lines?.text ?? '').replace(/\r?\n$/, ''),
+      child.stderr?.resume(); // drain, never surfaced (may contain vault paths)
+      const rl = readline.createInterface({ input: child.stdout });
+      rl.on('line', (line) => {
+        if (killedForLimit || line === '') return;
+        let event: {
+          type: string;
+          data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
+        };
+        try {
+          event = JSON.parse(line);
+        } catch {
+          return;
+        }
+        if (event.type !== 'match' || !event.data?.path?.text) return;
+        const text = (event.data.lines?.text ?? '').replace(/\r?\n$/, '');
+        out.push({
+          path: this.rel(event.data.path.text),
+          line: event.data.line_number ?? 0,
+          text,
+        });
+        if (out.length >= limit) {
+          killedForLimit = true;
+          rl.close();
+          child.kill();
+        }
       });
-    }
-    return out;
+      child.on('error', () => {
+        finish(() => reject(new VaultError('IO', 'Search failed.')));
+      });
+      child.on('close', (exitCode) => {
+        finish(() => {
+          if (killedForLimit || exitCode === 0 || exitCode === 1) {
+            resolve(out); // exit 1 == ripgrep found no matches
+          } else {
+            reject(new VaultError('IO', 'Search failed.'));
+          }
+        });
+      });
+    });
   }
 
   // ---- watch ---------------------------------------------------------------

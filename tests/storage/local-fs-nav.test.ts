@@ -130,6 +130,18 @@ describe('softDelete', () => {
     expect(trashed).toContain('health.md');
     expect(trashed.some((n) => /^health\..+\.md$/.test(n))).toBe(true);
   });
+
+  it('refuses to trash into a symlinked .trash directory, leaving the file in place', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-outside-'));
+    try {
+      await fs.symlink(outside, path.join(root, '.trash'));
+      expect(await code(vault.softDelete('02-areas/health.md', true))).toBe('INVALID_PATH');
+      expect((await vault.read('02-areas/health.md')).body).toBe('Drink Milk daily\n');
+      expect(await fs.readdir(outside)).toEqual([]);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('search (JS fallback)', () => {
@@ -155,6 +167,20 @@ describe('search (JS fallback)', () => {
     const r = await vault.search('a.c');
     expect(r.map((m) => `${m.path}:${m.line}`)).toEqual(['re.md:1']);
   });
+
+  it('validates pathPrefix before dispatching, refusing a symlink escape', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-outside-'));
+    try {
+      await fs.symlink(outside, path.join(root, 'link'));
+      expect(await code(vault.search('milk', { pathPrefix: 'link' }))).toBe('INVALID_PATH');
+      expect(await code(vault.search('milk', { pathPrefix: 'nope' }))).toBe('NOT_FOUND');
+      expect(await code(vault.search('milk', { pathPrefix: 'board.canvas' }))).toBe(
+        'INVALID_INPUT',
+      );
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe.skipIf(!hasRipgrep())('search (ripgrep)', () => {
@@ -164,6 +190,40 @@ describe.skipIf(!hasRipgrep())('search (ripgrep)', () => {
     const viaRg = await rgVault.search('milk');
     const viaJs = await vault.search('milk');
     expect(viaRg).toEqual(viaJs);
+  });
+
+  it('validates pathPrefix before dispatching to ripgrep, refusing a symlink escape', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-outside-'));
+    try {
+      await fs.symlink(outside, path.join(root, 'link'));
+      expect(await code(rgVault.search('milk', { pathPrefix: 'link' }))).toBe('INVALID_PATH');
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a query beginning with - as a literal string, not a flag', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('dash.md', '-milk special offer\n');
+    const r = await rgVault.search('-milk');
+    expect(r.map((m) => m.path)).toContain('dash.md');
+  });
+
+  it('does not honor in-vault .gitignore files (matches the JS fallback, which never did)', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await fs.writeFile(path.join(root, '.gitignore'), '02-areas/\n');
+    const r = await rgVault.search('milk');
+    expect(r.map((m) => m.path)).toContain('02-areas/health.md');
+  });
+
+  it('stops reading once the limit is reached on a large result set', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    for (let i = 0; i < 200; i += 1) {
+      await rgVault.write(`bulk/note-${i}.md`, 'needle appears here\n');
+    }
+    const r = await rgVault.search('needle', { limit: 5 });
+    expect(r).toHaveLength(5);
   });
 });
 
