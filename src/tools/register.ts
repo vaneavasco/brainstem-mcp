@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { VaultRuntime } from '../vault/runtime.ts';
+import { registerManageTools } from './manage.ts';
 import { registerReadTools } from './read.ts';
+import { registerSearchTools } from './search.ts';
 import { registerWriteTools } from './write.ts';
 
 export interface ToolContext {
@@ -15,4 +17,6 @@ export async function touch(tc: ToolContext, ...paths: string[]): Promise<void> 
 export function registerVaultTools(server: McpServer, tc: ToolContext): void {
   registerReadTools(server, tc);
   registerWriteTools(server, tc);
+  registerSearchTools(server, tc);
+  registerManageTools(server, tc);
 }
