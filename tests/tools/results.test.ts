@@ -21,6 +21,19 @@ describe('results helpers', () => {
     expect(fail('nope')).toEqual({ isError: true, content: [{ type: 'text', text: 'nope' }] });
   });
 
+  it('clamps an oversized text block but leaves structuredContent intact', () => {
+    const big = 'x'.repeat(MAX_RESULT_CHARS + 500);
+    const r = okJson({ a: big });
+    expect(r.structuredContent).toEqual({ a: big });
+    const clamped = (r.content[0] as { text: string }).text;
+    expect(clamped.length).toBeLessThanOrEqual(MAX_RESULT_CHARS + 200);
+    expect(clamped).toContain('[truncated');
+    const customBig = okJson({ a: 1 }, 'y'.repeat(MAX_RESULT_CHARS + 500));
+    const clampedCustom = (customBig.content[0] as { text: string }).text;
+    expect(clampedCustom.length).toBeLessThanOrEqual(MAX_RESULT_CHARS + 200);
+    expect(clampedCustom).toContain('[truncated');
+  });
+
   it('clamps long text and reports truncation', () => {
     const short = clampText('abc');
     expect(short).toEqual({ text: 'abc', truncated: false, totalChars: 3 });

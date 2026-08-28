@@ -42,6 +42,7 @@ describe('vault_search', () => {
 describe('vault_search_frontmatter', () => {
   it('queries the index by equals/contains/exists and requires a criterion', async () => {
     const r = await h.call('vault_search_frontmatter', { field: 'status', equals: 'open' });
+    expect(r.structuredContent).toMatchObject({ truncated: false });
     expect((r.structuredContent as { hits: { path: string }[] }).hits.map((x) => x.path)).toEqual([
       '00-inbox/todo.md',
       '01-projects/brainstem/plan.md',
@@ -54,11 +55,28 @@ describe('vault_search_frontmatter', () => {
     expect(none.isError).toBe(true);
     expect(text(none)).toMatch(/INVALID_INPUT/);
   });
+
+  it('caps hits at MAX_FRONTMATTER_HITS and sets truncated', async () => {
+    for (let i = 0; i < 505; i += 1) {
+      h.runtime.index.upsert({
+        path: `bulk/n${i}.md`,
+        frontmatter: { status: 'open' },
+        hasFrontmatter: true,
+        size: 1,
+        modifiedAt: new Date().toISOString(),
+      });
+    }
+    const r = await h.call('vault_search_frontmatter', { field: 'status', equals: 'open' });
+    const sc = r.structuredContent as { hits: unknown[]; truncated: boolean };
+    expect(sc.hits).toHaveLength(500);
+    expect(sc.truncated).toBe(true);
+  });
 });
 
 describe('vault_list', () => {
   it('lists with depth and glob and rejects hidden folders', async () => {
     const top = await h.call('vault_list', {});
+    expect(top.structuredContent).toMatchObject({ truncated: false });
     expect(
       (top.structuredContent as { entries: { path: string; kind: string }[] }).entries.map(
         (e) => e.path,
@@ -75,6 +93,18 @@ describe('vault_list', () => {
     ).toEqual(['01-projects/brainstem/plan.md']);
     const hidden = await h.call('vault_list', { path: '.obsidian' });
     expect(text(hidden)).toMatch(/INVALID_PATH/);
+  });
+
+  it('caps entries at MAX_LIST_ENTRIES and sets truncated', async () => {
+    const dir = path.join(h.root, 'bulk');
+    await fs.mkdir(dir, { recursive: true });
+    for (let i = 0; i < 2005; i += 1) {
+      await fs.writeFile(path.join(dir, `n${i}.md`), 'x');
+    }
+    const r = await h.call('vault_list', { path: 'bulk', depth: 1 });
+    const sc = r.structuredContent as { entries: unknown[]; truncated: boolean };
+    expect(sc.entries).toHaveLength(2000);
+    expect(sc.truncated).toBe(true);
   });
 });
 

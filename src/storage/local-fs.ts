@@ -17,6 +17,7 @@ import {
   assertWithinSize,
   BINARY_MIME_ALLOWLIST,
   extensionAllowedFor,
+  MAX_MATCH_TEXT_CHARS,
   MAX_SEARCH_RESULTS,
 } from './limits.ts';
 import {
@@ -82,6 +83,11 @@ function normalizedOrRaw(raw: unknown): string {
   } catch {
     return String(raw);
   }
+}
+
+/** Windows a search match's line text so one very long line cannot blow the result-size cap. */
+function windowMatchText(text: string): string {
+  return text.length > MAX_MATCH_TEXT_CHARS ? `${text.slice(0, MAX_MATCH_TEXT_CHARS)}…` : text;
 }
 
 export class LocalFSAdapter implements StorageAdapter {
@@ -470,7 +476,7 @@ export class LocalFSAdapter implements StorageAdapter {
         const line = lines[i] ?? '';
         const haystack = caseSensitive ? line : line.toLowerCase();
         if (haystack.includes(needle))
-          out.push({ path: file.path, line: i + 1, text: line.trimEnd() });
+          out.push({ path: file.path, line: i + 1, text: windowMatchText(line.trimEnd()) });
       }
       if (out.length >= limit) break;
     }
@@ -530,7 +536,7 @@ export class LocalFSAdapter implements StorageAdapter {
         out.push({
           path: this.rel(event.data.path.text),
           line: event.data.line_number ?? 0,
-          text,
+          text: windowMatchText(text),
         });
         if (out.length >= limit) {
           killedForLimit = true;

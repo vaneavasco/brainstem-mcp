@@ -11,8 +11,9 @@ export function okJson<T extends Record<string, unknown>>(
   structured: T,
   text?: string,
 ): CallToolResult {
+  const body = text ?? JSON.stringify(structured);
   return {
-    content: [{ type: 'text', text: text ?? JSON.stringify(structured) }],
+    content: [{ type: 'text', text: clampText(body).text }],
     structuredContent: structured,
   };
 }

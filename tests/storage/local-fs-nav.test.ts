@@ -168,6 +168,15 @@ describe('search (JS fallback)', () => {
     expect(r.map((m) => `${m.path}:${m.line}`)).toEqual(['re.md:1']);
   });
 
+  it('windows a long match line to avoid huge result payloads', async () => {
+    const longLine = `milk ${'x'.repeat(5000)}`;
+    await vault.write('long.md', `${longLine}\n`);
+    const r = await vault.search('milk');
+    const hit = r.find((m) => m.path === 'long.md');
+    expect(hit?.text.length).toBeLessThanOrEqual(401);
+    expect(hit?.text.endsWith('…')).toBe(true);
+  });
+
   it('validates pathPrefix before dispatching, refusing a symlink escape', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-outside-'));
     try {
@@ -215,6 +224,16 @@ describe.skipIf(!hasRipgrep())('search (ripgrep)', () => {
     await fs.writeFile(path.join(root, '.gitignore'), '02-areas/\n');
     const r = await rgVault.search('milk');
     expect(r.map((m) => m.path)).toContain('02-areas/health.md');
+  });
+
+  it('windows a long match line the same way as the JS fallback', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    const longLine = `milk ${'y'.repeat(5000)}`;
+    await rgVault.write('long-rg.md', `${longLine}\n`);
+    const r = await rgVault.search('milk');
+    const hit = r.find((m) => m.path === 'long-rg.md');
+    expect(hit?.text.length).toBeLessThanOrEqual(401);
+    expect(hit?.text.endsWith('…')).toBe(true);
   });
 
   it('stops reading once the limit is reached on a large result set', async () => {

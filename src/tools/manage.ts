@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { MAX_LIST_ENTRIES } from '../storage/limits.ts';
 import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { type ToolContext, touch } from './register.ts';
@@ -13,7 +14,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed.',
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated.',
       inputSchema: z.object({
         path: z.string().optional(),
         depth: z.number().int().min(1).max(50).optional(),
@@ -31,6 +32,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
             modifiedAt: z.string().optional(),
           }),
         ),
+        truncated: z.boolean(),
       }),
       annotations: READ_ONLY,
     },
@@ -43,7 +45,12 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           ...(includeFiles !== undefined ? { includeFiles } : {}),
           ...(includeDirs !== undefined ? { includeDirs } : {}),
         });
-        return okJson({ path: base, entries });
+        const truncated = entries.length > MAX_LIST_ENTRIES;
+        return okJson({
+          path: base,
+          entries: truncated ? entries.slice(0, MAX_LIST_ENTRIES) : entries,
+          truncated,
+        });
       }),
   );
 

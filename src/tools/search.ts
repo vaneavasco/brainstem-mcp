@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_SEARCH_RESULTS } from '../storage/limits.ts';
+import { MAX_FRONTMATTER_HITS, MAX_SEARCH_RESULTS } from '../storage/limits.ts';
 import { VaultError } from '../storage/types.ts';
 import { READ_ONLY } from './annotations.ts';
 import type { ToolContext } from './register.ts';
@@ -44,8 +44,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
     'vault_search_frontmatter',
     {
       title: 'Search by frontmatter',
-      description:
-        'Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported.',
+      description: `Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported. Returns at most ${MAX_FRONTMATTER_HITS} hits; narrow the query if truncated.`,
       inputSchema: z.object({
         field: z.string().min(1),
         equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
@@ -55,6 +54,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
       outputSchema: z.object({
         field: z.string(),
         hits: z.array(z.object({ path: z.string(), value: z.unknown() })),
+        truncated: z.boolean(),
       }),
       annotations: READ_ONLY,
     },
@@ -72,7 +72,12 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           ...(contains !== undefined ? { contains } : {}),
           ...(exists !== undefined ? { exists } : {}),
         });
-        return okJson({ field, hits });
+        const truncated = hits.length > MAX_FRONTMATTER_HITS;
+        return okJson({
+          field,
+          hits: truncated ? hits.slice(0, MAX_FRONTMATTER_HITS) : hits,
+          truncated,
+        });
       }),
   );
 }
