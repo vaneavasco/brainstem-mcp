@@ -1,7 +1,7 @@
 services:
   app:
     build: .
-    user: "${UID:-1000}:${GID:-1000}"
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     ports:
       - "3000:3000"
     environment:
@@ -30,7 +30,7 @@ services:
       POSTGRES_PASSWORD: brainstem
       POSTGRES_DB: brainstem
     ports:
-      - "5433:5432"
+      - "5433:5432"  # host 5433 to avoid clashing with a local Postgres on 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

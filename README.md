@@ -22,13 +22,13 @@ The `.env.example` defaults `STORAGE_BACKEND=localfs` with `VAULT_PATH=./vault-d
 
 ```bash
 mkdir -p vault-dev
-npm run docker:up        # builds the image, starts app (:3000) + postgres (:5432)
+npm run docker:up        # builds the image, starts app (:3000) + postgres (host :5433 → container 5432)
 npm run docker:smoke     # health, tools/list, write→read, file visible in ./vault-dev
 npm run docker:logs
 npm run docker:down
 ```
 
-The vault is the bind-mounted `./vault-dev` folder — open it in Obsidian to see notes Claude writes. Postgres is idle until Phase 2 (auth).
+The vault is the bind-mounted `./vault-dev` folder — open it in Obsidian to see notes Claude writes. Postgres is idle until Phase 2 (auth). If your user is not uid/gid 1000, run `HOST_UID=$(id -u) HOST_GID=$(id -g) npm run docker:up` (or put those two lines in a `.env` file next to `compose.yaml`).
 
 ## Tools
 
