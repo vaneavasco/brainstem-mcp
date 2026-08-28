@@ -18,6 +18,18 @@ npm run typecheck && npm run lint
 
 The `.env.example` defaults `STORAGE_BACKEND=localfs` with `VAULT_PATH=./vault-dev` so `npm run dev` runs against a local vault out of the box (the directory is created automatically and is gitignored). `STORAGE_BACKEND=drive` (Google Drive) lands in Phase 3; until then `main.ts` refuses to start with that backend.
 
+## Run with Docker (local acceptance environment)
+
+```bash
+mkdir -p vault-dev
+npm run docker:up        # builds the image, starts app (:3000) + postgres (:5432)
+npm run docker:smoke     # health, tools/list, write→read, file visible in ./vault-dev
+npm run docker:logs
+npm run docker:down
+```
+
+The vault is the bind-mounted `./vault-dev` folder — open it in Obsidian to see notes Claude writes. Postgres is idle until Phase 2 (auth).
+
 ## Tools
 
 Every tool is `vault_`-prefixed, ported name-for-name from the reference repo (`docs/implementation-plan.md` §5), plus a `brainstem_ping` health-check tool. All tools carry `title`, a description, and full annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint: false`).

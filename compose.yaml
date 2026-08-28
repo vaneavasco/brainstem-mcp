@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - "3000:3000"
+    environment:
+      PUBLIC_URL: http://localhost:3000
+      ALLOW_INSECURE_PUBLIC_URL: "true"
+      PORT: "3000"
+      LOG_LEVEL: info
+      MCP_LEGACY_MODE: stateless
+      STORAGE_BACKEND: localfs
+      VAULT_PATH: /vault
+      VAULT_TIMEZONE: Europe/Chisinau
+      DAILY_NOTES_FOLDER: journal
+      DAILY_NOTES_FORMAT: yyyy-MM-dd
+      # Phase 2 adds: DATABASE_URL: postgres://brainstem:brainstem@postgres:5432/brainstem, ENCRYPTION_KEY, GOOGLE_CLIENT_ID/SECRET
+    volumes:
+      - ./vault-dev:/vault
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: brainstem
+      POSTGRES_PASSWORD: brainstem
+      POSTGRES_DB: brainstem
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brainstem -d brainstem"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

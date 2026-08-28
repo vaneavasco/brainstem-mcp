@@ -14,7 +14,11 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test:watch": "vitest",
-    "heroku-postbuild": "npm run build"
+    "heroku-postbuild": "npm run build",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f app",
+    "docker:smoke": "bash scripts/docker-smoke.sh"
   },
   "repository": {
     "type": "git",
