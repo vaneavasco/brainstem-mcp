@@ -35,7 +35,7 @@ export interface AnalyticsReport {
   findings: AnalyticsFinding[];
 }
 
-const WIKILINK = /!?\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+const WIKILINK = /!?\[\[([^\]|#^\n]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 const INLINE_TAG = /(?:^|\s)#([\p{L}\p{N}_\-/]+)/gu;
 
 function stripMd(name: string): string {
@@ -73,6 +73,7 @@ export async function analyzeVault(
   const otherPaths = new Set(
     files.filter((f) => !isMarkdownPath(f.path)).map((f) => f.path.toLowerCase()),
   );
+  const otherBasenames = new Set([...otherPaths].map((p) => baseName(p)));
 
   for (const file of files) {
     if ((file.size ?? 0) > oversizedBytes) {
@@ -112,7 +113,7 @@ export async function analyzeVault(
           knownPaths.has(stripMd(lower)) ||
           knownBasenames.has(stripMd(baseName(lower))) ||
           otherPaths.has(lower) ||
-          [...otherPaths].some((p) => baseName(p) === lower);
+          otherBasenames.has(lower);
         if (!resolved)
           findings.push({ category: 'broken_wikilinks', path: note.path, detail: target });
       }

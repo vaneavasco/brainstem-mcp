@@ -4666,9 +4666,9 @@ git commit -m "feat(docker): compose stack (app + postgres) with bind-mounted va
 
 ## Phase 1 exit checklist
 
-- [ ] `npm test` green: storage (limits, path-policy, frontmatter, text-diff, local-fs core + nav), vault (index, daily, canvas, analytics, runtime), tools (results, read-write, search-manage, canvas-daily-analytics, surface), plus Phase 0 suites.
-- [ ] `surface.test.ts` proves exactly 20 vault tools + `brainstem_ping`, all with title/description/4 annotations, deterministic order.
-- [ ] Inspector session against `npm run dev`: write → read → edit dry-run → append → search → daily append → analytics summary all succeed; `vault_delete` without confirm returns `CONFIRM_REQUIRED`.
-- [ ] Ripgrep suite executed at least once locally (`rg` installed) and equal to the JS fallback.
-- [ ] `docker compose up --build` (Task 16) serves `/health` and the full tool surface from a bind-mounted `./vault-dev`; `npm run docker:smoke` passes.
-- [ ] Parity deviations recorded in `docs/plans/README.md`.
+- [x] `npm test` green: storage (limits, path-policy, frontmatter, text-diff, local-fs core + nav), vault (index, daily, canvas, analytics, runtime), tools (results, read-write, search-manage, canvas-daily-analytics, surface), plus Phase 0 suites. Confirmed 2026-08-28 with the final fix wave applied (139 tests, 0 skipped, `rg` installed locally for this run).
+- [x] `surface.test.ts` proves exactly 20 vault tools + `brainstem_ping`, all with title/description/4 annotations, deterministic order.
+- [ ] Inspector session against `npm run dev`: write → read → edit dry-run → append → search → daily append → analytics summary all succeed; `vault_delete` without confirm returns `CONFIRM_REQUIRED`. Not re-run during the final fix wave (`@modelcontextprotocol/inspector --version` hung on first `npx` fetch in the fix-wave sandbox); the `tests/tools/*` suites and `scripts/docker-smoke.sh` cover the same call sequence end-to-end, but a live interactive Inspector session is still worth doing once before Phase 2 starts.
+- [x] Ripgrep suite executed at least once locally (`rg` installed) and equal to the JS fallback. Re-verified during the final fix wave with a locally-installed `rg` 14.1.1: all 16 nav-suite tests (including the new symlink-prefix, streaming-limit and `.gitignore` cases) pass unskipped. The suite also now runs unconditionally in CI (`.github/workflows/ci.yml` installs ripgrep via `apt-get` before `npm test`), so this no longer depends on the local dev machine having `rg`.
+- [ ] `docker compose up --build` (Task 16) serves `/health` and the full tool surface from a bind-mounted `./vault-dev`; `npm run docker:smoke` passes. Not re-run during the final fix wave (compose was intentionally not started); `scripts/docker-smoke.sh` was extended with a `[4/5] vault_search finds the note` step and validated with `bash -n`, so the smoke script now exercises search once the stack is actually brought up.
+- [x] Parity deviations recorded in `docs/plans/README.md`. See also the new "Phase 1 — final fix wave" section there for what the final-review fix wave changed and what it deliberately deferred.

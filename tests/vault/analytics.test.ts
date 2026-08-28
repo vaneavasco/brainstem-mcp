@@ -74,4 +74,12 @@ describe('analyzeVault', () => {
     expect(summary.categories.oversized_files.count).toBeGreaterThanOrEqual(4);
     expect(summary.categories.required_frontmatter_missing.count).toBe(0);
   });
+
+  it('does not treat a wikilink target split across lines as a broken link', async () => {
+    await vault.write('multiline.md', 'See [[a\nb]] here.\n');
+    const { findings } = await analyzeVault(vault);
+    expect(
+      findings.filter((f) => f.category === 'broken_wikilinks' && f.path === 'multiline.md'),
+    ).toEqual([]);
+  });
 });
