@@ -51,7 +51,7 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
       expect(ping?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
       const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent).toMatchObject({ server: 'brainstem-mcp' });
+      expect(result.structuredContent).toMatchObject({ server: 'brainstem-mcp', era: 'modern' });
     } finally {
       await client.close();
     }
@@ -122,6 +122,7 @@ describe('/mcp with a 2025-era (legacy) client', () => {
       expect(tools.map((t) => t.name)).toContain('brainstem_ping');
       const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });
       expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ era: 'legacy' });
     } finally {
       await client.close();
     }
@@ -132,6 +133,41 @@ describe('/mcp with a 2025-era (legacy) client', () => {
     expect(get.status).toBe(405);
     const del = await fetch(`${baseUrl}/mcp`, { method: 'DELETE' });
     expect(del.status).toBe(405);
+  });
+});
+
+describe('error shaping', () => {
+  it('returns a JSON-RPC parse error for malformed JSON, never the Express HTML/stack page', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{not json',
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const text = await res.text();
+    expect(text).not.toContain('node_modules');
+    expect(text).not.toContain('SyntaxError');
+    const body = JSON.parse(text) as { error: { code: number } };
+    expect(body.error.code).toBe(-32700);
+  });
+
+  it('returns a JSON-RPC error for an oversized body instead of the Express HTML page', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pad: 'x'.repeat(3 * 1024 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: { code: number } };
+    expect(body.error.code).toBe(-32600);
+  });
+
+  it('returns a JSON 404 for unknown routes', async () => {
+    const res = await fetch(`${baseUrl}/nope`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: number } };
+    expect(body.error.code).toBe(-32601);
   });
 });
 
@@ -166,5 +202,50 @@ describe('transport hardening', () => {
       req.end();
     });
     expect(status).toBe(403);
+  });
+});
+
+describe('legacy mode reject', () => {
+  const rejectConfig = loadConfig({
+    PUBLIC_URL: 'https://brainstem.example.com',
+    MCP_LEGACY_MODE: 'reject',
+  });
+
+  let rejectServer: Server;
+  let rejectBaseUrl: string;
+
+  beforeAll(async () => {
+    const { app } = createApp(rejectConfig, logger);
+    rejectServer = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const { port: rejectPort } = rejectServer.address() as AddressInfo;
+    rejectBaseUrl = `http://127.0.0.1:${rejectPort}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      rejectServer.close((e) => (e ? reject(e) : resolve())),
+    );
+  });
+
+  it('still serves a modern client', async () => {
+    const client = new Client(
+      { name: 'test-modern-reject', version: '0.0.0' },
+      { versionNegotiation: { mode: 'auto' } },
+    );
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${rejectBaseUrl}/mcp`)));
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map((t) => t.name)).toContain('brainstem_ping');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('rejects a legacy (default) client', async () => {
+    const client = new Client({ name: 'test-legacy-reject', version: '0.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(`${rejectBaseUrl}/mcp`));
+    await expect(client.connect(transport)).rejects.toThrow();
   });
 });

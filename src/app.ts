@@ -1,7 +1,7 @@
 import { createMcpExpressApp } from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type McpHttpHandler } from '@modelcontextprotocol/server';
-import type { Express } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import type { Config } from './config.ts';
 import type { Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
@@ -13,6 +13,34 @@ export interface AppBundle {
 }
 
 const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
+
+interface BodyParserError {
+  status?: unknown;
+  type?: unknown;
+}
+
+function isBodyParserError(err: unknown): err is BodyParserError {
+  return typeof err === 'object' && err !== null;
+}
+
+function errorStatus(err: unknown): number {
+  return isBodyParserError(err) && typeof err.status === 'number' ? err.status : 500;
+}
+
+function errorType(err: unknown): string | undefined {
+  return isBodyParserError(err) && typeof err.type === 'string' ? err.type : undefined;
+}
+
+function errorShape(type: string | undefined): { code: number; message: string } {
+  switch (type) {
+    case 'entity.parse.failed':
+      return { code: -32700, message: 'Parse error' };
+    case 'entity.too.large':
+      return { code: -32600, message: 'Payload too large' };
+    default:
+      return { code: -32000, message: 'Internal error' };
+  }
+}
 
 export function createApp(config: Config, logger: Logger): AppBundle {
   const handler = createMcpHandler((ctx) => createVaultServer(ctx), {
@@ -39,6 +67,25 @@ export function createApp(config: Config, logger: Logger): AppBundle {
   app.all('/mcp', (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     void node(req, res, req.body);
+  });
+
+  // Catch-all for unknown routes: keep every response on this server JSON-RPC shaped,
+  // never Express's default HTML "Cannot GET /" page.
+  app.use((_req, res) => {
+    res
+      .status(404)
+      .json({ jsonrpc: '2.0', error: { code: -32601, message: 'Not found' }, id: null });
+  });
+
+  // Terminal error handler (4-arity is what makes Express treat this as an error handler).
+  // Body-parser failures (malformed JSON, oversized payloads) land here; never leak a
+  // stack trace or a filesystem path to the client.
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    const status = errorStatus(err);
+    const type = errorType(err);
+    const { code, message } = errorShape(type);
+    logger.warn({ type, status }, 'request rejected');
+    res.status(status).json({ jsonrpc: '2.0', error: { code, message }, id: null });
   });
 
   return { app, handler };
