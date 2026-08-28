@@ -56,6 +56,12 @@ describe('renderDailyTemplate', () => {
     );
     expect(out).toBe('# 2026-08-29\n\nCreated Saturday, 29 August 2026 (2026-08-29)\n\n## Log\n');
   });
+
+  it('maps an invalid date-fns format token to a VaultError instead of a raw exception', () => {
+    expect(() =>
+      renderDailyTemplate('{{date:???bogus}}', lateUtc, DEFAULT_DAILY_NOTE_SETTINGS),
+    ).toThrow(VaultError);
+  });
 });
 
 describe('parseDateArg', () => {

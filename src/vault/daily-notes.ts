@@ -57,7 +57,14 @@ function inZone(date: Date, timezone: string): TZDate {
 }
 
 export function formatInVaultZone(date: Date, fmt: string, timezone: string): string {
-  return format(inZone(date, timezone), toDateFnsFormat(fmt));
+  const zoned = inZone(date, timezone);
+  try {
+    return format(zoned, toDateFnsFormat(fmt));
+  } catch (error) {
+    const message =
+      error instanceof Error ? (error.message.split('\n')[0] ?? error.message) : String(error);
+    throw new VaultError('INVALID_INPUT', `Invalid date format ${JSON.stringify(fmt)}: ${message}`);
+  }
 }
 
 export function resolveDailyNotePath(settings: DailyNoteSettings, date: Date): string {

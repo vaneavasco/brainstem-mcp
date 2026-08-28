@@ -69,6 +69,17 @@ describe('addNode', () => {
         height: 1,
       }),
     ).toThrow(/already exists/);
+    const { node: n1 } = addNode(canvas, {
+      id: 'n1',
+      type: 'file',
+      file: 'notes\\a.md',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    });
+    if (n1.type !== 'file') throw new Error('expected a file node');
+    expect(n1.file).toBe('notes/a.md');
     expect(() =>
       addNode(canvas, { type: 'file', x: 0, y: 0, width: 1, height: 1 } as never),
     ).toThrow(VaultError);

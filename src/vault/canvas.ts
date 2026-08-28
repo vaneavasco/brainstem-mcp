@@ -97,12 +97,15 @@ export function addNode(
     );
   }
   const data = parsed.data;
-  if (data.type === 'file') normalizeVaultPath(data.file); // throws INVALID_PATH on escape attempts
   const id = data.id ?? newCanvasId();
   if (canvas.nodes.some((n) => n.id === id)) {
     throw new VaultError('INVALID_INPUT', `A node with id ${id} already exists.`);
   }
-  const node = { ...data, id } as CanvasNode;
+  const node = {
+    ...data,
+    id,
+    ...(data.type === 'file' ? { file: normalizeVaultPath(data.file) } : {}),
+  } as CanvasNode;
   return { canvas: { ...canvas, nodes: [...canvas.nodes, node] }, node };
 }
 
