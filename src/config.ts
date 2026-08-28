@@ -3,6 +3,13 @@ import { z } from 'zod';
 export type LegacyMode = 'stateless' | 'reject';
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
 
+export type StorageConfig = { backend: 'localfs'; vaultPath: string } | { backend: 'drive' };
+
+export interface VaultSettingsConfig {
+  dailyNotes: { folder: string; format: string; template: string | null; timezone: string };
+  requiredFrontmatter: string[];
+}
+
 export interface Config {
   publicUrl: URL;
   mcpUrl: URL;
@@ -10,6 +17,8 @@ export interface Config {
   logLevel: LogLevel;
   legacyMode: LegacyMode;
   databaseUrl: string | undefined;
+  storage: StorageConfig;
+  vaultSettings: VaultSettingsConfig;
 }
 
 export class ConfigError extends Error {
@@ -35,6 +44,13 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   MCP_LEGACY_MODE: z.enum(['stateless', 'reject']).default('stateless'),
   DATABASE_URL: z.string().min(1).optional(),
+  STORAGE_BACKEND: z.enum(['drive', 'localfs']).default('drive'),
+  VAULT_PATH: z.string().min(1).optional(),
+  DAILY_NOTES_FOLDER: z.string().default(''),
+  DAILY_NOTES_FORMAT: z.string().min(1).default('yyyy-MM-dd'),
+  DAILY_NOTES_TEMPLATE: z.string().optional(),
+  VAULT_TIMEZONE: z.string().min(1).default('UTC'),
+  REQUIRED_FRONTMATTER: z.string().default(''),
 });
 
 const REQUIRED = ['PUBLIC_URL'] as const;
@@ -64,6 +80,31 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const mcpUrl = new URL(publicUrl);
   mcpUrl.pathname = `${publicUrl.pathname === '/' ? '' : publicUrl.pathname}/mcp`;
 
+  const d = parsed.data;
+  if (d.STORAGE_BACKEND === 'localfs' && !d.VAULT_PATH) {
+    throw new ConfigError(['VAULT_PATH (required when STORAGE_BACKEND=localfs)'], []);
+  }
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: d.VAULT_TIMEZONE });
+  } catch {
+    throw new ConfigError([], ['VAULT_TIMEZONE (unknown IANA timezone)']);
+  }
+  const storage: StorageConfig =
+    d.STORAGE_BACKEND === 'localfs'
+      ? { backend: 'localfs', vaultPath: d.VAULT_PATH as string }
+      : { backend: 'drive' };
+  const vaultSettings: VaultSettingsConfig = {
+    dailyNotes: {
+      folder: d.DAILY_NOTES_FOLDER,
+      format: d.DAILY_NOTES_FORMAT,
+      template: d.DAILY_NOTES_TEMPLATE ?? null,
+      timezone: d.VAULT_TIMEZONE,
+    },
+    requiredFrontmatter: d.REQUIRED_FRONTMATTER.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  };
+
   return {
     publicUrl,
     mcpUrl,
@@ -71,5 +112,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logLevel: parsed.data.LOG_LEVEL,
     legacyMode: parsed.data.MCP_LEGACY_MODE,
     databaseUrl: parsed.data.DATABASE_URL,
+    storage,
+    vaultSettings,
   };
 }

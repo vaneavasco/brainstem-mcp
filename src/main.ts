@@ -15,8 +15,20 @@ async function main(): Promise<void> {
     throw error;
   }
   const logger = createLogger(config.logLevel);
-  // TODO(task 15): config-driven runtime wiring (per-tenant Drive/local resolution).
-  const runtime = await createLocalRuntime({ vaultPath: process.env.VAULT_PATH ?? './vault-dev' });
+  if (config.storage.backend !== 'localfs') {
+    logger.fatal(
+      'STORAGE_BACKEND=drive is implemented in Phase 3. Set STORAGE_BACKEND=localfs and VAULT_PATH for now.',
+    );
+    process.exit(1);
+  }
+  const runtime = await createLocalRuntime({
+    vaultPath: config.storage.vaultPath,
+    settings: config.vaultSettings,
+  });
+  logger.info(
+    { vaultPath: config.storage.vaultPath, indexed: runtime.index.size() },
+    'vault runtime ready',
+  );
   const running = await startServer(config, logger, async () => runtime);
 
   let shuttingDown = false;
@@ -25,9 +37,9 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, 'shutting down');
     const timer = setTimeout(() => process.exit(1), 10_000);
-    runtime
+    running
       .close()
-      .then(() => running.close())
+      .then(() => runtime.close())
       .then(() => {
         clearTimeout(timer);
         process.exit(0);

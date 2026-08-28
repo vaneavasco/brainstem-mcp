@@ -72,3 +72,43 @@ describe('loadConfig', () => {
     expect(cfg.databaseUrl).toBe('postgres://u:p@h/db');
   });
 });
+
+describe('storage and vault settings', () => {
+  it('defaults to the drive backend and UTC daily notes', () => {
+    const cfg = loadConfig(base);
+    expect(cfg.storage).toEqual({ backend: 'drive' });
+    expect(cfg.vaultSettings).toEqual({
+      dailyNotes: { folder: '', format: 'yyyy-MM-dd', template: null, timezone: 'UTC' },
+      requiredFrontmatter: [],
+    });
+  });
+
+  it('requires VAULT_PATH for localfs and parses vault settings', () => {
+    expect(() => loadConfig({ ...base, STORAGE_BACKEND: 'localfs' })).toThrow(ConfigError);
+    const cfg = loadConfig({
+      ...base,
+      STORAGE_BACKEND: 'localfs',
+      VAULT_PATH: '/tmp/vault',
+      DAILY_NOTES_FOLDER: 'journal',
+      DAILY_NOTES_FORMAT: '%Y-%m-%d',
+      DAILY_NOTES_TEMPLATE: '# {{title}}',
+      VAULT_TIMEZONE: 'Europe/Chisinau',
+      REQUIRED_FRONTMATTER: 'type, status',
+    });
+    expect(cfg.storage).toEqual({ backend: 'localfs', vaultPath: '/tmp/vault' });
+    expect(cfg.vaultSettings).toEqual({
+      dailyNotes: {
+        folder: 'journal',
+        format: '%Y-%m-%d',
+        template: '# {{title}}',
+        timezone: 'Europe/Chisinau',
+      },
+      requiredFrontmatter: ['type', 'status'],
+    });
+  });
+
+  it('rejects an unknown timezone or backend', () => {
+    expect(() => loadConfig({ ...base, VAULT_TIMEZONE: 'Mars/Olympus' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...base, STORAGE_BACKEND: 's3' })).toThrow(ConfigError);
+  });
+});

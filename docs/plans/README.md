@@ -7,10 +7,21 @@ Spec: `../implementation-plan.md` (v1.1). Every plan follows the superpowers `wr
 | Phase | Plan | Status | Notes |
 |---|---|---|---|
 | 0 — Scaffold | [2026-08-28-phase-0-scaffold.md](2026-08-28-phase-0-scaffold.md) | complete 2026-08-28 (26 tests, local Inspector acceptance); Heroku deploy deferred by owner decision — local Docker Compose (Phase 1 Task 16) is the acceptance environment | 7 tasks + final-review fix wave (JSON-RPC error shaping, drain-then-abort shutdown, reject-mode tests, Dependabot). Local acceptance: MCP Inspector CLI mode against `npm run dev` — `tools/list` shows `brainstem_ping` with annotations/outputSchema, `tools/call` returns `structuredContent` (Inspector CLI negotiates the 2025 era → `era: legacy`; the modern era is covered by `tests/app.test.ts`). Spec §9 also names DB-layer and Drive path-mapping ADRs — they move to Phase 2 / Phase 3 where those decisions are actually made. |
-| 1 — Core tools on LocalFS | [2026-08-28-phase-1-core-tools-localfs.md](2026-08-28-phase-1-core-tools-localfs.md) | in progress | 16 tasks (Task 16 = Docker Compose local stack). StorageAdapter contract, path policy, frontmatter (ADR 0004), LocalFSAdapter, index, daily notes (tz-aware), canvas, analytics, all 20 tools, env wiring. |
+| 1 — Core tools on LocalFS | [2026-08-28-phase-1-core-tools-localfs.md](2026-08-28-phase-1-core-tools-localfs.md) | Tasks 1–15 done 2026-08-28 (20 vault tools + `brainstem_ping`, env-driven localfs wiring, full tool-surface test); Task 16 (Docker Compose local stack) remaining before Phase 1 acceptance | 16 tasks. StorageAdapter contract, path policy, frontmatter (ADR 0004), LocalFSAdapter, index, daily notes (tz-aware), canvas, analytics, all 20 tools, env wiring. See "Phase 1 — deviations from reference" below. |
 | 2 — Auth | *written at Phase 1 exit* | outline below | Longest phase (3.5 d). |
 | 3 — GoogleDriveAdapter | *written at Phase 2 exit* | outline below | |
 | 4 — Hardening + onboarding | *written at Phase 3 exit* | outline below | |
+
+## Phase 1 — deviations from reference
+
+Intentional deviations from the reference repo (https://github.com/jimprosser/obsidian-web-mcp) noted while porting the tool surface (spec §5), recorded per Task 15's parity spot-check:
+
+- **`vault_search` is literal, not regex.** The reference's search accepts arbitrary patterns; ours does a case-insensitive (by default) literal substring match. Avoids ReDoS from untrusted query strings and keeps behavior predictable for an LLM caller; `pathPrefix` scopes the search instead.
+- **Vault timezone is an explicit setting (`VAULT_TIMEZONE`), not the host's local time.** Daily-note "today" is resolved in this configured IANA timezone (validated with `Intl.DateTimeFormat` at startup), so daily notes are correct regardless of where the process happens to run (Heroku dyno vs. a laptop).
+- **`vault_batch_read` and `vault_batch_frontmatter_update` return a separate `failed[]` array** (path + error) distinct from `missing[]`. The reference collapses "not found" and "errored" into one bucket; splitting them lets the model distinguish "doesn't exist" from "exists but couldn't be processed" (e.g. a decode error) without parsing error text.
+- **`vault_analytics_summary`/`vault_analytics_findings` take an explicit `refresh: boolean` flag.** Results are cached in-memory for 10 minutes; callers that need a guaranteed-fresh scan (e.g. right after a bulk edit) pass `refresh: true` instead of the cache silently going stale with no override.
+- **Path policy rejects Obsidian/Windows-forbidden characters** (`: * ? " < > |`) in addition to the usual `..`/absolute-path traversal checks, so a path that would be unusable inside the actual Obsidian app is rejected at the tool boundary instead of silently succeeding server-side and breaking later in the client.
+- **JSON Canvas node ids are 16 lowercase-hex characters** (`randomBytes(8).toString('hex')`) when `vault_canvas_add_node`/`vault_canvas_add_edge` omit an id, matching Obsidian's own id format rather than a UUID.
 
 ## Phase 2 — Auth (outline; spec §7, §8)
 
