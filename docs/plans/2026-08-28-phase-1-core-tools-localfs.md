@@ -4411,14 +4411,14 @@ import { createLocalRuntime } from './vault/runtime.ts';
 `.env.example` — add:
 ```
 STORAGE_BACKEND=localfs
-VAULT_PATH=./.vault-dev
+VAULT_PATH=./vault-dev
 DAILY_NOTES_FOLDER=journal
 DAILY_NOTES_FORMAT=yyyy-MM-dd
 # DAILY_NOTES_TEMPLATE=# {{title}}
 VAULT_TIMEZONE=Europe/Chisinau
 REQUIRED_FRONTMATTER=
 ```
-and add `.vault-dev/` to `.gitignore`.
+and add `vault-dev/` to `.gitignore`.
 
 - [ ] **Step 4: Full-surface test**
 
@@ -4476,11 +4476,7 @@ npm test && npm run typecheck && npm run lint:fix && npm run build
 cp .env.example .env && npm run dev &   # then in another shell:
 npx @modelcontextprotocol/inspector      # connect to http://localhost:3000/mcp, run vault_write then vault_read, vault_daily_note_append, vault_analytics_summary
 ```
-Heroku (keeps the Phase 0 deployment booting until Phase 3 provides the Drive backend; the vault is ephemeral there):
-```bash
-heroku config:set STORAGE_BACKEND=localfs VAULT_PATH=/app/.vault-demo VAULT_TIMEZONE=Europe/Chisinau -a brainstem-mcp
-git push heroku main && curl -s "$(heroku config:get PUBLIC_URL -a brainstem-mcp)/health"
-```
+Heroku is deferred (owner decision 2026-08-28): the acceptance environment is the local Docker Compose stack built in Task 16 — no Heroku commands in this task.
 
 - [ ] **Step 6: Parity spot-check against the reference README (record in docs/plans/README.md)**
 
@@ -4498,11 +4494,181 @@ git push origin main
 
 ---
 
+### Task 16: Local Docker Compose stack (app + Postgres) and smoke script
+
+**Files:**
+- Create: `Dockerfile`, `.dockerignore`, `compose.yaml`, `scripts/docker-smoke.sh`
+- Modify: `package.json` (scripts `docker:up`, `docker:down`, `docker:logs`, `docker:smoke`), `.gitignore` (`vault-dev/`), `README.md` (Run with Docker section)
+
+**Interfaces:**
+- Consumes: `dist/main.js` (Task 15 wiring: `STORAGE_BACKEND=localfs`, `VAULT_PATH`), `/health`, the 20 tools.
+- Produces: `docker compose up --build` → server on `http://localhost:3000/mcp` with the vault bind-mounted at `./vault-dev`; a Postgres 17 service (unused until Phase 2, already wired with a healthcheck so Phase 2 only adds `DATABASE_URL`).
+
+- [ ] **Step 1: Write Dockerfile**
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM node:24-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
+RUN npm run build
+
+FROM node:24-slim AS runtime
+ENV NODE_ENV=production
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/dist ./dist
+RUN mkdir -p /vault && chown -R node:node /vault /app
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
+  CMD curl -fsS http://localhost:3000/health || exit 1
+CMD ["node", "dist/main.js"]
+```
+
+`version.ts` reads `../package.json` relative to `dist/`, so `package.json` must be present in the runtime image (it is, copied for `npm ci`). `ripgrep` in the image makes `capabilities().nativeSearch` true inside Docker.
+
+- [ ] **Step 2: Write .dockerignore**
+
+```
+node_modules
+dist
+.git
+.superpowers
+vault-dev
+.env
+.env.*
+docs
+tests
+coverage
+*.log
+```
+
+- [ ] **Step 3: Write compose.yaml**
+
+```yaml
+services:
+  app:
+    build: .
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - "3000:3000"
+    environment:
+      PUBLIC_URL: http://localhost:3000
+      ALLOW_INSECURE_PUBLIC_URL: "true"
+      PORT: "3000"
+      LOG_LEVEL: info
+      MCP_LEGACY_MODE: stateless
+      STORAGE_BACKEND: localfs
+      VAULT_PATH: /vault
+      VAULT_TIMEZONE: Europe/Chisinau
+      DAILY_NOTES_FOLDER: journal
+      DAILY_NOTES_FORMAT: yyyy-MM-dd
+      # Phase 2 adds: DATABASE_URL: postgres://brainstem:brainstem@postgres:5432/brainstem, ENCRYPTION_KEY, GOOGLE_CLIENT_ID/SECRET
+    volumes:
+      - ./vault-dev:/vault
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: brainstem
+      POSTGRES_PASSWORD: brainstem
+      POSTGRES_DB: brainstem
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brainstem -d brainstem"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+```
+
+`user:` maps the container to the host uid/gid so files written into `./vault-dev` are owned by you (export `UID`/`GID` in your shell if they are not 1000; `id -u`/`id -g`).
+
+- [ ] **Step 4: Write scripts/docker-smoke.sh**
+
+```bash
+#!/usr/bin/env bash
+# End-to-end smoke against the compose stack: health, tool list, write → read → file on disk.
+set -euo pipefail
+BASE="${BASE_URL:-http://localhost:3000}"
+INSPECTOR=(npx -y @modelcontextprotocol/inspector --cli "$BASE/mcp")
+
+echo "[1/4] health"; curl -fsS "$BASE/health" | grep -q '"status":"ok"'
+echo "[2/4] tools/list has 20 vault tools"
+COUNT=$("${INSPECTOR[@]}" --method tools/list | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).tools.filter(t=>t.name.startsWith("vault_")).length))')
+[ "$COUNT" = "20" ] || { echo "expected 20 vault tools, got $COUNT"; exit 1; }
+echo "[3/4] vault_write then vault_read"
+"${INSPECTOR[@]}" --method tools/call --tool-name vault_write --tool-arg path=00-inbox/smoke.md --tool-arg content=$'---\ntype: smoke\n---\n# Smoke\n' >/dev/null
+"${INSPECTOR[@]}" --method tools/call --tool-name vault_read --tool-arg path=00-inbox/smoke.md | grep -q '"type":"smoke"'
+echo "[4/4] file landed in ./vault-dev"; test -f vault-dev/00-inbox/smoke.md
+echo "docker smoke OK"
+```
+
+`chmod +x scripts/docker-smoke.sh`.
+
+- [ ] **Step 5: npm scripts, .gitignore, README**
+
+```bash
+npm pkg set scripts.docker:up="docker compose up -d --build"
+npm pkg set scripts.docker:down="docker compose down"
+npm pkg set scripts.docker:logs="docker compose logs -f app"
+npm pkg set scripts.docker:smoke="bash scripts/docker-smoke.sh"
+printf 'vault-dev/\n' >> .gitignore
+```
+
+README `## Run with Docker` section:
+```markdown
+## Run with Docker (local acceptance environment)
+
+```bash
+mkdir -p vault-dev
+npm run docker:up        # builds the image, starts app (:3000) + postgres (:5432)
+npm run docker:smoke     # health, tools/list, write→read, file visible in ./vault-dev
+npm run docker:logs
+npm run docker:down
+```
+
+The vault is the bind-mounted `./vault-dev` folder — open it in Obsidian to see notes Claude writes. Postgres is idle until Phase 2 (auth).
+```
+
+- [ ] **Step 6: Verify**
+
+```bash
+mkdir -p vault-dev && npm run docker:up && sleep 8 && docker compose ps && npm run docker:smoke && npm run docker:down
+```
+Expected: both services `healthy`/`running`; smoke prints `docker smoke OK`; `vault-dev/00-inbox/smoke.md` exists on the host and is owned by your user. Biome must ignore `Dockerfile`/`compose.yaml`/`scripts/*.sh` (not in `files.includes`); `npm run lint` stays pristine.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add Dockerfile .dockerignore compose.yaml scripts/docker-smoke.sh package.json .gitignore README.md
+git commit -m "feat(docker): compose stack (app + postgres) with bind-mounted vault and smoke script"
+```
+
+---
+
 ## Phase 1 exit checklist
 
 - [ ] `npm test` green: storage (limits, path-policy, frontmatter, text-diff, local-fs core + nav), vault (index, daily, canvas, analytics, runtime), tools (results, read-write, search-manage, canvas-daily-analytics, surface), plus Phase 0 suites.
 - [ ] `surface.test.ts` proves exactly 20 vault tools + `brainstem_ping`, all with title/description/4 annotations, deterministic order.
 - [ ] Inspector session against `npm run dev`: write → read → edit dry-run → append → search → daily append → analytics summary all succeed; `vault_delete` without confirm returns `CONFIRM_REQUIRED`.
 - [ ] Ripgrep suite executed at least once locally (`rg` installed) and equal to the JS fallback.
-- [ ] Heroku deployment boots with `STORAGE_BACKEND=localfs` (ephemeral vault) and `/health` is 200.
+- [ ] `docker compose up --build` (Task 16) serves `/health` and the full tool surface from a bind-mounted `./vault-dev`; `npm run docker:smoke` passes.
 - [ ] Parity deviations recorded in `docs/plans/README.md`.

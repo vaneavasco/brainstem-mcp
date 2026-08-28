@@ -17,7 +17,7 @@
 | HTTP framework | **Express 5.2.x** (latest 5.x; adapter peer range `^4.18 \|\| ^5.0`) | Owner decision (2026-08-27). Express 5 has async-error propagation and a Web-standard-ish router; the MCP Express adapter supplies `requireBearerAuth`, `mcpAuthMetadataRouter`, `hostHeaderValidation`. |
 | Validation | Zod **^4.2** (SDK peer dep) | v1's Zod 3 schemas are not auto-converted in v2. |
 | Runtime | **Node 24.x** (Active LTS; Heroku default), TypeScript strict (TS 6 needs the explicit type config the SDK README describes) | Node 22 is Maintenance LTS (EOL 2027-04); Node 26 becomes LTS Oct 2026 — revisit then. |
-| Hosting | Heroku **Basic dyno** (Cedar, Common Runtime) + **`heroku-postgresql:essential-0`** ($5; 1 GB; **20 connections**; PG 16/17/18) | "mini" plan no longer exists. Fir is Private-Spaces-only (CNB, IPv6, OTel) — not for us now. |
+| Hosting | **Deferred (2026-08-28):** the acceptance environment through Phase 1–3 is a local **Docker Compose** stack (app + Postgres 17, bind-mounted vault). Heroku (Basic dyno + `heroku-postgresql:essential-0`) stays the intended production target and its constraints (§8, §11) still shape the code. | Owner decision: make everything work locally first; Heroku provisioning happens when we decide to go public. |
 | Clients that must work at DoD | claude.ai web, Claude mobile (iOS/Android), Claude Desktop, **Claude Code** (`claude mcp add --transport http`) | Same Anthropic auth infra for hosted surfaces; Claude Code is a native client with CIMD + loopback redirect (exercises a different AS code path). |
 
 ## 1. Product definition (frozen — do not relitigate during build)
