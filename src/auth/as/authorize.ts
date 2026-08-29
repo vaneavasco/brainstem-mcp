@@ -2,7 +2,7 @@ import { type Request, type Response, Router, urlencoded } from 'express';
 import type { Config } from '../../config.ts';
 import type { Logger } from '../../logger.ts';
 import { randomToken, sha256hex } from '../hash.ts';
-import { type AuthDeps, createRateLimiter } from '../mount.ts';
+import { type AuthDeps, createOAuthRateLimiter } from '../mount.ts';
 import type { ClientRecord, PendingRecord } from '../store/types.ts';
 import { renderConsentPage, renderErrorPage } from './consent.ts';
 import { SCOPE } from './metadata.ts';
@@ -110,8 +110,9 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
   const iss = config.publicUrl.href;
 
   // A separate, generous bucket from /mcp's: this only protects the human-facing
-  // authorize/consent flow from being hammered, not normal interactive use.
-  router.use(createRateLimiter({ capacity: 30, refillPerSec: 10, now: auth.now }));
+  // authorize/consent flow from being hammered, not normal interactive use. Scoped to
+  // /oauth so it never throttles /mcp or /health requests that fall through this router.
+  router.use('/oauth', createOAuthRateLimiter(auth.now));
 
   router.get('/oauth/authorize', async (req: Request, res: Response) => {
     noStoreHtml(res);

@@ -7,7 +7,7 @@ import {
   buildOAuthProtectedResourceMetadata,
   type OAuthTokenVerifier,
 } from '@modelcontextprotocol/server';
-import type { Express, RequestHandler } from 'express';
+import type { Express, RequestHandler, Response } from 'express';
 import type { Config } from '../config.ts';
 import type { Logger } from '../logger.ts';
 import { createAuthorizeRouter } from './as/authorize.ts';
@@ -44,11 +44,23 @@ export function createAuth(
   };
 }
 
-/** Global token bucket for /mcp (spec §7: 60 req/s). Single-user ⇒ one bucket, keyed by nothing. */
+function jsonRpcRateLimited(res: Response): void {
+  res
+    .status(429)
+    .json({ jsonrpc: '2.0', error: { code: -32000, message: 'Rate limited' }, id: null });
+}
+
+/**
+ * Global token bucket for /mcp (spec §7: 60 req/s). Single-user ⇒ one bucket, keyed by
+ * nothing. `onLimited` lets callers shape the 429 body/headers for their own protocol
+ * (defaults to the JSON-RPC shape /mcp expects); OAuth endpoints use `createOAuthRateLimiter`
+ * below instead of passing this directly.
+ */
 export function createRateLimiter(opts: {
   capacity: number;
   refillPerSec: number;
   now: () => number;
+  onLimited?: (res: Response) => void;
 }): RequestHandler {
   let tokens = opts.capacity;
   let last = opts.now();
@@ -61,14 +73,33 @@ export function createRateLimiter(opts: {
     last = t;
     if (tokens < 1) {
       res.setHeader('Retry-After', '1');
-      res
-        .status(429)
-        .json({ jsonrpc: '2.0', error: { code: -32000, message: 'Rate limited' }, id: null });
+      (opts.onLimited ?? jsonRpcRateLimited)(res);
       return;
     }
     tokens -= 1;
     next();
   };
+}
+
+/**
+ * The OAuth authorize/token/revoke endpoints share this bucket shape (spec-adjacent,
+ * generous enough for interactive + CLI-retry use) and an RFC 6749 §5.2-shaped 429
+ * body instead of /mcp's JSON-RPC one, with the same no-store caching as every other
+ * OAuth response. Each call returns an independent bucket.
+ */
+export function createOAuthRateLimiter(now: () => number): RequestHandler {
+  return createRateLimiter({
+    capacity: 30,
+    refillPerSec: 10,
+    now,
+    onLimited: (res) => {
+      res.set({ 'Cache-Control': 'no-store', Pragma: 'no-cache' });
+      res.status(429).json({
+        error: 'temporarily_unavailable',
+        error_description: 'rate limited',
+      });
+    },
+  });
 }
 
 export function bearerGate(config: Config, auth: AuthDeps): RequestHandler {

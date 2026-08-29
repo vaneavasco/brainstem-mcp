@@ -1,9 +1,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { type Request, type Response, Router, urlencoded } from 'express';
+import { type NextFunction, type Request, type Response, Router, urlencoded } from 'express';
 import type { Config } from '../../config.ts';
 import type { Logger } from '../../logger.ts';
 import { randomToken, sha256hex } from '../hash.ts';
-import { type AuthDeps, createRateLimiter } from '../mount.ts';
+import { type AuthDeps, createOAuthRateLimiter } from '../mount.ts';
 import type { TokenRecord, TokenStore } from '../store/types.ts';
 
 export const ROTATION_GRACE_MS = 60_000;
@@ -34,6 +34,23 @@ function invalidRequest(res: Response, description: string): void {
 
 function invalidGrant(res: Response): void {
   res.status(400).json({ error: 'invalid_grant' });
+}
+
+/**
+ * RFC 6749 §3.2 / RFC 7009 §2.1: both the token and revocation endpoints only accept
+ * `application/x-www-form-urlencoded` bodies. Shared by `/oauth/token` and
+ * `/oauth/revoke` so a JSON (or missing) content type gets the same 415 either way.
+ */
+function requireFormEncoded(req: Request, res: Response, next: NextFunction): void {
+  noStore(res);
+  if (!req.is('application/x-www-form-urlencoded')) {
+    res.status(415).json({
+      error: 'invalid_request',
+      error_description: 'use application/x-www-form-urlencoded',
+    });
+    return;
+  }
+  next();
 }
 
 interface TokenResponse {
@@ -178,22 +195,13 @@ async function handleRefreshToken(
 export function createTokenRouter(config: Config, logger: Logger, auth: AuthDeps): Router {
   const router = Router();
 
-  // A separate bucket from /oauth/authorize's and /mcp's.
-  router.use(createRateLimiter({ capacity: 30, refillPerSec: 10, now: auth.now }));
+  // A separate bucket from /oauth/authorize's and /mcp's. Scoped to /oauth so it never
+  // throttles /mcp or /health requests that fall through this router.
+  router.use('/oauth', createOAuthRateLimiter(auth.now));
 
   router.post(
     '/oauth/token',
-    (req: Request, res: Response, next) => {
-      noStore(res);
-      if (!req.is('application/x-www-form-urlencoded')) {
-        res.status(415).json({
-          error: 'invalid_request',
-          error_description: 'use application/x-www-form-urlencoded',
-        });
-        return;
-      }
-      next();
-    },
+    requireFormEncoded,
     urlencoded({ extended: false, limit: '8kb' }),
     async (req: Request, res: Response) => {
       const grantType = strParam((req.body as Record<string, unknown>).grant_type);
@@ -211,9 +219,9 @@ export function createTokenRouter(config: Config, logger: Logger, auth: AuthDeps
 
   router.post(
     '/oauth/revoke',
+    requireFormEncoded,
     urlencoded({ extended: false, limit: '8kb' }),
     async (req: Request, res: Response) => {
-      noStore(res);
       const token = strParam((req.body as Record<string, unknown>).token);
       if (token) {
         const rec = await auth.store.getToken(sha256hex(token));

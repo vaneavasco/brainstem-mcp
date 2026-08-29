@@ -143,6 +143,7 @@ describe('POST /oauth/token', () => {
       body: '{}',
     });
     expect(res.status).toBe(415);
+    expect(((await res.json()) as { error: string }).error).toBe('invalid_request');
   });
 
   it('exchanges a code for access + refresh tokens bound to the resource', async () => {
@@ -157,6 +158,7 @@ describe('POST /oauth/token', () => {
     });
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(res.headers.get('pragma')).toBe('no-cache');
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'vault' });
     const rec = await store.getToken(sha256hex(body.access_token as string));
@@ -228,6 +230,9 @@ describe('POST /oauth/token', () => {
       })
     ).json()) as Tokens;
     expect(second.refresh_token).not.toBe(first.refresh_token);
+    const firstFamily = (await store.getToken(sha256hex(first.refresh_token)))?.familyId;
+    const secondFamily = (await store.getToken(sha256hex(second.refresh_token)))?.familyId;
+    expect(secondFamily).toBe(firstFamily);
     // within grace: old refresh still works (network retry)
     now += 30_000;
     expect(
@@ -278,7 +283,9 @@ describe('POST /oauth/token', () => {
       (await post({ grant_type: 'refresh_token', refresh_token: 'nope', client_id: CLIENT }))
         .status,
     ).toBe(400);
-    expect((await post({ grant_type: 'client_credentials' })).status).toBe(400);
+    const unsupported = await post({ grant_type: 'client_credentials' });
+    expect(unsupported.status).toBe(400);
+    expect(((await unsupported.json()) as { error: string }).error).toBe('unsupported_grant_type');
   });
 });
 
@@ -304,5 +311,46 @@ describe('POST /oauth/revoke', () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  it('rejects JSON bodies with 415', async () => {
+    const res = await fetch(`${base}/oauth/revoke`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(415);
+    expect(((await res.json()) as { error: string }).error).toBe('invalid_request');
+  });
+});
+
+// The OAuth rate limiter is mounted on the same router as the metadata/authorize/token
+// endpoints, which in turn is mounted at the app root ahead of /mcp and /health — a
+// path-unscoped `router.use(limiter)` would run for every request that reaches the
+// router, including ones no OAuth route matches. These pin the fix: the bucket only
+// ever gates /oauth/*, and its own 429 is RFC 6749-shaped, not the JSON-RPC one /mcp uses.
+describe('OAuth rate limiting', () => {
+  it('never rate-limits /health, even past the 30-request oauth bucket', async () => {
+    const statuses = await Promise.all(
+      Array.from({ length: 40 }, () => fetch(`${base}/health`).then((r) => r.status)),
+    );
+    expect(statuses.every((s) => s === 200)).toBe(true);
+  });
+
+  it('rate-limits /oauth/token past capacity with an RFC 6749-shaped 429', async () => {
+    const statuses: number[] = [];
+    let limited: Response | undefined;
+    for (let i = 0; i < 31; i++) {
+      const res = await post({ grant_type: 'client_credentials' });
+      statuses.push(res.status);
+      if (res.status === 429) limited = res;
+    }
+    expect(statuses.filter((s) => s === 429)).toHaveLength(1);
+    expect(statuses.indexOf(429)).toBe(30);
+    expect(limited?.headers.get('cache-control')).toBe('no-store');
+    expect(limited?.headers.get('pragma')).toBe('no-cache');
+    expect(limited?.headers.get('retry-after')).toBe('1');
+    const body = (await limited?.json()) as { error: string };
+    expect(body.error).toBe('temporarily_unavailable');
   });
 });
