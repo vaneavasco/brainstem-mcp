@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # brainstem — one-command launcher. All logic lives in src/cli/brainstem.ts; this only
 # makes sure node + docker exist and dependencies are installed, then delegates.
+# Set BRAINSTEM_SKIP_INSTALL=1 to skip the dependency-install step entirely (used by
+# the launcher test, so a stale-lockfile check never runs `npm ci --omit=dev` mid-suite).
 set -euo pipefail
 
 # Resolve the directory this script lives in. `readlink -f` is GNU-only (no `-f` on
@@ -23,8 +25,14 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required. Install Docker Desktop (https://docs.docker.com/desktop/) or Docker Engine + Compose v2." >&2
   exit 1
 fi
-if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-  echo "Installing dependencies…" >&2
-  npm ci --omit=dev --silent --no-audit --no-fund
+# Fresh iff node_modules/.package-lock.json exists and is not older than package-lock.json
+# (a missing marker/dir makes statSync throw, caught as -1, so this also covers a fresh
+# checkout with no node_modules at all). The check is a byte-identical `node -e` one-liner
+# in brainstem.cmd, so the two launchers agree exactly instead of diverging by platform.
+if [ "${BRAINSTEM_SKIP_INSTALL:-}" != "1" ]; then
+  if ! node -e "function s(p){try{return require('fs').statSync(p).mtimeMs}catch(e){return -1}};process.exit(Math.sign(s('package-lock.json')-s('node_modules/.package-lock.json'))===1?1:0)"; then
+    echo "Installing dependencies…" >&2
+    npm ci --omit=dev --silent --no-audit --no-fund
+  fi
 fi
 exec node src/cli/brainstem.ts "$@"
