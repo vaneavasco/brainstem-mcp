@@ -34,12 +34,19 @@ const Pending = z
     state: z.string(),
     nonce: z.string(),
     expiresAt: z.number(),
+    loopbackOnly: z.boolean(),
   })
   .strict();
 
 const Code = z
   .object({
     pendingId: z.string(),
+    clientId: z.string(),
+    clientName: z.string(),
+    redirectUri: z.string(),
+    codeChallenge: z.string(),
+    resource: z.string(),
+    scope: z.string(),
     expiresAt: z.number(),
     usedAt: z.number().optional(),
   })

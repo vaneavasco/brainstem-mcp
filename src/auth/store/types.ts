@@ -18,10 +18,23 @@ export interface PendingRecord {
   state: string;
   nonce: string;
   expiresAt: number;
+  loopbackOnly: boolean;
 }
 
+/**
+ * Self-contained: carries its own copy of the binding fields from the
+ * `PendingRecord` it was minted from, so the code stays valid (and its
+ * PKCE/redirect binding checkable) even after that pending row is deleted.
+ * `pendingId` is kept only for tracing back to the original request.
+ */
 export interface CodeRecord {
   pendingId: string;
+  clientId: string;
+  clientName: string;
+  redirectUri: string;
+  codeChallenge: string;
+  resource: string;
+  scope: string;
   expiresAt: number;
   usedAt?: number;
 }

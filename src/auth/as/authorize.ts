@@ -2,7 +2,7 @@ import { type Request, type Response, Router, urlencoded } from 'express';
 import type { Config } from '../../config.ts';
 import type { Logger } from '../../logger.ts';
 import { randomToken, sha256hex } from '../hash.ts';
-import type { AuthDeps } from '../mount.ts';
+import { type AuthDeps, createRateLimiter } from '../mount.ts';
 import type { ClientRecord, PendingRecord } from '../store/types.ts';
 import { renderConsentPage, renderErrorPage } from './consent.ts';
 import { SCOPE } from './metadata.ts';
@@ -11,11 +11,15 @@ export const PENDING_TTL_MS = 600_000;
 export const CODE_TTL_MS = 60_000;
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+const CODE_CHALLENGE_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 
 /**
  * Exact match on protocol/host/path/query; loopback hosts (`localhost`,
  * `127.0.0.1`, `[::1]`) ignore the port, since the CLI callback server binds
- * an ephemeral port each run. Anything else must match the port too.
+ * an ephemeral port each run. Anything else must match the port too. A
+ * candidate carrying userinfo or a fragment is always rejected outright —
+ * neither can legitimately appear in a redirect target and both are classic
+ * open-redirect confusion vectors.
  */
 export function matchesRedirectUri(candidate: string, registered: string[]): boolean {
   let c: URL;
@@ -24,6 +28,7 @@ export function matchesRedirectUri(candidate: string, registered: string[]): boo
   } catch {
     return false;
   }
+  if (c.hash || c.username || c.password) return false;
   return registered.some((r) => {
     let u: URL;
     try {
@@ -100,24 +105,13 @@ function redirectCode(
   res.redirect(302, url.href);
 }
 
-/**
- * Re-derives the consent page's loopback warning for a stored pending
- * authorization (used to re-render after a wrong secret or lockout). Falls
- * back to no-warning rather than failing the request if the client's
- * metadata can no longer be resolved.
- */
-async function resolveLoopbackOnly(auth: AuthDeps, clientId: string): Promise<boolean> {
-  try {
-    const client = await auth.cimd.resolveClient(clientId);
-    return client.redirectUris.every(isLoopbackRedirect);
-  } catch {
-    return false;
-  }
-}
-
 export function createAuthorizeRouter(config: Config, logger: Logger, auth: AuthDeps): Router {
   const router = Router();
   const iss = config.publicUrl.href;
+
+  // A separate, generous bucket from /mcp's: this only protects the human-facing
+  // authorize/consent flow from being hammered, not normal interactive use.
+  router.use(createRateLimiter({ capacity: 30, refillPerSec: 10, now: auth.now }));
 
   router.get('/oauth/authorize', async (req: Request, res: Response) => {
     noStoreHtml(res);
@@ -174,7 +168,11 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
       );
       return;
     }
-    if (!codeChallenge || codeChallengeMethod !== 'S256') {
+    if (
+      !codeChallenge ||
+      codeChallengeMethod !== 'S256' ||
+      !CODE_CHALLENGE_RE.test(codeChallenge)
+    ) {
       redirectError(
         res,
         redirectUri,
@@ -225,6 +223,10 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
       state,
       nonce: randomToken(16),
       expiresAt: now + PENDING_TTL_MS,
+      // Computed once here (from every registered redirect_uri, not just this
+      // request's) and persisted, so a later re-render (wrong secret, lockout)
+      // reads the same value back instead of re-resolving the client.
+      loopbackOnly: client.redirectUris.every(isLoopbackRedirect),
     };
     await auth.store.putPending(pending);
     logger.info(
@@ -236,7 +238,7 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
       renderConsentPage({
         clientName: pending.clientName,
         redirectHost: new URL(redirectUri).hostname,
-        loopbackOnly: client.redirectUris.every(isLoopbackRedirect),
+        loopbackOnly: pending.loopbackOnly,
         pendingId: pending.id,
         nonce: pending.nonce,
       }),
@@ -301,11 +303,10 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
 
       const verdict = auth.ownerAuth.verify(secret);
       if (!verdict.ok) {
-        const loopbackOnly = await resolveLoopbackOnly(auth, pending.clientId);
         const view = {
           clientName: pending.clientName,
           redirectHost: new URL(pending.redirectUri).hostname,
-          loopbackOnly,
+          loopbackOnly: pending.loopbackOnly,
           pendingId: pending.id,
           nonce: pending.nonce,
         };
@@ -314,6 +315,7 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
             { clientName: pending.clientName },
             'oauth consent: locked out after repeated failures',
           );
+          res.set('Retry-After', String(verdict.retryAfterS));
           res.status(429).send(renderConsentPage({ ...view, lockedForS: verdict.retryAfterS }));
           return;
         }
@@ -322,11 +324,23 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
         return;
       }
 
+      // The code is self-contained (carries its own copy of the pending
+      // row's binding fields) so it stays checkable after the pending row is
+      // gone; deleting the pending row here — rather than leaving it for the
+      // token exchange — is what makes a replayed approve 400 instead of
+      // silently minting a second code.
       const code = randomToken(32);
       await auth.store.putCode(sha256hex(code), {
         pendingId: pending.id,
+        clientId: pending.clientId,
+        clientName: pending.clientName,
+        redirectUri: pending.redirectUri,
+        codeChallenge: pending.codeChallenge,
+        resource: pending.resource,
+        scope: pending.scope,
         expiresAt: now + CODE_TTL_MS,
       });
+      await auth.store.deletePending(pending.id);
       logger.info({ clientName: pending.clientName }, 'oauth authorization code issued');
       redirectCode(res, pending.redirectUri, code, pending.state, iss);
     },

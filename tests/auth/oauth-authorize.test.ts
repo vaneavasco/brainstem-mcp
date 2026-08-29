@@ -6,6 +6,7 @@ import path from 'node:path';
 import { OAuthError, OAuthErrorCode } from '@modelcontextprotocol/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.ts';
+import { matchesRedirectUri } from '../../src/auth/as/authorize.ts';
 import { loadConfig } from '../../src/config.ts';
 import { createLogger } from '../../src/logger.ts';
 import { createLocalRuntime, type VaultRuntime } from '../../src/vault/runtime.ts';
@@ -141,6 +142,17 @@ describe('oauth authorize + consent', () => {
       );
       expect((await authorize({ redirect_uri: 'http://localhost:60000/other' })).status).toBe(400);
     });
+    it('sets defensive security headers on the consent page response', async () => {
+      const res = await authorize();
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-security-policy')).toBe(
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+      );
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(res.headers.get('pragma')).toBe('no-cache');
+    });
   });
 
   describe('POST /oauth/consent', () => {
@@ -170,6 +182,37 @@ describe('oauth authorize + consent', () => {
         (await consent({ ...form, action: 'approve', secret: TEST_OWNER_SECRET })).status,
       ).toBe(400); // burned
     });
+    it('approve is single-use: replaying the same pending after success mints no second code', async () => {
+      const form = formOf(await (await authorize()).text());
+      const first = await consent({ ...form, action: 'approve', secret: TEST_OWNER_SECRET });
+      expect(first.status).toBe(302);
+      const firstLoc = new URL(first.headers.get('location') ?? '');
+      expect(firstLoc.searchParams.get('code')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+      // The pending row was deleted by the successful approve above, so an
+      // identical replay (same pending_id, nonce and secret) must hit the
+      // "unknown pending" branch — a 400, never a second 302 with a code.
+      const replay = await consent({ ...form, action: 'approve', secret: TEST_OWNER_SECRET });
+      expect(replay.status).toBe(400);
+      expect(replay.headers.get('location')).toBeNull();
+    });
+  });
+});
+
+describe('matchesRedirectUri', () => {
+  it.each([
+    ['https://localhost:9999/cb', ['http://localhost/cb'], false], // protocol mismatch
+    ['http://localhost.evil.com/cb', ['http://localhost/cb'], false], // hostname mismatch, not a loopback suffix match
+    ['http://[::1]:60000/cb', ['http://[::1]/cb'], true], // IPv6 loopback ignores the port
+    [
+      'https://claude.ai:8443/api/mcp/auth_callback',
+      ['https://claude.ai/api/mcp/auth_callback'],
+      false,
+    ], // non-loopback host: the port must match too
+    ['http://localhost:3118/callback#x', ['http://localhost/callback'], false], // fragment rejected
+    ['http://u:p@localhost/callback', ['http://localhost/callback'], false], // userinfo rejected
+  ] as const)('matchesRedirectUri(%s, %s) -> %s', (candidate, registered, expected) => {
+    expect(matchesRedirectUri(candidate, [...registered])).toBe(expected);
   });
 });
 

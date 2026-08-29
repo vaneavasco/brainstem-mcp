@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomToken, sha256hex } from '../../src/auth/hash.ts';
 import { FileTokenStore, StoreCorruptError } from '../../src/auth/store/file-store.ts';
-import type { TokenRecord } from '../../src/auth/store/types.ts';
+import type { CodeRecord, TokenRecord } from '../../src/auth/store/types.ts';
 
 let dir: string;
 let file: string;
@@ -22,6 +22,18 @@ const tok = (over: Partial<TokenRecord> = {}): TokenRecord => ({
   resource: 'https://b.example.com/mcp',
   scope: 'vault',
   expiresAt: 2_000,
+  ...over,
+});
+
+const codeRec = (over: Partial<CodeRecord> = {}): CodeRecord => ({
+  pendingId: 'p',
+  clientId: 'https://claude.ai/c',
+  clientName: 'Claude',
+  redirectUri: 'http://localhost/callback',
+  codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+  resource: 'https://b.example.com/mcp',
+  scope: 'vault',
+  expiresAt: 5_000,
   ...over,
 });
 
@@ -54,9 +66,9 @@ describe('FileTokenStore', () => {
 
   it('consumeCode is single-use and expiry-aware', async () => {
     const store = await FileTokenStore.open(file);
-    await store.putCode('h', { pendingId: 'p', expiresAt: 1_000 });
+    await store.putCode('h', codeRec({ expiresAt: 1_000 }));
     expect(await store.consumeCode('h', 1_500)).toBeUndefined(); // expired
-    await store.putCode('h2', { pendingId: 'p', expiresAt: 5_000 });
+    await store.putCode('h2', codeRec({ expiresAt: 5_000 }));
     expect(await store.consumeCode('h2', 1_000)).toMatchObject({ pendingId: 'p' });
     expect(await store.consumeCode('h2', 1_001)).toBeUndefined(); // used
   });
