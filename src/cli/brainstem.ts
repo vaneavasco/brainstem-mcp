@@ -5,7 +5,17 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { confirm, input, select } from '@inquirer/prompts';
 import { Command } from 'commander';
+import { RESERVED_DIR } from '../storage/path-policy.ts';
+import { runDown } from './commands/down.ts';
+import { runLogs } from './commands/logs.ts';
+import { runRevokeAll } from './commands/revoke-all.ts';
+import { runSecretRotate, runSecretShow } from './commands/secret.ts';
 import { runSetup, type SetupDeps, type SetupIO } from './commands/setup.ts';
+import { runStatus } from './commands/status.ts';
+import { runUp } from './commands/up.ts';
+import { runUrl } from './commands/url.ts';
+import { createComposeRunner } from './docker.ts';
+import { parseEnv } from './env-file.ts';
 import type { VaultPathContext } from './vault-path.ts';
 
 const NON_INTERACTIVE_MESSAGE =
@@ -91,9 +101,31 @@ function buildSetupDeps(repoDir: string): SetupDeps {
   };
 }
 
-function notImplemented(name: string): void {
-  console.error(`${name}: not implemented yet (Task 15)`);
-  process.exitCode = 1;
+async function loadEnvMap(repoDir: string): Promise<Map<string, string>> {
+  const text = await readFile(path.join(repoDir, '.env'));
+  if (text === null) {
+    throw new Error('.env not found — run `npm run setup` first');
+  }
+  return parseEnv(text);
+}
+
+function localPortOf(env: Map<string, string>): number {
+  const port = Number(env.get('PORT'));
+  return Number.isInteger(port) && port > 0 ? port : 3000;
+}
+
+function stateFileOf(env: Map<string, string>): string {
+  const vaultPath = env.get('VAULT_PATH') ?? '';
+  return path.join(vaultPath, RESERVED_DIR, 'state.json');
+}
+
+async function runAction(fn: () => Promise<number>): Promise<void> {
+  try {
+    process.exitCode = await fn();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
 }
 
 export function buildProgram(repoDir: string): Command {
@@ -129,9 +161,125 @@ export function buildProgram(repoDir: string): Command {
       }
     });
 
-  for (const name of ['up', 'url', 'status', 'down', 'logs', 'revoke-all']) {
-    program.command(name).action(() => notImplemented(name));
-  }
+  program
+    .command('up')
+    .description('Start brainstem-mcp (docker compose up) and wait for it to become healthy')
+    .option('--no-build', 'skip rebuilding the image before starting')
+    .action(async (opts: { build: boolean }) => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runUp(
+          { build: opts.build },
+          {
+            compose: createComposeRunner(repoDir),
+            env,
+            print: (line) => console.log(line),
+            fetchImpl: globalThis.fetch,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            localPort: localPortOf(env),
+          },
+        );
+      });
+    });
+
+  program
+    .command('url')
+    .description('Print the connector/public URL and check it is reachable')
+    .action(async () => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runUrl({
+          fetchImpl: globalThis.fetch,
+          print: (line) => console.log(line),
+          localPort: localPortOf(env),
+        });
+      });
+    });
+
+  program
+    .command('status')
+    .description('Show configuration, health and container status')
+    .action(async () => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runStatus({
+          env,
+          vaultCtx: createVaultCtx(repoDir),
+          compose: createComposeRunner(repoDir),
+          fetchImpl: globalThis.fetch,
+          print: (line) => console.log(line),
+          localPort: localPortOf(env),
+        });
+      });
+    });
+
+  program
+    .command('down')
+    .description('Stop brainstem-mcp')
+    .action(async () => {
+      await runAction(() =>
+        runDown({ compose: createComposeRunner(repoDir), print: (line) => console.log(line) }),
+      );
+    });
+
+  program
+    .command('logs')
+    .description('Follow container logs')
+    .argument('[service]', 'service to follow (app or tunnel); omit for all')
+    .action(async (service?: string) => {
+      await runAction(() => runLogs({ service }, { compose: createComposeRunner(repoDir) }));
+    });
+
+  program
+    .command('revoke-all')
+    .description('Revoke all OAuth tokens — every connected client must reconnect')
+    .option('--reset', 'delete the auth state file instead of revoking in place')
+    .option('--yes', 'skip the confirmation prompt')
+    .action(async (opts: { reset?: boolean; yes?: boolean }) => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runRevokeAll(
+          { reset: opts.reset },
+          {
+            stateFile: stateFileOf(env),
+            print: (line) => console.log(line),
+            confirm: opts.yes
+              ? async () => true
+              : (question) => confirm({ message: question, default: false }),
+          },
+        );
+      });
+    });
+
+  const secret = program.command('secret').description('Show or rotate the owner secret');
+
+  secret
+    .command('show')
+    .description('Print the current OWNER_SECRET')
+    .action(async () => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runSecretShow({ env, print: (line) => console.log(line) });
+      });
+    });
+
+  secret
+    .command('rotate')
+    .description('Generate a new OWNER_SECRET (the app must be restarted to pick it up)')
+    .action(async () => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runSecretRotate({
+          envPath: path.join(repoDir, '.env'),
+          stateFile: stateFileOf(env),
+          readFile: async (p) => (await readFile(p)) ?? '',
+          writeFile,
+          randomSecret: () => randomBytes(32).toString('base64url'),
+          print: (line) => console.log(line),
+          confirm: (question) => confirm({ message: question, default: false }),
+        });
+      });
+    });
 
   return program;
 }
