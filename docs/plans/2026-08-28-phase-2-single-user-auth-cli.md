@@ -709,8 +709,9 @@ describe('createOwnerAuth', () => {
   it('locks after 5 failures within a minute and unlocks after the lockout', () => {
     let t = 0;
     const auth = createOwnerAuth('right', { now: () => t });
-    for (let i = 0; i < 5; i++) expect(auth.verify('wrong')).toMatchObject({ ok: false, reason: 'invalid' });
-    expect(auth.verify('right')).toMatchObject({ ok: false, reason: 'locked', retryAfterS: 900 });
+    for (let i = 0; i < 4; i++) expect(auth.verify('wrong')).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(auth.verify('wrong')).toMatchObject({ ok: false, reason: 'locked', retryAfterS: 900 }); // 5th failure trips the lock
+    expect(auth.verify('right')).toMatchObject({ ok: false, reason: 'locked' });
     expect(auth.isLocked()).toBe(true);
     t = 15 * 60_000;
     expect(auth.verify('right')).toEqual({ ok: true });
@@ -770,8 +771,6 @@ export function createOwnerAuth(secret: string, opts: OwnerAuthOptions = {}): Ow
   };
 }
 ```
-
-Note the second test: the 5th wrong attempt returns `locked` (attempt count reaches 5), so the loop asserting `invalid` must run 4 times and the 5th call is the one asserting `locked` — adjust the test accordingly: `for (let i = 0; i < 4; i++)` then `expect(auth.verify('wrong')).toMatchObject({ ok: false, reason: 'locked' })`, then `expect(auth.verify('right')).toMatchObject({ ok: false, reason: 'locked' })`.
 
 - [ ] **Step 4: Run tests, lint, typecheck** — PASS.
 - [ ] **Step 5: Commit** — `git commit -m "feat(auth): owner secret verification with constant-time compare and global lockout"`
