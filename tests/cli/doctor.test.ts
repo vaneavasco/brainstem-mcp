@@ -122,4 +122,14 @@ describe('runDoctorChecks', () => {
     });
     expect(checks.find((c) => c.name === 'port')).toMatchObject({ ok: true });
   });
+  it('prerequisitesOnly returns exactly the four machine checks, even with no .env', async () => {
+    const checks = await runDoctorChecks({
+      probe: probe(),
+      env: null,
+      vaultCtx,
+      print() {},
+      prerequisitesOnly: true,
+    });
+    expect(checks.map((c) => c.name)).toEqual(['node', 'docker', 'docker-daemon', 'compose']);
+  });
 });

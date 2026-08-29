@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -6,14 +7,17 @@ import { pathToFileURL } from 'node:url';
 import { confirm, input, select } from '@inquirer/prompts';
 import { Command } from 'commander';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
+import { COMMANDS, renderHelpText } from './catalog.ts';
 import { runDoctor } from './commands/doctor.ts';
 import { runDown } from './commands/down.ts';
 import { runLogs } from './commands/logs.ts';
 import { runRevokeAll } from './commands/revoke-all.ts';
 import { runSecretRotate, runSecretShow } from './commands/secret.ts';
 import { runSetup, type SetupDeps, type SetupIO } from './commands/setup.ts';
+import { runStart } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runUp } from './commands/up.ts';
+import { runUpdate } from './commands/update.ts';
 import { runUrl } from './commands/url.ts';
 import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
@@ -139,13 +143,90 @@ async function runAction(fn: () => Promise<number>): Promise<void> {
   }
 }
 
-export function buildProgram(repoDir: string): Command {
+/** The catalog summary for `name` — `.description()`'s single source of truth. */
+function summaryOf(name: string): string {
+  const info = COMMANDS.find((c) => c.name === name);
+  if (info === undefined) {
+    throw new Error(`catalog.ts has no entry for "${name}"`);
+  }
+  return info.summary;
+}
+
+/** Inherit-stdio process runner (no shell) for `update`'s `npm ci` and its restart child. */
+function createProcessRunner(cwd: string): (cmd: string, args: string[]) => Promise<number> {
+  return (cmd, args) =>
+    new Promise((resolve) => {
+      const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: false });
+      child.on('error', () => resolve(1));
+      child.on('close', (code) => resolve(code ?? 1));
+    });
+}
+
+export function buildProgram(
+  repoDir: string = path.resolve(import.meta.dirname, '..', '..'),
+): Command {
   const program = new Command();
   program.name('brainstem').description('brainstem-mcp CLI: setup, run and manage your instance');
+  program.addHelpText('after', `\n${renderHelpText()}\n`);
+  program.showHelpAfterError();
+
+  program
+    .command('start')
+    .description(summaryOf('start'))
+    .option('--vault <path>', 'absolute path to your Obsidian vault (used on first run)')
+    .option('--tunnel-token <token>', 'Cloudflare tunnel token (used on first run)')
+    .option(
+      '--public-url <url>',
+      'public https URL for the Cloudflare tunnel (used on first run, with --tunnel-token)',
+    )
+    .option('--no-build', 'skip rebuilding the image before starting')
+    .action(
+      async (opts: {
+        vault?: string;
+        tunnelToken?: string;
+        publicUrl?: string;
+        build: boolean;
+      }) => {
+        const print = (line: string) => console.log(line);
+        await runAction(() =>
+          runStart({
+            print,
+            doctor: () =>
+              runDoctor({
+                probe: createSystemProbe(),
+                env: null,
+                vaultCtx: createVaultCtx(repoDir),
+                print,
+                prerequisitesOnly: true,
+              }),
+            hasEnv: async () => (await loadEnvMapOrNull(repoDir)) !== null,
+            setup: () =>
+              runSetup(
+                { vault: opts.vault, tunnelToken: opts.tunnelToken, publicUrl: opts.publicUrl },
+                buildSetupDeps(repoDir),
+              ),
+            up: async () => {
+              const env = await loadEnvMap(repoDir);
+              return runUp(
+                { build: opts.build },
+                {
+                  compose: createComposeRunner(repoDir),
+                  env,
+                  print,
+                  fetchImpl: globalThis.fetch,
+                  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+                  localPort: localPortOf(env),
+                },
+              );
+            },
+          }),
+        );
+      },
+    );
 
   program
     .command('setup')
-    .description('Create or update .env (owner secret, vault path, tunnel mode)')
+    .description(summaryOf('setup'))
     .option('--vault <path>', 'absolute path to your Obsidian vault')
     .option('--tunnel-token <token>', 'Cloudflare tunnel token (stable URL)')
     .option(
@@ -174,7 +255,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('doctor')
-    .description('Check prerequisites and configuration; print how to fix what is missing')
+    .description(summaryOf('doctor'))
     .action(async () => {
       await runAction(async () => {
         const env = await loadEnvMapOrNull(repoDir);
@@ -189,7 +270,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('up')
-    .description('Start brainstem-mcp (docker compose up) and wait for it to become healthy')
+    .description(summaryOf('up'))
     .option('--no-build', 'skip rebuilding the image before starting')
     .action(async (opts: { build: boolean }) => {
       await runAction(async () => {
@@ -210,7 +291,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('url')
-    .description('Print the connector/public URL and check it is reachable')
+    .description(summaryOf('url'))
     .action(async () => {
       await runAction(async () => {
         const env = await loadEnvMap(repoDir);
@@ -224,7 +305,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('status')
-    .description('Show configuration, health and container status')
+    .description(summaryOf('status'))
     .action(async () => {
       await runAction(async () => {
         const env = await loadEnvMap(repoDir);
@@ -241,7 +322,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('down')
-    .description('Stop brainstem-mcp')
+    .description(summaryOf('down'))
     .action(async () => {
       await runAction(() =>
         runDown({ compose: createComposeRunner(repoDir), print: (line) => console.log(line) }),
@@ -250,7 +331,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('logs')
-    .description('Follow container logs')
+    .description(summaryOf('logs'))
     .argument('[service]', 'service to follow (app or tunnel); omit for all')
     .action(async (service?: string) => {
       await runAction(() => runLogs({ service }, { compose: createComposeRunner(repoDir) }));
@@ -258,7 +339,7 @@ export function buildProgram(repoDir: string): Command {
 
   program
     .command('revoke-all')
-    .description('Revoke all OAuth tokens — every connected client must reconnect')
+    .description(summaryOf('revoke-all'))
     .option(
       '--reset',
       'reset the auth state file (also clears clients/pending) instead of revoking in place',
@@ -280,7 +361,20 @@ export function buildProgram(repoDir: string): Command {
       });
     });
 
-  const secret = program.command('secret').description('Show or rotate the owner secret');
+  program
+    .command('update')
+    .description(summaryOf('update'))
+    .action(async () => {
+      await runAction(() =>
+        runUpdate({
+          exec: createSystemProbe().exec,
+          run: createProcessRunner(repoDir),
+          print: (line) => console.log(line),
+        }),
+      );
+    });
+
+  const secret = program.command('secret').description(summaryOf('secret'));
 
   secret
     .command('show')
@@ -315,6 +409,10 @@ export function buildProgram(repoDir: string): Command {
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  const repoDir = path.resolve(import.meta.dirname, '..', '..');
-  await buildProgram(repoDir).parseAsync(process.argv);
+  const program = buildProgram();
+  if (process.argv.length <= 2) {
+    program.outputHelp();
+    process.exit(0);
+  }
+  await program.parseAsync(process.argv);
 }
