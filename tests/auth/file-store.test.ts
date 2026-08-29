@@ -92,6 +92,19 @@ describe('FileTokenStore', () => {
     expect(await b.getToken('x')).toBeDefined();
   });
 
+  it('rolls back in-memory state when a write fails, and stays usable afterward', async () => {
+    const store = await FileTokenStore.open(file);
+    await store.putToken('good', tok());
+    const stateDir = path.dirname(file);
+    await fs.rm(stateDir, { recursive: true, force: true }); // next write will fail (ENOENT)
+    await expect(store.putToken('bad', tok())).rejects.toThrow();
+    expect(await store.getToken('bad')).toBeUndefined(); // rolled back, not just unpersisted
+    await fs.mkdir(stateDir, { recursive: true }); // conditions recover
+    await store.putToken('again', tok()); // the queue isn't wedged by the earlier failure
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { tokens: Record<string, unknown> };
+    expect(Object.keys(raw.tokens).sort()).toEqual(['again', 'good']);
+  });
+
   it('refuses a corrupt or newer file with StoreCorruptError naming the path', async () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, '{not json');

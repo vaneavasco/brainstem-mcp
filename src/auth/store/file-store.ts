@@ -131,11 +131,20 @@ export class FileTokenStore implements TokenStore {
   private mutate<T>(fn: (doc: Doc) => T): Promise<T> {
     const run = async (): Promise<T> => {
       await this.reloadIfChanged();
-      const result = fn(this.doc);
-      await writeAtomic(this.filePath, this.doc);
-      const st = await fs.stat(this.filePath);
-      this.stamp = { mtimeMs: st.mtimeMs, size: st.size };
-      return result;
+      const snapshot = structuredClone(this.doc);
+      try {
+        const result = fn(this.doc);
+        await writeAtomic(this.filePath, this.doc);
+        const st = await fs.stat(this.filePath);
+        this.stamp = { mtimeMs: st.mtimeMs, size: st.size };
+        return result;
+      } catch (err) {
+        // The mutation was applied to `this.doc` in place but never (successfully)
+        // persisted — roll back so a failed write can't silently ride along with
+        // the next successful one.
+        this.doc = snapshot;
+        throw err;
+      }
     };
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
@@ -203,6 +212,7 @@ export class FileTokenStore implements TokenStore {
     });
   }
 
+  /** Returns the number of tokens newly revoked by this call. */
   revokeFamily(familyId: string, now: number): Promise<number> {
     return this.mutate((doc) => {
       let count = 0;
@@ -216,6 +226,11 @@ export class FileTokenStore implements TokenStore {
     });
   }
 
+  /**
+   * Returns the number of tokens that are in revoked state after the call
+   * (already-revoked tokens are included; their `revokedAt` is never
+   * overwritten). Also clears pending authorizations and codes.
+   */
   revokeAll(now: number): Promise<number> {
     return this.mutate((doc) => {
       let count = 0;

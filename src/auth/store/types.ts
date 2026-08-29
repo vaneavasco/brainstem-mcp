@@ -50,7 +50,13 @@ export interface TokenStore {
   putToken(hash: string, rec: TokenRecord): Promise<void>;
   getToken(hash: string): Promise<TokenRecord | undefined>;
   updateToken(hash: string, patch: Partial<TokenRecord>): Promise<void>;
-  revokeFamily(familyId: string, now: number): Promise<number>; // returns count revoked
+  /** Returns the number of tokens newly revoked by this call. */
+  revokeFamily(familyId: string, now: number): Promise<number>;
+  /**
+   * Returns the number of tokens that are in revoked state after the call
+   * (already-revoked tokens are included; their `revokedAt` is never
+   * overwritten). Also clears pending authorizations and codes.
+   */
   revokeAll(now: number): Promise<number>;
   sweepExpired(now: number): Promise<void>; // drops expired pending/codes/tokens/negative clients
 }
