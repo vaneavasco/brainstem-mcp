@@ -1,43 +1,47 @@
+# Configuration comes from .env (created by `npm run setup`). Compose interpolates ${VAR} from it.
 services:
   app:
     build: .
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     environment:
-      PUBLIC_URL: http://localhost:3000
-      ALLOW_INSECURE_PUBLIC_URL: "true"
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      ALLOW_INSECURE_PUBLIC_URL: ${ALLOW_INSECURE_PUBLIC_URL:-false}
+      PUBLIC_URL_FILE: ${PUBLIC_URL_FILE:-}
+      TUNNEL_MODE: ${TUNNEL_MODE:-none}
+      OWNER_SECRET: ${OWNER_SECRET:?run npm run setup}
       PORT: "3000"
-      LOG_LEVEL: info
-      MCP_LEGACY_MODE: stateless
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MCP_LEGACY_MODE: ${MCP_LEGACY_MODE:-stateless}
       STORAGE_BACKEND: localfs
       VAULT_PATH: /vault
-      VAULT_TIMEZONE: Europe/Chisinau
-      DAILY_NOTES_FOLDER: journal
-      DAILY_NOTES_FORMAT: yyyy-MM-dd
-      # Phase 2 adds: DATABASE_URL: postgres://brainstem:brainstem@postgres:5432/brainstem, ENCRYPTION_KEY, GOOGLE_CLIENT_ID/SECRET
+      VAULT_TIMEZONE: ${VAULT_TIMEZONE:-UTC}
+      VAULT_WATCH_POLL_MS: ${VAULT_WATCH_POLL_MS:-}
+      DAILY_NOTES_FOLDER: ${DAILY_NOTES_FOLDER:-}
+      DAILY_NOTES_FORMAT: ${DAILY_NOTES_FORMAT:-yyyy-MM-dd}
+      CIMD_ALLOWED_HOSTS: ${CIMD_ALLOWED_HOSTS:-claude.ai,claude.com}
+      ACCESS_TOKEN_TTL_S: ${ACCESS_TOKEN_TTL_S:-3600}
+      REFRESH_TOKEN_TTL_S: ${REFRESH_TOKEN_TTL_S:-7776000}
     volumes:
-      - ./vault-dev:/vault
+      - "${VAULT_PATH:?run npm run setup}:/vault"
     depends_on:
-      postgres:
-        condition: service_healthy
+      tunnel:
+        condition: service_started
+        required: false
     restart: unless-stopped
 
-  postgres:
-    image: postgres:17
+  tunnel:
+    build:
+      context: .
+      dockerfile: tunnel/Dockerfile
+    profiles: ["tunnel"]
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
-      POSTGRES_USER: brainstem
-      POSTGRES_PASSWORD: brainstem
-      POSTGRES_DB: brainstem
-    ports:
-      - "5433:5432"  # host 5433 to avoid clashing with a local Postgres on 5432
+      TUNNEL_MODE: ${TUNNEL_MODE:-quick}
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+      TUNNEL_TARGET: http://app:3000
+      PUBLIC_URL_FILE: /vault/_brainstem/public-url
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U brainstem -d brainstem"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-volumes:
-  pgdata:
+      - "${VAULT_PATH:?run npm run setup}:/vault"
+    restart: unless-stopped
