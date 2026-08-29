@@ -584,7 +584,9 @@ export class LocalFSAdapter implements StorageAdapter {
         return path.relative(this.root, absPath).split(path.sep)[0] === RESERVED_DIR;
       },
       awaitWriteFinish: false,
-      ...(this.watchPollMs ? { usePolling: true, interval: this.watchPollMs } : {}),
+      ...(this.watchPollMs
+        ? { usePolling: true, interval: this.watchPollMs, binaryInterval: this.watchPollMs }
+        : {}),
     });
     watcher.on('add', (abs) => onChange({ type: 'create', path: this.rel(abs) }));
     watcher.on('change', (abs) => onChange({ type: 'update', path: this.rel(abs) }));
