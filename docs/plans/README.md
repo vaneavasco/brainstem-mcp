@@ -37,7 +37,7 @@ The whole-branch final review (`.superpowers/sdd/2026-08-28-phase-1-core-tools-l
 
 ## Phase 2′ — final fix wave (2026-08-29)
 
-The whole-branch final review (`.superpowers/sdd/2026-08-28-phase-2-single-user-auth-cli/final-fix-wave-report.md`) found three blocking defects and six important ones, all fixed before Phase 2′ was declared accepted:
+The whole-branch final review (archived with the fix wave and the fix-later list in `../reviews/2026-08-29-phase-2-final-review.md`) found three blocking defects and six important ones, all fixed before Phase 2′ was declared accepted:
 
 - **State reset was a no-op against a running app.** `revoke-all --reset` unlinked `state.json`, but `FileTokenStore.reloadIfChanged` treated a failed `stat` as "unchanged", so the app kept its in-memory document and the next `lastUsedAt` write recreated the file with every token. `--reset` now writes the empty v1 document atomically (`writeEmptyStateFile`), and a vanished file resets the in-memory document to empty.
 - **Windows vault paths were mangled by Compose.** `.env` values containing a space or `#` were double-quoted, where compose-go expands `\a \b \f \n \r \t \v \\ \" \$` — `C:\Users\vanea\Obsidian Vault` did not survive. They are single-quoted now (literal in compose-go and Node `--env-file`), with an escaped double-quoted fallback for values containing an apostrophe.
