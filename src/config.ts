@@ -106,6 +106,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const publicUrl = new URL(parsed.data.PUBLIC_URL);
   publicUrl.hash = '';
   publicUrl.search = '';
+  // A path prefix (https://host/brain) only ever half-worked: the metadata
+  // documents carry it, but the PRM well-known path, the tunnel target and
+  // the compose wiring are all origin-shaped. Reject it instead of shipping
+  // a URL that authenticates but doesn't route.
+  if (publicUrl.pathname !== '/') {
+    throw new ConfigError([], ['PUBLIC_URL'], 'PUBLIC_URL must be a bare origin (no path)');
+  }
   publicUrl.pathname = publicUrl.pathname.replace(/\/+$/, '');
   if (publicUrl.protocol !== 'https:' && parsed.data.ALLOW_INSECURE_PUBLIC_URL !== 'true') {
     throw new ConfigError(

@@ -236,6 +236,19 @@ describe.skipIf(!hasRipgrep())('search (ripgrep)', () => {
     expect(hit?.text.endsWith('…')).toBe(true);
   });
 
+  it('never returns matches from inside the reserved _brainstem folder', async () => {
+    // Same guarantee as the JS-fallback test below, but through ripgrep's own
+    // glob exclusion — the two search paths must agree that `_brainstem` (the
+    // folder holding state.json and the tunnel URL) is invisible.
+    const rgVault = await LocalFSAdapter.create(root);
+    const needle = 'xyzzybrainstemneedle';
+    await fs.mkdir(path.join(root, '_brainstem'), { recursive: true });
+    await fs.writeFile(path.join(root, '_brainstem', 'secret.md'), `${needle} secret\n`);
+    await rgVault.write('visible-needle.md', `${needle} visible\n`);
+    const results = await rgVault.search(needle);
+    expect(results.map((m) => m.path)).toEqual(['visible-needle.md']);
+  });
+
   it('stops reading once the limit is reached on a large result set', async () => {
     const rgVault = await LocalFSAdapter.create(root);
     for (let i = 0; i < 200; i += 1) {

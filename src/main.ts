@@ -17,7 +17,10 @@ const PUBLIC_URL_WAIT_POLL_MS = 1_000;
 const PUBLIC_URL_WAIT_LOG_MS = 10_000;
 const PUBLIC_URL_WATCH_POLL_MS = 5_000;
 const SWEEP_INTERVAL_MS = 600_000;
-const HEARTBEAT_INTERVAL_MS = 60_000;
+// Each beat rewrites instance.json inside the (synced) vault, so this is a
+// liveness signal, not a clock: 5 min, matched by the 15 min staleness window
+// in `writeInstanceFile`.
+const HEARTBEAT_INTERVAL_MS = 300_000;
 // Obsidian Sync / Syncthing leave a sibling copy next to a file they can't
 // merge (e.g. `state (conflict).json`, `state.sync-conflict-...json`) — we
 // only ever read/write state.json itself, so a match here means a write

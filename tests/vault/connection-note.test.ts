@@ -70,7 +70,34 @@ describe('writeInstanceFile', () => {
       startedAt: 'c',
       heartbeatAt: new Date(Date.now() + 10 * 60_000).toISOString(),
     });
-    expect(stale.otherHost).toBe('desktop'); // desktop's heartbeat is < 5 min old
+    expect(stale.otherHost).toBe('desktop'); // desktop's heartbeat is < 15 min old
+  });
+
+  it('treats a heartbeat older than the freshness window as a dead instance', async () => {
+    const t0 = Date.UTC(2026, 7, 29, 12, 0, 0);
+    await writeInstanceFile(dir, {
+      hostname: 'laptop',
+      startedAt: 'a',
+      heartbeatAt: new Date(t0).toISOString(),
+    });
+    // The heartbeat only ticks every 5 minutes, so the window has to be a
+    // multiple of that: 14 minutes of silence is still a live instance.
+    const fresh = await writeInstanceFile(
+      dir,
+      {
+        hostname: 'desktop',
+        startedAt: 'b',
+        heartbeatAt: new Date(t0 + 14 * 60_000).toISOString(),
+      },
+      () => t0 + 14 * 60_000,
+    );
+    expect(fresh.otherHost).toBe('laptop');
+    const stale = await writeInstanceFile(
+      dir,
+      { hostname: 'laptop', startedAt: 'c', heartbeatAt: new Date(t0 + 30 * 60_000).toISOString() },
+      () => t0 + 30 * 60_000,
+    );
+    expect(stale.otherHost).toBeNull(); // desktop went quiet 16 minutes ago
   });
 
   it('treats a corrupt existing file as absent', async () => {

@@ -3,10 +3,10 @@ import type { OAuthMetadata } from '@modelcontextprotocol/server';
 export const SCOPE = 'vault';
 
 /**
- * Joins a path onto `publicUrl` without dropping a path prefix.
- * `new URL('/oauth/x', publicUrl)` treats the leading `/` as absolute and
- * discards any prefix `publicUrl` carries (e.g. `https://example.com/brain`);
- * this instead concatenates onto the URL's own href.
+ * Appends an endpoint path to `publicUrl`'s href, collapsing the trailing
+ * slash `URL` always carries on a bare origin (`https://example.com/` +
+ * `/oauth/token`). `loadConfig` rejects a `PUBLIC_URL` with a path, so this
+ * is plain concatenation, not prefix preservation.
  */
 export function join(publicUrl: URL, path: string): string {
   return `${publicUrl.href.replace(/\/$/, '')}${path}`;

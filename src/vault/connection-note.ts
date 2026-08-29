@@ -15,7 +15,13 @@ export interface InstanceInfo {
   heartbeatAt: string;
 }
 
-const OTHER_HOST_STALE_MS = 5 * 60_000;
+/**
+ * How long another host's last heartbeat stays believable. Three missed
+ * heartbeats (`HEARTBEAT_INTERVAL_MS` in `src/main.ts` is 5 min) — long enough
+ * that a slow sync or a paused laptop isn't declared dead, short enough that a
+ * genuinely stopped instance stops shadowing the warning.
+ */
+const OTHER_HOST_STALE_MS = 15 * 60_000;
 
 /**
  * Atomic tmp-write + rename, same pattern as `src/auth/store/file-store.ts`'s

@@ -1,5 +1,6 @@
+import { OAuthError } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
-import { createTokenVerifier } from '../../src/auth/rs/verifier.ts';
+import { createTokenVerifier, LAST_USED_WRITE_INTERVAL_MS } from '../../src/auth/rs/verifier.ts';
 import type { TokenRecord, TokenStore } from '../../src/auth/store/types.ts';
 import { createLogger } from '../../src/logger.ts';
 
@@ -70,6 +71,57 @@ describe('createTokenVerifier', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error) }),
       'lastUsedAt write failed',
+    );
+  });
+
+  it('writes lastUsedAt at most once per interval, not on every request', async () => {
+    // The state file lives in a synced vault, so a write per /mcp call is a
+    // sync event per call.
+    const rec = tok({ expiresAt: 9_000_000_000 });
+    let writes = 0;
+    const store = {
+      getToken: async () => rec,
+      updateToken: async (_hash: string, patch: Partial<TokenRecord>) => {
+        writes++;
+        Object.assign(rec, patch);
+      },
+    } as unknown as TokenStore;
+    let t = 1_000_000;
+    const verifier = createTokenVerifier(store, MCP_URL, () => t);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    await verifier.verifyAccessToken('x');
+    await settle();
+    expect(writes).toBe(1); // first use: lastUsedAt was absent
+
+    t += 60_000;
+    await verifier.verifyAccessToken('x');
+    await settle();
+    expect(writes).toBe(1); // within the interval: no write
+
+    t += LAST_USED_WRITE_INTERVAL_MS;
+    await verifier.verifyAccessToken('x');
+    await settle();
+    expect(writes).toBe(2);
+  });
+
+  it('turns an unavailable store into a server_error, logged, not a bare 500', async () => {
+    const logger = createLogger('fatal');
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger);
+    const store = {
+      getToken: async () => {
+        throw new Error('state file vanished');
+      },
+      updateToken: async () => {},
+    } as unknown as TokenStore;
+    const verifier = createTokenVerifier(store, MCP_URL, () => Date.now(), logger);
+
+    const rejection = await verifier.verifyAccessToken('x').catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(OAuthError);
+    expect((rejection as OAuthError).code).toBe('server_error');
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'token store unavailable',
     );
   });
 

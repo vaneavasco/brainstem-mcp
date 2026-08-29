@@ -14,9 +14,23 @@ describe('loadConfig', () => {
     expect(cfg.legacyMode).toBe('stateless');
   });
 
-  it('strips a trailing slash and preserves a path prefix in mcpUrl', () => {
-    const cfg = loadConfig(baseEnv({ PUBLIC_URL: 'https://example.com/brain/' }));
-    expect(cfg.mcpUrl.href).toBe('https://example.com/brain/mcp');
+  it('rejects a PUBLIC_URL carrying a path prefix, and keeps a bare origin usable', () => {
+    // A path prefix only half-worked (the tunnel/compose wiring, the CIMD
+    // redirect checks and the PRM URL all assume a bare origin), so it is a
+    // configuration error rather than a silent half-feature.
+    let error: unknown;
+    try {
+      loadConfig(baseEnv({ PUBLIC_URL: 'https://example.com/brain/' }));
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(ConfigError);
+    expect((error as ConfigError).invalid).toEqual(['PUBLIC_URL']);
+    expect((error as ConfigError).message).toContain('bare origin');
+
+    const cfg = loadConfig(baseEnv({ PUBLIC_URL: 'https://example.com/' }));
+    expect(cfg.publicUrl.href).toBe('https://example.com/');
+    expect(cfg.mcpUrl.href).toBe('https://example.com/mcp');
   });
 
   it('fails closed when PUBLIC_URL is missing and names the variable without leaking values', () => {
