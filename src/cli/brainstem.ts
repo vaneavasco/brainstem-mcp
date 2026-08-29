@@ -116,6 +116,9 @@ function localPortOf(env: Map<string, string>): number {
 
 function stateFileOf(env: Map<string, string>): string {
   const vaultPath = env.get('VAULT_PATH') ?? '';
+  if (vaultPath === '') {
+    throw new Error('VAULT_PATH is missing from .env — run npm run setup');
+  }
   return path.join(vaultPath, RESERVED_DIR, 'state.json');
 }
 

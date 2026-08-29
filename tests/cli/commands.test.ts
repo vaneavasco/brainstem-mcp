@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FileTokenStore } from '../../src/auth/store/file-store.ts';
 import { runDown } from '../../src/cli/commands/down.ts';
 import { runLogs } from '../../src/cli/commands/logs.ts';
@@ -271,8 +271,17 @@ describe('runLogs', () => {
 });
 
 describe('runRevokeAll', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it('empties tokens and --reset deletes the file', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
     const file = path.join(dir, 'state.json');
     const store = await FileTokenStore.open(file);
     await store.putToken('h', {
@@ -298,7 +307,6 @@ describe('runRevokeAll', () => {
   });
 
   it('does nothing when the user declines to confirm', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
     const file = path.join(dir, 'state.json');
     const lines: string[] = [];
     const code = await runRevokeAll(
@@ -311,7 +319,6 @@ describe('runRevokeAll', () => {
   });
 
   it('--reset ignores a missing state file', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
     const file = path.join(dir, 'never-created.json');
     const code = await runRevokeAll(
       { reset: true },
@@ -322,6 +329,16 @@ describe('runRevokeAll', () => {
 });
 
 describe('secret show/rotate', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it('prints OWNER_SECRET when set', () => {
     const lines: string[] = [];
     const code = runSecretShow({
@@ -344,7 +361,6 @@ describe('secret show/rotate', () => {
   });
 
   it('rotates OWNER_SECRET in .env and offers to revoke all tokens', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
     const envPath = path.join(dir, '.env');
     const stateFile = path.join(dir, 'state.json');
     const files = new Map<string, string>([[envPath, 'OWNER_SECRET=old-secret\n']]);
