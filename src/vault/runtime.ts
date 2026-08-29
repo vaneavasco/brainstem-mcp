@@ -30,6 +30,7 @@ export interface LocalRuntimeOptions {
   vaultPath: string;
   settings?: { dailyNotes?: Partial<DailyNoteSettings>; requiredFrontmatter?: string[] };
   ripgrepPath?: string | null;
+  watchPollMs?: number | null;
   now?: () => Date;
 }
 
@@ -41,7 +42,10 @@ export function mergeSettings(overrides: LocalRuntimeOptions['settings']): Vault
 }
 
 export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<VaultRuntime> {
-  const adapter = await LocalFSAdapter.create(opts.vaultPath, { ripgrepPath: opts.ripgrepPath });
+  const adapter = await LocalFSAdapter.create(opts.vaultPath, {
+    ripgrepPath: opts.ripgrepPath,
+    watchPollMs: opts.watchPollMs ?? null,
+  });
   const index = await FrontmatterIndex.build(adapter);
   const detach: Unsubscribe = index.attach(adapter);
   return {

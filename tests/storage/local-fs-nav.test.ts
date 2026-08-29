@@ -295,4 +295,16 @@ describe('watch', () => {
     expect(types[0]).toBe('create');
     expect(types.at(-1)).toBe('delete');
   });
+
+  it('watch() honours watchPollMs by using chokidar polling', async () => {
+    const polled = await LocalFSAdapter.create(root, { ripgrepPath: null, watchPollMs: 300 });
+    const seen: string[] = [];
+    const stop = polled.watch((ev) => seen.push(ev.path));
+    await new Promise((r) => setTimeout(r, 400));
+    await fs.writeFile(path.join(root, 'polled.md'), '# p');
+    await new Promise((r) => setTimeout(r, 1200));
+    stop();
+    expect(seen).toContain('polled.md');
+    expect(polled.capabilities().watch).toBe(true);
+  });
 });

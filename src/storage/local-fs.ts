@@ -53,6 +53,7 @@ const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
 
 export interface LocalFSOptions {
   ripgrepPath?: string | null;
+  watchPollMs?: number | null;
 }
 
 async function detectRipgrep(): Promise<string | null> {
@@ -103,17 +104,19 @@ export class LocalFSAdapter implements StorageAdapter {
 
   readonly root: string;
   private readonly rg: string | null;
+  private readonly watchPollMs: number | null;
 
-  private constructor(root: string, rg: string | null) {
+  private constructor(root: string, rg: string | null, watchPollMs: number | null) {
     this.root = root;
     this.rg = rg;
+    this.watchPollMs = watchPollMs;
   }
 
   static async create(rootDir: string, opts: LocalFSOptions = {}): Promise<LocalFSAdapter> {
     await fs.mkdir(rootDir, { recursive: true });
     const root = await fs.realpath(rootDir);
     const rg = opts.ripgrepPath === undefined ? await detectRipgrep() : opts.ripgrepPath;
-    return new LocalFSAdapter(root, rg);
+    return new LocalFSAdapter(root, rg, opts.watchPollMs ?? null);
   }
 
   capabilities(): Caps {
@@ -581,6 +584,7 @@ export class LocalFSAdapter implements StorageAdapter {
         return path.relative(this.root, absPath).split(path.sep)[0] === RESERVED_DIR;
       },
       awaitWriteFinish: false,
+      ...(this.watchPollMs ? { usePolling: true, interval: this.watchPollMs } : {}),
     });
     watcher.on('add', (abs) => onChange({ type: 'create', path: this.rel(abs) }));
     watcher.on('change', (abs) => onChange({ type: 'update', path: this.rel(abs) }));

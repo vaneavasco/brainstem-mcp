@@ -24,6 +24,7 @@ async function main(): Promise<void> {
   const runtime = await createLocalRuntime({
     vaultPath: config.storage.vaultPath,
     settings: config.vaultSettings,
+    watchPollMs: config.watchPollMs,
   });
   logger.info(
     { vaultPath: config.storage.vaultPath, indexed: runtime.index.size() },
