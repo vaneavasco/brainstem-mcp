@@ -55,7 +55,14 @@ describe('GET /health', () => {
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toMatchObject({ status: 'ok', name: 'brainstem-mcp' });
+    expect(body).toMatchObject({
+      status: 'ok',
+      name: 'brainstem-mcp',
+      publicUrl: 'https://brainstem.example.com/',
+      mcpUrl: 'https://brainstem.example.com/mcp',
+      tunnelMode: 'none',
+      vault: { notes: 0 },
+    });
     expect(typeof body.version).toBe('string');
   });
 });

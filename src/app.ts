@@ -45,11 +45,16 @@ function errorShape(type: string | undefined): { code: number; message: string }
   }
 }
 
+export interface AppExtras {
+  notes?: () => number;
+}
+
 export function createApp(
   config: Config,
   logger: Logger,
   resolveRuntime: RuntimeResolver,
   auth: AuthDeps,
+  extras: AppExtras = {},
 ): AppBundle {
   const handler = createMcpHandler((ctx) => createVaultServer(ctx, { resolveRuntime, logger }), {
     legacy: config.legacyMode,
@@ -70,7 +75,15 @@ export function createApp(
   mountAuth(app, config, logger, auth);
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', name: SERVER_INFO.name, version: SERVER_INFO.version });
+    res.json({
+      status: 'ok',
+      name: SERVER_INFO.name,
+      version: SERVER_INFO.version,
+      publicUrl: config.publicUrl.href,
+      mcpUrl: config.mcpUrl.href,
+      tunnelMode: config.tunnelMode,
+      vault: { notes: extras.notes?.() ?? 0 },
+    });
   });
 
   const node = toNodeHandler(handler);
