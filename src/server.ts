@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createApp } from './app.ts';
+import type { AuthDeps } from './auth/mount.ts';
 import type { Config } from './config.ts';
 import type { Logger } from './logger.ts';
 import type { RuntimeResolver } from './vault/runtime.ts';
@@ -13,11 +14,12 @@ export async function startServer(
   config: Config,
   logger: Logger,
   resolveRuntime: RuntimeResolver,
+  auth: AuthDeps,
   listenPort: number = config.port,
   opts: { drainMs?: number } = {},
 ): Promise<RunningServer> {
   const drainMs = opts.drainMs ?? 7_000;
-  const { app, handler } = createApp(config, logger, resolveRuntime);
+  const { app, handler } = createApp(config, logger, resolveRuntime, auth);
   const httpServer = http.createServer(app);
 
   // Heroku router keeps idle connections for 90 s; a shorter dyno-side timeout causes H13/H18.

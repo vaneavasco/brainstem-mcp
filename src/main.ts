@@ -1,3 +1,7 @@
+import path from 'node:path';
+import { createAuth } from './auth/mount.ts';
+import { FileTokenStore } from './auth/store/file-store.ts';
+import { StoreCorruptError } from './auth/store/types.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './logger.ts';
 import { startServer } from './server.ts';
@@ -30,7 +34,22 @@ async function main(): Promise<void> {
     { vaultPath: config.storage.vaultPath, indexed: runtime.index.size() },
     'vault runtime ready',
   );
-  const running = await startServer(config, logger, async () => runtime);
+  const stateFile = path.join(
+    config.stateDir ?? path.join(config.storage.vaultPath, '_brainstem'),
+    'state.json',
+  );
+  let store: FileTokenStore;
+  try {
+    store = await FileTokenStore.open(stateFile);
+  } catch (error) {
+    if (error instanceof StoreCorruptError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+  const auth = createAuth(config, logger, store);
+  const running = await startServer(config, logger, async () => runtime, auth);
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {

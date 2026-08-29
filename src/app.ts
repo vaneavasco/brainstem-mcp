@@ -2,6 +2,8 @@ import { createMcpExpressApp } from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type McpHttpHandler } from '@modelcontextprotocol/server';
 import type { Express, NextFunction, Request, Response } from 'express';
+import type { AuthDeps } from './auth/mount.ts';
+import { bearerGate, createRateLimiter, mountAuth } from './auth/mount.ts';
 import type { Config } from './config.ts';
 import type { Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
@@ -47,6 +49,7 @@ export function createApp(
   config: Config,
   logger: Logger,
   resolveRuntime: RuntimeResolver,
+  auth: AuthDeps,
 ): AppBundle {
   const handler = createMcpHandler((ctx) => createVaultServer(ctx, { resolveRuntime, logger }), {
     legacy: config.legacyMode,
@@ -64,15 +67,22 @@ export function createApp(
   app.set('trust proxy', 1); // Heroku router: only for req.secure, never for URL building
   app.disable('x-powered-by');
 
+  mountAuth(app, config, logger, auth);
+
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', name: SERVER_INFO.name, version: SERVER_INFO.version });
   });
 
   const node = toNodeHandler(handler);
-  app.all('/mcp', (req, res) => {
-    res.setHeader('X-Accel-Buffering', 'no');
-    void node(req, res, req.body);
-  });
+  app.all(
+    '/mcp',
+    createRateLimiter({ capacity: 60, refillPerSec: 60, now: auth.now }),
+    bearerGate(config, auth),
+    (req, res) => {
+      res.setHeader('X-Accel-Buffering', 'no');
+      void node(req, res, req.body);
+    },
+  );
 
   // Catch-all for unknown routes: keep every response on this server JSON-RPC shaped,
   // never Express's default HTML "Cannot GET /" page.

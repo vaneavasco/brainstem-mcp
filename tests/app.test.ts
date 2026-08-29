@@ -10,6 +10,7 @@ import { createApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
 import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
+import { createTestAuth } from './helpers/auth.ts';
 import { baseEnv } from './helpers/env.ts';
 
 const config = loadConfig(baseEnv());
@@ -20,11 +21,19 @@ let baseUrl: string;
 let port: number;
 let runtime: VaultRuntime;
 let vaultRoot: string;
+let token: string;
+// Shared across the whole file (including the "legacy mode reject" describe
+// below): a second FileTokenStore instance pointed at the same state file
+// would write to it concurrently and uncoordinated, racing the atomic
+// tmp-file rename (see file-store.ts) — reuse this one store instead.
+let auth: Awaited<ReturnType<typeof createTestAuth>>;
 
 beforeAll(async () => {
   vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-app-'));
   runtime = await createLocalRuntime({ vaultPath: vaultRoot, ripgrepPath: null });
-  const { app } = createApp(config, logger, async () => runtime);
+  auth = await createTestAuth(config, vaultRoot);
+  token = await auth.issueAccessToken();
+  const { app } = createApp(config, logger, async () => runtime, auth.auth);
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -35,7 +44,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
   await runtime.close();
-  await fs.rm(vaultRoot, { recursive: true, force: true });
+  // Bearer verification stamps lastUsedAt fire-and-forget (verifier.ts), so a
+  // background write to _brainstem/state.json can still be in flight here;
+  // retry on ENOTEMPTY instead of racing it.
+  await fs.rm(vaultRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 describe('GET /health', () => {
@@ -54,7 +66,11 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
       { name: 'test-modern', version: '0.0.0' },
       { versionNegotiation: { mode: 'auto' } },
     );
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+        authProvider: { token: async () => token },
+      }),
+    );
     try {
       const { tools } = await client.listTools();
       const ping = tools.find((t) => t.name === 'brainstem_ping');
@@ -76,6 +92,7 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': '2026-07-28',
         'mcp-method': 'tools/list',
+        authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -104,6 +121,7 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': '2026-07-28',
         'mcp-method': 'prompts/list',
+        authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -127,7 +145,11 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
 describe('/mcp with a 2025-era (legacy) client', () => {
   it('completes the initialize handshake statelessly and calls the tool', async () => {
     const client = new Client({ name: 'test-legacy', version: '0.0.0' });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+        authProvider: { token: async () => token },
+      }),
+    );
     try {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toContain('brainstem_ping');
@@ -139,11 +161,13 @@ describe('/mcp with a 2025-era (legacy) client', () => {
     }
   });
 
-  it('answers legacy GET (standalone SSE) and DELETE with 405', async () => {
+  it('answers legacy GET (standalone SSE) and DELETE with 401 when there is no token', async () => {
+    // Bearer auth now gates every method on /mcp, so an unauthenticated legacy
+    // probe never reaches the transport's own standalone-SSE/DELETE handling.
     const get = await fetch(`${baseUrl}/mcp`, { headers: { accept: 'text/event-stream' } });
-    expect(get.status).toBe(405);
+    expect(get.status).toBe(401);
     const del = await fetch(`${baseUrl}/mcp`, { method: 'DELETE' });
-    expect(del.status).toBe(405);
+    expect(del.status).toBe(401);
   });
 });
 
@@ -221,9 +245,14 @@ describe('legacy mode reject', () => {
 
   let rejectServer: Server;
   let rejectBaseUrl: string;
+  let rejectToken: string;
 
   beforeAll(async () => {
-    const { app } = createApp(rejectConfig, logger, async () => runtime);
+    // Reuse the outer `auth` (same store instance, same underlying state
+    // file) rather than opening a second FileTokenStore against it — see the
+    // comment on the module-level `auth` declaration above.
+    rejectToken = await auth.issueAccessToken();
+    const { app } = createApp(rejectConfig, logger, async () => runtime, auth.auth);
     rejectServer = await new Promise<Server>((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
@@ -242,7 +271,11 @@ describe('legacy mode reject', () => {
       { name: 'test-modern-reject', version: '0.0.0' },
       { versionNegotiation: { mode: 'auto' } },
     );
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${rejectBaseUrl}/mcp`)));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${rejectBaseUrl}/mcp`), {
+        authProvider: { token: async () => rejectToken },
+      }),
+    );
     try {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toContain('brainstem_ping');
@@ -253,7 +286,9 @@ describe('legacy mode reject', () => {
 
   it('rejects a legacy (default) client', async () => {
     const client = new Client({ name: 'test-legacy-reject', version: '0.0.0' });
-    const transport = new StreamableHTTPClientTransport(new URL(`${rejectBaseUrl}/mcp`));
+    const transport = new StreamableHTTPClientTransport(new URL(`${rejectBaseUrl}/mcp`), {
+      authProvider: { token: async () => rejectToken },
+    });
     await expect(client.connect(transport)).rejects.toThrow();
   });
 });

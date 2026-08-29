@@ -6,18 +6,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AuthDeps } from '../src/auth/mount.ts';
 import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
 import { startServer } from '../src/server.ts';
 import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
+import { createTestAuth } from './helpers/auth.ts';
 import { baseEnv } from './helpers/env.ts';
 
 let runtime: VaultRuntime;
 let vaultRoot: string;
+let auth: AuthDeps;
 
 beforeEach(async () => {
   vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-server-'));
   runtime = await createLocalRuntime({ vaultPath: vaultRoot, ripgrepPath: null });
+  const config = loadConfig(baseEnv());
+  ({ auth } = await createTestAuth(config, vaultRoot));
 });
 
 afterEach(async () => {
@@ -28,7 +33,7 @@ afterEach(async () => {
 describe('startServer', () => {
   it('listens with Heroku-compatible keep-alive settings and closes cleanly', async () => {
     const config = loadConfig(baseEnv());
-    const running = await startServer(config, createLogger('fatal'), async () => runtime, 0);
+    const running = await startServer(config, createLogger('fatal'), async () => runtime, auth, 0);
     try {
       const { port } = running.httpServer.address() as AddressInfo;
       expect(port).toBeGreaterThan(0);
@@ -45,7 +50,7 @@ describe('startServer', () => {
 
   it('closes promptly even when an idle keep-alive connection is open', async () => {
     const config = loadConfig(baseEnv());
-    const running = await startServer(config, createLogger('fatal'), async () => runtime, 0);
+    const running = await startServer(config, createLogger('fatal'), async () => runtime, auth, 0);
     const { port } = running.httpServer.address() as AddressInfo;
     const agent = new http.Agent({ keepAlive: true });
     await new Promise<void>((resolve, reject) => {
@@ -67,7 +72,7 @@ describe('startServer', () => {
 
   it('aborts a still-open exchange after the drain window', async () => {
     const config = loadConfig(baseEnv());
-    const running = await startServer(config, createLogger('fatal'), async () => runtime, 0, {
+    const running = await startServer(config, createLogger('fatal'), async () => runtime, auth, 0, {
       drainMs: 300,
     });
     const { port } = running.httpServer.address() as AddressInfo;
