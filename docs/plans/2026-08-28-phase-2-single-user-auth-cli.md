@@ -2232,7 +2232,7 @@ export interface UpDeps { compose: ComposeRunner; env: Map<string, string>; prin
 export async function runUp(args: { build?: boolean }, deps: UpDeps): Promise<number>;   // exit code
 export function upSummary(h: HealthInfo, opts: { secretHint: string }): string[];        // the printed lines
 // revoke-all.ts
-export async function runRevokeAll(args: { reset?: boolean }, deps: { stateFile: string; print(l: string): void; confirm(q: string): Promise<boolean> }): Promise<number>; // uses FileTokenStore.open + revokeAll; --reset unlinks the file
+export async function runRevokeAll(args: { reset?: boolean }, deps: { stateFile: string; print(l: string): void; confirm(q: string): Promise<boolean> }): Promise<number>; // uses FileTokenStore.open + revokeAll; --reset writes the empty document back (writeEmptyStateFile) so a running app reloads it
 ```
 `runUp`: `available()` false ⇒ print "Docker is not running or not installed" ⇒ 1; `compose.run(['--profile','tunnel','up','-d', ...(build ? ['--build'] : [])])` when `TUNNEL_MODE !== 'none'` else without the profile; `waitForHealth('http://localhost:<port>/health', 120_000)`; null ⇒ print last 20 lines of `compose logs --tail 20 tunnel app` ⇒ 1; else print `upSummary`: connector URL, `claude mcp add …`, secret hint (`npm run brainstem -- secret show`), quick-mode warning + pointer to `_brainstem/connection.md`, cloudflare-mode note "URL is stable". `runUrl`: health on localhost; then `GET <publicUrl>/health` through the tunnel; print both; exit 1 on failure. `runStatus`: `.env` summary (vault path exists/writable via `validateVaultPath`, tunnel mode), health, `compose ps --format json` parsed to `name/state`. `down`: `compose --profile tunnel down`. `logs [service]`: `compose logs -f [service]`. `secret show|rotate`: read/rotate `OWNER_SECRET` via `upsertEnv` (rotate asks to also revoke).
 
@@ -2264,7 +2264,7 @@ it('up reports a health timeout with the last log lines', async () => {
   expect(compose.calls).toContainEqual(['logs', '--tail', '20', 'tunnel', 'app']);
   expect(lines.join('\n')).toMatch(/did not become healthy/);
 });
-it('revoke-all empties tokens and --reset deletes the file', async () => {
+it('revoke-all empties tokens and --reset writes back an empty state file', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cli-'));
   const file = path.join(dir, 'state.json');
   const store = await FileTokenStore.open(file);

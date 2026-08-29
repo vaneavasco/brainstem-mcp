@@ -236,7 +236,10 @@ export function buildProgram(repoDir: string): Command {
   program
     .command('revoke-all')
     .description('Revoke all OAuth tokens — every connected client must reconnect')
-    .option('--reset', 'delete the auth state file instead of revoking in place')
+    .option(
+      '--reset',
+      'reset the auth state file (also clears clients/pending) instead of revoking in place',
+    )
     .option('--yes', 'skip the confirmation prompt')
     .action(async (opts: { reset?: boolean; yes?: boolean }) => {
       await runAction(async () => {

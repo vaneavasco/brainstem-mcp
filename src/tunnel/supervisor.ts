@@ -68,6 +68,21 @@ async function writeUrlFileAtomic(filePath: string, url: string): Promise<void> 
   await fs.rename(tmp, filePath);
 }
 
+/**
+ * Removes a stale quick-tunnel URL file. Every `cloudflared` start hands out a
+ * brand-new `*.trycloudflare.com` hostname, so the file on disk is wrong the
+ * moment we (re)spawn the child: clearing it first makes the app wait for the
+ * new URL instead of booting on the previous one (and then restarting itself
+ * seconds later when the real URL lands). A missing file is the normal case.
+ */
+export async function clearUrlFile(filePath: string): Promise<void> {
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+}
+
 /** Resolves once `signal` fires (or immediately if it already has). */
 function whenAborted(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -95,6 +110,17 @@ export async function runSupervisor(o: SupervisorOptions, signal: AbortSignal): 
   let lastUrl: string | null = null;
 
   while (!signal.aborted) {
+    if (o.mode === 'quick') {
+      // Before *every* spawn, not just the first: a restart rotates the URL too.
+      try {
+        await clearUrlFile(urlFile);
+      } catch (err: unknown) {
+        o.log(
+          `failed to remove stale public URL file: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      lastUrl = null;
+    }
     const args = cloudflaredArgs(o);
     const child = o.spawn('cloudflared', args);
     const spawnedAt = Date.now();

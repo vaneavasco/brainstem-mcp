@@ -81,6 +81,14 @@ type Doc = z.infer<typeof Doc>;
 
 const EMPTY: Doc = { version: 1, clients: {}, pending: {}, codes: {}, tokens: {} };
 
+/**
+ * Cap on live pending authorizations. Unauthenticated `/oauth/authorize` hits
+ * create one row each, so without a cap a bored scanner grows the file the
+ * vault has to sync. 16 is far above any real interleaving of consent flows
+ * (one human, one browser) and far below anything that matters on disk.
+ */
+const MAX_PENDING = 16;
+
 interface Stamp {
   mtimeMs: number;
   size: number;
@@ -128,8 +136,24 @@ export class FileTokenStore implements TokenStore {
   }
 
   private async reloadIfChanged(): Promise<void> {
-    const st = await fs.stat(this.filePath).catch(() => null);
-    if (!st) return;
+    let st: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      st = await fs.stat(this.filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // The file is gone (`revoke-all --reset` on an older build, a sync
+        // client, a manual `rm`). Drop the in-memory document instead of
+        // treating "can't stat" as "unchanged": otherwise the next write —
+        // a `lastUsedAt` bump is enough — recreates the file with every
+        // token the removal was meant to destroy. Silent by design: the
+        // owner asked for this, and getToken() is on the hot path.
+        this.doc = structuredClone(EMPTY);
+        this.stamp = { mtimeMs: 0, size: -1 };
+      }
+      // Any other stat failure (EACCES, EIO) is transient as far as we know —
+      // keep serving what we have rather than throwing away live tokens.
+      return;
+    }
     if (st.mtimeMs !== this.stamp.mtimeMs || st.size !== this.stamp.size) {
       this.doc = parseDoc(this.filePath, await fs.readFile(this.filePath, 'utf8'));
       this.stamp = { mtimeMs: st.mtimeMs, size: st.size };
@@ -173,6 +197,13 @@ export class FileTokenStore implements TokenStore {
   putPending(rec: PendingRecord): Promise<void> {
     return this.mutate((doc) => {
       doc.pending[rec.id] = rec;
+      const ids = Object.keys(doc.pending);
+      if (ids.length <= MAX_PENDING) return;
+      // Every pending row is created with the same TTL, so ordering by
+      // `expiresAt` is ordering by creation time: the oldest requests — the
+      // ones a real consent flow has long since abandoned — go first.
+      ids.sort((a, b) => (doc.pending[a]?.expiresAt ?? 0) - (doc.pending[b]?.expiresAt ?? 0));
+      for (const id of ids.slice(0, ids.length - MAX_PENDING)) delete doc.pending[id];
     });
   }
 
@@ -271,6 +302,19 @@ export class FileTokenStore implements TokenStore {
 }
 
 export { StoreCorruptError };
+
+/**
+ * Atomically writes the empty v1 document to `filePath` (creating its parent
+ * directory), which is how `revoke-all --reset` clears the auth state and how
+ * a corrupt file is recovered. Deliberately a *write*, not an unlink: a
+ * running app only notices a change through the file's mtime/size, so a
+ * deleted file would leave its in-memory document — and every token in it —
+ * untouched.
+ */
+export async function writeEmptyStateFile(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await writeAtomic(filePath, EMPTY);
+}
 
 function parseDoc(filePath: string, text: string): Doc {
   let json: unknown;

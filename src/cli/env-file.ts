@@ -16,8 +16,12 @@ function stripQuotes(value: string): string {
   if (value.length >= 2) {
     const first = value[0];
     const last = value[value.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return value.slice(1, -1);
+    // Single quotes are literal: what's between them is the value, verbatim.
+    if (first === "'" && last === "'") return value.slice(1, -1);
+    // Double quotes carry escapes (this is the fallback `formatValue` uses for
+    // values containing an apostrophe): undo the two it emits, `\\` and `\"`.
+    if (first === '"' && last === '"') {
+      return value.slice(1, -1).replace(/\\([\\"])/g, '$1');
     }
   }
   return value;
@@ -39,9 +43,20 @@ export function parseEnv(text: string): Map<string, string> {
   return map;
 }
 
-/** Values containing a space or `#` need quoting so they round-trip through `parseEnv`. */
+/**
+ * Values containing a space or `#` need quoting so they round-trip through
+ * `parseEnv` — and through Compose, which reads this same file. Quote with
+ * SINGLE quotes: compose-go (and Node's `--env-file`) expand
+ * `\a \b \f \n \r \t \v \\ \" \$` inside double quotes, which would mangle a
+ * Windows vault path such as `C:\Users\vanea\Obsidian Vault`; inside single
+ * quotes every character is literal. A value that contains an apostrophe
+ * can't be single-quoted (neither parser supports an escape there), so it
+ * falls back to double quotes with `\` and `"` escaped.
+ */
 function formatValue(value: string): string {
-  return /[ #]/.test(value) ? `"${value}"` : value;
+  if (!/[ #]/.test(value)) return value;
+  if (!value.includes("'")) return `'${value}'`;
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /**

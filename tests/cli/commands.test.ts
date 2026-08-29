@@ -77,6 +77,47 @@ describe('runUp', () => {
     expect(lines.join('\n')).toMatch(/changes on every restart/);
   });
 
+  it('in quick mode only trusts a URL two consecutive health polls agree on', async () => {
+    const compose = new FakeCompose();
+    const lines: string[] = [];
+    const sleeps: number[] = [];
+    let call = 0;
+    // The first poll can still see the URL of the *previous* tunnel (the app
+    // boots, then restarts when the new URL lands): print the settled one.
+    const fetchImpl: typeof fetch = (async () => {
+      call++;
+      const url = call === 1 ? 'https://a.trycloudflare.com' : 'https://b.trycloudflare.com';
+      return new Response(
+        JSON.stringify({
+          status: 'ok',
+          publicUrl: url,
+          mcpUrl: `${url}/mcp`,
+          tunnelMode: 'quick',
+          vault: { notes: 0 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    const code = await runUp(
+      {},
+      {
+        compose,
+        env: new Map([['TUNNEL_MODE', 'quick']]),
+        print: (l) => lines.push(l),
+        fetchImpl,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        localPort: 3000,
+      },
+    );
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('https://b.trycloudflare.com/mcp');
+    expect(lines.join('\n')).not.toContain('https://a.trycloudflare.com');
+    expect(sleeps).toContain(3_000);
+  });
+
   it('without a tunnel skips the profile and does not warn about rotation', async () => {
     const compose = new FakeCompose();
     const lines: string[] = [];
@@ -281,7 +322,7 @@ describe('runRevokeAll', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it('empties tokens and --reset deletes the file', async () => {
+  it('empties tokens and --reset writes back an empty state file', async () => {
     const file = path.join(dir, 'state.json');
     const store = await FileTokenStore.open(file);
     await store.putToken('h', {
@@ -297,13 +338,24 @@ describe('runRevokeAll', () => {
       0,
     );
     expect((await (await FileTokenStore.open(file)).getToken('h'))?.revokedAt).toBeTypeOf('number');
+    const lines: string[] = [];
     expect(
       await runRevokeAll(
         { reset: true },
-        { stateFile: file, print() {}, confirm: async () => true },
+        { stateFile: file, print: (l) => lines.push(l), confirm: async () => true },
       ),
     ).toBe(0);
-    await expect(fs.access(file)).rejects.toBeDefined();
+    // The file must still exist and be the empty v1 document — a running app
+    // notices the new mtime and reloads it; an unlinked file would leave the
+    // app's in-memory copy (and every token in it) alive.
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({
+      version: 1,
+      clients: {},
+      pending: {},
+      codes: {},
+      tokens: {},
+    });
+    expect(lines).toContain('state file reset — all clients must reconnect');
   });
 
   it('does nothing when the user declines to confirm', async () => {
@@ -318,13 +370,14 @@ describe('runRevokeAll', () => {
     await expect(fs.access(file)).rejects.toBeDefined();
   });
 
-  it('--reset ignores a missing state file', async () => {
+  it('--reset creates the empty state file when none exists yet', async () => {
     const file = path.join(dir, 'never-created.json');
     const code = await runRevokeAll(
       { reset: true },
       { stateFile: file, print() {}, confirm: async () => true },
     );
     expect(code).toBe(0);
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toMatchObject({ version: 1, tokens: {} });
   });
 });
 

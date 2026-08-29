@@ -78,7 +78,7 @@ The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the 
 | `npm run status` | Show vault, tunnel, health and container status |
 | `npm run down` | Stop the stack (state stays in the vault) |
 | `npm run logs [-- <service>]` | Follow container logs (`app` or `tunnel`; omit for both) |
-| `npm run revoke-all [-- --reset --yes]` | Revoke every OAuth token, forcing all clients to reconnect (`--reset` deletes the state file instead) |
+| `npm run revoke-all [-- --reset --yes]` | Revoke every OAuth token, forcing all clients to reconnect (`--reset` resets the auth state file instead — also clears registered clients, and is the recovery for a corrupt file) |
 | `npm run brainstem -- secret show\|rotate` | Show, or generate a new, owner secret |
 
 ## Security model

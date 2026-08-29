@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -109,6 +109,48 @@ describe('runSupervisor', () => {
     at(children, 1).stderr.write('INF |  https://two.trycloudflare.com  |\n');
     await tick();
     expect((await fs.readFile(file, 'utf8')).trim()).toBe('https://two.trycloudflare.com');
+
+    ac.abort();
+    at(children, 1).exit(0);
+    await run;
+  });
+
+  it('removes a stale public-url file before every quick-mode spawn', async () => {
+    await fs.writeFile(file, 'https://stale.trycloudflare.com\n');
+    const children: FakeChild[] = [];
+    const existedAtSpawn: boolean[] = [];
+    const ac = new AbortController();
+    const run = runSupervisor(
+      {
+        mode: 'quick',
+        target: 'http://app:3000',
+        urlFile: file,
+        log: () => {},
+        sleep: async () => {},
+        spawn: () => {
+          existedAtSpawn.push(existsSync(file));
+          const c = new FakeChild();
+          children.push(c);
+          return c;
+        },
+      },
+      ac.signal,
+    );
+
+    await tick();
+    // The previous run's URL is gone before cloudflared starts, so the app
+    // waits for the new one instead of booting on a URL nothing serves.
+    expect(existedAtSpawn).toEqual([false]);
+
+    at(children, 0).stderr.write('INF |  https://one.trycloudflare.com  |\n');
+    await tick();
+    expect(existsSync(file)).toBe(true);
+
+    // A restart within the same supervisor also yields a brand-new hostname.
+    at(children, 0).exit(1);
+    await tick();
+    await tick();
+    expect(existedAtSpawn).toEqual([false, false]);
 
     ac.abort();
     at(children, 1).exit(0);

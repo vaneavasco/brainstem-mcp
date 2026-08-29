@@ -11,6 +11,10 @@ export interface UpDeps {
 }
 
 const HEALTH_TIMEOUT_MS = 120_000;
+/** Gap between the two health polls that must agree before we print a quick-tunnel URL. */
+const URL_SETTLE_DELAY_MS = 3_000;
+/** How many disagreeing pairs to tolerate before printing whatever we last saw. */
+const URL_SETTLE_ATTEMPTS = 10;
 
 /** The lines `runUp` prints once the app answers healthy. */
 export function upSummary(h: HealthInfo, opts: { secretHint: string }): string[] {
@@ -50,7 +54,7 @@ export async function runUp(args: { build?: boolean }, deps: UpDeps): Promise<nu
   ];
   await deps.compose.run(upArgs);
 
-  const health = await waitForHealth(
+  let health = await waitForHealth(
     `http://localhost:${deps.localPort}/health`,
     HEALTH_TIMEOUT_MS,
     deps.fetchImpl,
@@ -61,6 +65,31 @@ export async function runUp(args: { build?: boolean }, deps: UpDeps): Promise<nu
     deps.print(`app did not become healthy within ${HEALTH_TIMEOUT_MS / 1000} s`);
     await deps.compose.run(['logs', '--tail', '20', 'tunnel', 'app']);
     return 1;
+  }
+
+  // A quick tunnel gets a new hostname on every start, and the app restarts
+  // itself when it sees the new one — so the first healthy answer can still
+  // carry the previous run's URL. Print only a URL two polls a few seconds
+  // apart agree on, otherwise the owner pastes a dead connector URL into
+  // Claude while the app is already booting on a different one.
+  if (health.tunnelMode === 'quick') {
+    for (let i = 0; i < URL_SETTLE_ATTEMPTS; i++) {
+      await deps.sleep(URL_SETTLE_DELAY_MS);
+      const again = await waitForHealth(
+        `http://localhost:${deps.localPort}/health`,
+        HEALTH_TIMEOUT_MS,
+        deps.fetchImpl,
+        deps.sleep,
+      );
+      if (!again) {
+        deps.print(`app did not become healthy within ${HEALTH_TIMEOUT_MS / 1000} s`);
+        await deps.compose.run(['logs', '--tail', '20', 'tunnel', 'app']);
+        return 1;
+      }
+      const settled = again.publicUrl === health.publicUrl;
+      health = again;
+      if (settled) break;
+    }
   }
 
   for (const line of upSummary(health, {

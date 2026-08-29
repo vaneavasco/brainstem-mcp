@@ -41,9 +41,25 @@ describe('upsertEnv', () => {
     expect(r.kept).toEqual([]);
   });
 
-  it('quotes values that contain a space or a hash, leaves other values raw', () => {
-    const r = upsertEnv('A=\nB=\n', { A: 'has space', B: 'has#hash' });
-    expect(r.text).toBe('A="has space"\nB="has#hash"\n');
+  it('single-quotes values that contain a space or a hash, leaves other values raw', () => {
+    const r = upsertEnv('A=\nB=\nC=\n', { A: 'has space', B: 'has#hash', C: 'plain' });
+    expect(r.text).toBe("A='has space'\nB='has#hash'\nC=plain\n");
+  });
+
+  it('keeps a Windows vault path literal — single quotes, no backslash expansion', () => {
+    // compose-go (and Node's --env-file) expand \a \b \f \n \r \t \v \\ \" \$ inside
+    // DOUBLE quotes, which would mangle this path; inside single quotes every
+    // character is literal.
+    const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: 'C:\\Users\\vanea\\Obsidian Vault' });
+    expect(r.text).toBe("VAULT_PATH='C:\\Users\\vanea\\Obsidian Vault'\n");
+    expect(parseEnv(r.text).get('VAULT_PATH')).toBe('C:\\Users\\vanea\\Obsidian Vault');
+  });
+
+  it('falls back to escaped double quotes when the value itself contains an apostrophe', () => {
+    const value = "C:\\Users\\Vanea's PC\\Obsidian Vault";
+    const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: value });
+    expect(r.text).toBe('VAULT_PATH="C:\\\\Users\\\\Vanea\'s PC\\\\Obsidian Vault"\n');
+    expect(parseEnv(r.text).get('VAULT_PATH')).toBe(value);
   });
 
   it('round-trips a quoted value with a space through parseEnv', () => {

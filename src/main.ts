@@ -31,7 +31,17 @@ async function main(): Promise<void> {
   const bootLogger = createLogger('info');
 
   let env: Record<string, string | undefined> = process.env;
-  const publicUrlFile = env.PUBLIC_URL_FILE;
+  // Only a quick tunnel publishes its URL through a file: `cloudflare` mode's
+  // URL is fixed by the token and `none` has none at all, so in those modes a
+  // leftover `public-url` from an earlier quick run must never be read — it
+  // would silently override PUBLIC_URL with a dead hostname.
+  const publicUrlFile = env.TUNNEL_MODE === 'quick' ? env.PUBLIC_URL_FILE : undefined;
+  if (env.PUBLIC_URL_FILE && !publicUrlFile) {
+    bootLogger.warn(
+      { file: env.PUBLIC_URL_FILE, tunnelMode: env.TUNNEL_MODE ?? '(unset)' },
+      'PUBLIC_URL_FILE is only used when TUNNEL_MODE=quick — ignoring it',
+    );
+  }
   let currentPublicUrl: string | undefined;
   if (publicUrlFile) {
     bootLogger.info({ file: publicUrlFile }, 'waiting for tunnel public URL');

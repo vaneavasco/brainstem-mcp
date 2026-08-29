@@ -3,7 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomToken, sha256hex } from '../../src/auth/hash.ts';
-import { FileTokenStore, StoreCorruptError } from '../../src/auth/store/file-store.ts';
+import {
+  FileTokenStore,
+  StoreCorruptError,
+  writeEmptyStateFile,
+} from '../../src/auth/store/file-store.ts';
 import type { CodeRecord, TokenRecord } from '../../src/auth/store/types.ts';
 
 let dir: string;
@@ -104,6 +108,57 @@ describe('FileTokenStore', () => {
     expect(await b.getToken('x')).toBeDefined();
   });
 
+  it('drops its in-memory document when the file is reset or removed underneath it', async () => {
+    const a = await FileTokenStore.open(file);
+    const b = await FileTokenStore.open(file);
+    await a.putToken('x', tok());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await b.getToken('x')).toBeDefined();
+
+    // `revoke-all --reset` writes the empty document through the same
+    // tmp+rename path, so every live store reloads it on the next access.
+    await writeEmptyStateFile(file);
+    expect(await a.getToken('x')).toBeUndefined();
+    expect(await b.getToken('x')).toBeUndefined();
+
+    // A plain unlink (anyone's `rm`, an older CLI) must not be resurrectable
+    // either: the next write starts from an empty document, not from the
+    // tokens the removal was meant to destroy.
+    await a.putToken('y', tok());
+    await fs.unlink(file);
+    expect(await a.getToken('y')).toBeUndefined();
+    await a.putToken('z', tok());
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { tokens: Record<string, unknown> };
+    expect(Object.keys(raw.tokens)).toEqual(['z']);
+  });
+
+  it('caps live pending rows, evicting the oldest-expiring first', async () => {
+    const store = await FileTokenStore.open(file);
+    for (let i = 0; i < 20; i++) {
+      await store.putPending({
+        id: `p${i}`,
+        clientId: 'https://claude.ai/c',
+        clientName: 'Claude',
+        redirectUri: 'http://localhost/callback',
+        codeChallenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+        resource: 'https://b.example.com/mcp',
+        scope: 'vault',
+        state: 's',
+        nonce: 'n',
+        // All pending rows share one TTL, so a later creation always expires later.
+        expiresAt: 1_000 + i,
+        loopbackOnly: false,
+      });
+    }
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as {
+      pending: Record<string, unknown>;
+    };
+    expect(Object.keys(raw.pending)).toHaveLength(16);
+    expect(await store.getPending('p3')).toBeUndefined(); // oldest four evicted
+    expect(await store.getPending('p4')).toBeDefined();
+    expect(await store.getPending('p19')).toBeDefined();
+  });
+
   it('rolls back in-memory state when a write fails, and stays usable afterward', async () => {
     const store = await FileTokenStore.open(file);
     await store.putToken('good', tok());
@@ -114,7 +169,10 @@ describe('FileTokenStore', () => {
     await fs.mkdir(stateDir, { recursive: true }); // conditions recover
     await store.putToken('again', tok()); // the queue isn't wedged by the earlier failure
     const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { tokens: Record<string, unknown> };
-    expect(Object.keys(raw.tokens).sort()).toEqual(['again', 'good']);
+    // 'good' is gone with the file it lived in: a vanished state file resets the
+    // in-memory document (see the reset/remove test above), so only the write
+    // made after the directory came back survives.
+    expect(Object.keys(raw.tokens).sort()).toEqual(['again']);
   });
 
   it('refuses a corrupt or newer file with StoreCorruptError naming the path', async () => {
