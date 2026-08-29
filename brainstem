@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# brainstem — one-command launcher. All logic lives in src/cli/brainstem.ts; this only
+# makes sure node + docker exist and dependencies are installed, then delegates.
+set -euo pipefail
+
+# Resolve the directory this script lives in. `readlink -f` is GNU-only (no `-f` on
+# macOS/BSD), so we use `dirname` + `pwd -P` instead — portable, and it resolves any
+# `..`/symlinks in the *path leading to* this file. It does not chase the launcher
+# itself if that file is a symlink; that's an accepted edge case, not a supported setup.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "$SCRIPT_DIR"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js 24 is required. Install: https://nodejs.org/en/download (Linux: NodeSource setup_24.x; macOS: brew install node@24)" >&2
+  exit 1
+fi
+major="$(node -p 'process.versions.node.split(".")[0]')"
+if [ "$major" -lt 24 ]; then
+  echo "Node.js $major found; version 24 or newer is required." >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required. Install Docker Desktop (https://docs.docker.com/desktop/) or Docker Engine + Compose v2." >&2
+  exit 1
+fi
+if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+  echo "Installing dependencies…" >&2
+  npm ci --omit=dev --silent --no-audit --no-fund
+fi
+exec node src/cli/brainstem.ts "$@"
