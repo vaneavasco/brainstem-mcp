@@ -11,6 +11,7 @@ function deps(
   files: Map<string, string>,
   answers: { confirm: boolean[]; select: string[] },
   platform: NodeJS.Platform = 'linux',
+  printed: string[] = [],
 ): SetupDeps {
   return {
     cwd: CWD,
@@ -28,7 +29,9 @@ function deps(
       async select() {
         return (answers.select.shift() ?? 'quick') as never;
       },
-      print() {},
+      print(line) {
+        printed.push(line);
+      },
     },
     readFile: async (p) => files.get(p) ?? null,
     writeFile: async (p, t) => {
@@ -60,6 +63,8 @@ describe('runSetup', () => {
     expect(env.get('PUBLIC_URL')).toBe('');
     expect(env.get('HOST_UID')).toBe('1000');
     expect(env.get('VAULT_WATCH_POLL_MS')).toBe('');
+    // .env.example ships VAULT_TIMEZONE empty; a fresh run fills it from the host.
+    expect(env.get('VAULT_TIMEZONE')).toBe('Europe/Chisinau');
   });
 
   it('is idempotent and switches to cloudflare mode with a token', async () => {
@@ -79,6 +84,23 @@ describe('runSetup', () => {
     expect(env.get('TUNNEL_TOKEN')).toBe('tok');
     expect(env.get('PUBLIC_URL')).toBe('https://brain.example.com');
     expect(env.get('PUBLIC_URL_FILE')).toBe('');
+  });
+
+  it('never prints the tunnel token value, even with --show-secret', async () => {
+    const files = new Map<string, string>([[path.join(CWD, '.env.example'), EXAMPLE]]);
+    const token = 'super-secret-tunnel-token';
+    const printed: string[] = [];
+    await runSetup(
+      {
+        vault: '/home/u/Vault',
+        tunnelToken: token,
+        publicUrl: 'https://brain.example.com',
+        showSecret: true,
+      },
+      deps(files, { confirm: [], select: [] }, 'linux', printed),
+    );
+    expect(printed.some((line) => line.includes(token))).toBe(false);
+    expect(printed.some((line) => line.includes('TUNNEL_TOKEN=****'))).toBe(true);
   });
 
   it('enables polling on win32 and skips HOST_UID', async () => {

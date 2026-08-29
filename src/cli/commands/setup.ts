@@ -40,6 +40,7 @@ export interface SetupArgs {
 type TunnelMode = 'cloudflare' | 'quick' | 'none';
 
 const OWNER_SECRET_KEY = 'OWNER_SECRET';
+const TUNNEL_TOKEN_KEY = 'TUNNEL_TOKEN';
 
 /** `https://` only, no path/query/fragment (bare origin). */
 function isBarePublicUrl(value: string): boolean {
@@ -197,8 +198,12 @@ export async function runSetup(args: SetupArgs, deps: SetupDeps): Promise<void> 
 
   const finalEnv = parseEnv(afterTunnel.text);
   const describe = (key: string): string => {
+    const value = finalEnv.get(key) ?? '';
+    // TUNNEL_TOKEN is never printed, even with --show-secret: `--show-secret` only concerns
+    // OWNER_SECRET. An empty token isn't a secret, so it's shown as-is (nothing to hide).
+    if (key === TUNNEL_TOKEN_KEY) return value === '' ? `${key}=` : `${key}=****`;
     if (key === OWNER_SECRET_KEY && !args.showSecret) return key;
-    return `${key}=${finalEnv.get(key) ?? ''}`;
+    return `${key}=${value}`;
   };
   for (const key of [...afterMain.changed, ...afterTunnel.changed]) {
     deps.io.print(`set ${describe(key)}`);

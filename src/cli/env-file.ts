@@ -48,7 +48,9 @@ function formatValue(value: string): string {
  * Sets `values` into `text`, keeping comments/blank lines/order intact.
  * Existing keys are replaced (or, with `onlyIfEmpty`, only replaced when
  * their current value is empty); keys absent from `text` are appended at
- * the end. Line endings are always normalized to `\n`.
+ * the end, after a single `# added by setup` marker line (only emitted when
+ * at least one key is actually appended). Line endings are always
+ * normalized to `\n`.
  */
 export function upsertEnv(
   text: string,
@@ -79,9 +81,12 @@ export function upsertEnv(
     return `${key}=${formatValue(newValue)}`;
   });
 
-  for (const [key, value] of remaining) {
-    outLines.push(`${key}=${formatValue(value)}`);
-    changed.push(key);
+  if (remaining.size > 0) {
+    outLines.push('# added by setup');
+    for (const [key, value] of remaining) {
+      outLines.push(`${key}=${formatValue(value)}`);
+      changed.push(key);
+    }
   }
 
   return { text: `${outLines.join('\n')}\n`, changed, kept };

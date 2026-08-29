@@ -12,14 +12,26 @@ describe('parseEnv', () => {
 });
 
 describe('upsertEnv', () => {
-  it('keeps comments and order, fills only empty keys, appends missing ones', () => {
+  it('keeps comments and order, fills only empty keys, appends missing ones behind a marker', () => {
     const src = '# header\nA=1\nB=\n# tail\n';
     const r = upsertEnv(src, { A: 'x', B: 'y', C: 'z' }, { onlyIfEmpty: true });
-    expect(r.text).toBe('# header\nA=1\nB=y\n# tail\nC=z\n');
+    expect(r.text).toBe('# header\nA=1\nB=y\n# tail\n# added by setup\nC=z\n');
     expect(r.changed).toEqual(['B', 'C']);
     expect(r.kept).toEqual(['A']);
     expect(upsertEnv('A=1\r\n', { A: '2' }).text).toBe('A=2\n');
     expect(parseEnv('A="q v"\nB=\'s\'\n#C=1\n').get('A')).toBe('q v');
+  });
+
+  it('emits a single "# added by setup" marker before appended keys, once', () => {
+    const r = upsertEnv('A=1\n', { A: 'x', B: 'y' });
+    expect(r.text.endsWith('# added by setup\nB=y\n')).toBe(true);
+    expect(r.text).toBe('A=x\n# added by setup\nB=y\n');
+  });
+
+  it('does not emit the marker when nothing is appended', () => {
+    const r = upsertEnv('A=1\n', { A: 'x' });
+    expect(r.text).not.toContain('# added by setup');
+    expect(r.text).toBe('A=x\n');
   });
 
   it('overwrites non-empty values when onlyIfEmpty is not set (defaults to false)', () => {
