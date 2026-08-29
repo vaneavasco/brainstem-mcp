@@ -10,17 +10,17 @@ A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claud
 - Node.js 24.x
 - git
 
-## Install & run
+## Quick start
 
 ```bash
 git clone https://github.com/vaneavasco/brainstem-mcp.git
 cd brainstem-mcp
-npm install
-npm run setup
-npm run up
+./brainstem start
 ```
 
-`npm run setup` creates `.env` and asks two things: the path to your Obsidian vault folder, and whether you have a Cloudflare tunnel token (see *Stable URL* below — say no to get a quick tunnel instead). It generates the owner secret for you. `npm run up` builds the image, starts the stack, waits for it to become healthy, and prints your connector URL.
+Windows: `brainstem start`
+
+`start` checks your prerequisites and tells you exactly what to install if something is missing. On first run it asks for your Obsidian vault folder and whether you have a Cloudflare tunnel token (see *Stable URL* below — say no to get a quick tunnel instead). Then it starts the stack and prints your connector URL.
 
 ## Connect Claude
 
@@ -37,8 +37,38 @@ then run `/mcp` and authenticate.
 The owner secret lives in `.env`. Show it any time with:
 
 ```bash
-npm run brainstem -- secret show
+./brainstem secret show
 ```
+
+## Commands
+
+`./brainstem help <command>` prints the full options for any command below.
+
+### Everyday
+
+| Command | What it does | Example |
+|---|---|---|
+| `./brainstem start` | Check prerequisites, configure on first run, then start brainstem-mcp | `./brainstem start` |
+| `./brainstem up` | Start brainstem-mcp (docker compose up) and wait until it is healthy | `./brainstem up` |
+| `./brainstem down` | Stop brainstem-mcp | `./brainstem down` |
+| `./brainstem status` | Show configuration, health and container status | `./brainstem status` |
+| `./brainstem url` | Print the connector/public URL and check it is reachable | `./brainstem url` |
+| `./brainstem logs` | Follow container logs | `./brainstem logs` |
+
+### Configuration
+
+| Command | What it does | Example |
+|---|---|---|
+| `./brainstem setup` | Create or update `.env` (owner secret, vault path, tunnel mode) | `./brainstem setup --vault ~/Documents/Vault` |
+| `./brainstem secret` | Show or rotate the owner secret | `./brainstem secret show` |
+
+### Maintenance
+
+| Command | What it does | Example |
+|---|---|---|
+| `./brainstem update` | Pull the latest release, reinstall dependencies and restart | `./brainstem update` |
+| `./brainstem doctor` | Check prerequisites and configuration; explain how to fix any issues | `./brainstem doctor` |
+| `./brainstem revoke-all` | Revoke all OAuth tokens — every connected client must reconnect | `./brainstem revoke-all` |
 
 ## Stable URL (recommended)
 
@@ -48,8 +78,8 @@ A quick tunnel's URL changes every time the stack restarts (see below), so for a
 2. Add a **Public Hostname** on that tunnel pointing to `http://app:3000`.
 3. Run:
    ```bash
-   npm run setup -- --tunnel-token <token> --public-url https://<your-hostname>
-   npm run up
+   ./brainstem setup --tunnel-token <token> --public-url https://<your-hostname>
+   ./brainstem up
    ```
 
 The URL never changes again, and OAuth tokens survive restarts.
@@ -68,19 +98,6 @@ The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the 
 - **Syncthing / git / Dropbox:** nothing to configure; they sync everything already.
 - Run brainstem-mcp on **one machine at a time**. Two instances writing to the same synced vault concurrently is unsupported (the app logs a warning if it detects another live instance, but doesn't prevent it).
 
-## Commands
-
-| Command | What it does |
-|---|---|
-| `npm run setup [-- --vault <path> --tunnel-token <t> --public-url <u> --force --show-secret]` | Create or update `.env`: owner secret, vault path, tunnel mode |
-| `npm run up [-- --no-build]` | Start the stack and wait for it to become healthy; print the connector URL |
-| `npm run url` | Print the connector URL and check that it's reachable |
-| `npm run status` | Show vault, tunnel, health and container status |
-| `npm run down` | Stop the stack (state stays in the vault) |
-| `npm run logs [-- <service>]` | Follow container logs (`app` or `tunnel`; omit for both) |
-| `npm run revoke-all [-- --reset --yes]` | Revoke every OAuth token, forcing all clients to reconnect (`--reset` resets the auth state file instead — also clears registered clients, and is the recovery for a corrupt file) |
-| `npm run brainstem -- secret show\|rotate` | Show, or generate a new, owner secret |
-
 ## Security model
 
 - The owner secret gates the consent page for every new client; five wrong attempts lock it for 15 minutes.
@@ -92,7 +109,22 @@ The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the 
 ## Troubleshooting
 
 - **401 / "needs authentication" right after a restart, in quick-tunnel mode:** expected — the tunnel URL changed. Read `_brainstem/connection.md` in your vault for the new URL and reconnect the connector.
-- **"Docker is not running or not installed":** start Docker Desktop (or the Docker daemon on Linux) and rerun the command.
-- **Locked out of the consent page:** five wrong owner-secret attempts lock it for 15 minutes; check the correct value with `npm run brainstem -- secret show`.
-- **A client won't reconnect, or you rotated the secret:** `npm run revoke-all` forces every client to go through consent again.
-- **Something looks wrong in general:** `npm run logs` (or `npm run logs -- tunnel` / `npm run logs -- app`) to see what the containers are doing.
+- **"Docker is not running or not installed":** start Docker Desktop (or the Docker daemon on Linux) and rerun the command; `./brainstem doctor` explains exactly what's missing.
+- **Locked out of the consent page:** five wrong owner-secret attempts lock it for 15 minutes; check the correct value with `./brainstem secret show`.
+- **A client won't reconnect, or you rotated the secret:** `./brainstem revoke-all` forces every client to go through consent again.
+- **Something looks wrong in general:** `./brainstem logs` (or `./brainstem logs tunnel` / `./brainstem logs app`) to see what the containers are doing.
+
+## For developers
+
+The launcher (`./brainstem`, `brainstem.cmd`) is a thin wrapper: it checks Node/Docker, installs dependencies, then delegates to the TypeScript CLI.
+
+```bash
+npm install
+npm test
+npm run typecheck && npm run lint
+npm run dev                        # run the server directly, without Docker
+npm run brainstem -- <command>     # run the CLI without the launcher's checks
+npm run docker:smoke               # end-to-end smoke test against the Docker image
+```
+
+See `docs/` for the spec, ADRs and implementation plans.
