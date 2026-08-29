@@ -18,7 +18,15 @@
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f app",
-    "docker:smoke": "bash scripts/docker-smoke.sh"
+    "docker:smoke": "bash scripts/docker-smoke.sh",
+    "brainstem": "node src/cli/brainstem.ts",
+    "setup": "node src/cli/brainstem.ts setup",
+    "up": "node src/cli/brainstem.ts up",
+    "url": "node src/cli/brainstem.ts url",
+    "status": "node src/cli/brainstem.ts status",
+    "down": "node src/cli/brainstem.ts down",
+    "logs": "node src/cli/brainstem.ts logs",
+    "revoke-all": "node src/cli/brainstem.ts revoke-all"
   },
   "repository": {
     "type": "git",
@@ -38,11 +46,13 @@
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",
+    "@inquirer/prompts": "8.7.0",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/express": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "chokidar": "^5.0.0",
+    "commander": "15.0.0",
     "date-fns": "^4.4.0",
     "diff": "^9.0.0",
     "express": "^5.2.1",
