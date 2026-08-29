@@ -13,6 +13,7 @@ import type { Logger } from '../logger.ts';
 import { createAuthorizeRouter } from './as/authorize.ts';
 import { type CimdResolver, createCimdResolver } from './as/cimd.ts';
 import { buildAuthorizationServerMetadata, SCOPE } from './as/metadata.ts';
+import { createTokenRouter } from './as/token.ts';
 import { createOwnerAuth, type OwnerAuth } from './owner.ts';
 import { createTokenVerifier } from './rs/verifier.ts';
 import type { TokenStore } from './store/types.ts';
@@ -95,5 +96,5 @@ export function mountAuth(app: Express, config: Config, logger: Logger, auth: Au
     res.status(200).json(protectedResourceMetadata);
   });
   app.use(createAuthorizeRouter(config, logger, auth));
-  // Task 9 adds: app.use(createTokenRouter(config, logger, auth));
+  app.use(createTokenRouter(config, logger, auth));
 }
