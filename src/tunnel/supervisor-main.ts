@@ -28,7 +28,13 @@ async function main(): Promise<void> {
     target: process.env.TUNNEL_TARGET ?? DEFAULT_TARGET,
     urlFile: process.env.PUBLIC_URL_FILE ?? DEFAULT_PUBLIC_URL_FILE,
     log,
-    spawn: (cmd, args) => spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] }),
+    spawn: (cmd, args, opts) =>
+      spawn(cmd, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // `{ ...process.env, TUNNEL_TOKEN }` in cloudflare mode; the plain
+        // environment otherwise.
+        env: opts?.env ? { ...process.env, ...opts.env } : process.env,
+      }),
   };
 
   const ac = new AbortController();

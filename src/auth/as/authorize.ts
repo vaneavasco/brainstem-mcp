@@ -2,7 +2,7 @@ import { type Request, type Response, Router, urlencoded } from 'express';
 import type { Config } from '../../config.ts';
 import type { Logger } from '../../logger.ts';
 import { randomToken, sha256hex } from '../hash.ts';
-import { type AuthDeps, createOAuthRateLimiter } from '../mount.ts';
+import type { AuthDeps } from '../mount.ts';
 import type { ClientRecord, PendingRecord } from '../store/types.ts';
 import { renderConsentPage, renderErrorPage } from './consent.ts';
 import { SCOPE } from './metadata.ts';
@@ -109,11 +109,6 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
   const router = Router();
   const iss = config.publicUrl.href;
 
-  // A separate, generous bucket from /mcp's: this only protects the human-facing
-  // authorize/consent flow from being hammered, not normal interactive use. Scoped to
-  // /oauth so it never throttles /mcp or /health requests that fall through this router.
-  router.use('/oauth', createOAuthRateLimiter(auth.now));
-
   router.get('/oauth/authorize', async (req: Request, res: Response) => {
     noStoreHtml(res);
     const query = req.query as Record<string, unknown>;
@@ -183,6 +178,16 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
         iss,
       );
       return;
+    }
+    if (!resource) {
+      // Spec §4.2: `resource` is optional for legacy clients and defaults to
+      // our single MCP endpoint — worth a line, since a client that omits it
+      // is also the client that will get an audience mismatch if we ever
+      // serve more than one resource.
+      logger.warn(
+        { clientName: client.clientName },
+        'oauth authorize: no resource parameter — defaulting to the vault MCP endpoint',
+      );
     }
     if (resource && resource !== config.mcpUrl.href) {
       redirectError(

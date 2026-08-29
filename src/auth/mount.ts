@@ -126,6 +126,11 @@ export function mountAuth(app: Express, config: Config, logger: Logger, auth: Au
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
     res.status(200).json(protectedResourceMetadata);
   });
+  // One bucket for the whole OAuth surface (authorize/consent/token/revoke),
+  // mounted once here rather than per router: separate buckets on routers that
+  // every /oauth request passes through anyway only made the accounting
+  // confusing. Path-scoped, so /mcp and /health never draw from it.
+  app.use('/oauth', createOAuthRateLimiter(auth.now));
   app.use(createAuthorizeRouter(config, logger, auth));
   app.use(createTokenRouter(config, logger, auth));
 }

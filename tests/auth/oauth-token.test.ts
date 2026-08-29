@@ -324,11 +324,11 @@ describe('POST /oauth/revoke', () => {
   });
 });
 
-// The OAuth rate limiter is mounted on the same router as the metadata/authorize/token
-// endpoints, which in turn is mounted at the app root ahead of /mcp and /health — a
-// path-unscoped `router.use(limiter)` would run for every request that reaches the
-// router, including ones no OAuth route matches. These pin the fix: the bucket only
-// ever gates /oauth/*, and its own 429 is RFC 6749-shaped, not the JSON-RPC one /mcp uses.
+// One OAuth bucket for the whole surface, mounted in `mountAuth` at the app root
+// ahead of /mcp and /health — an unscoped `app.use(limiter)` would run for every
+// request reaching it, including ones no OAuth route matches. These pin the fix:
+// the bucket only ever gates /oauth/*, and its own 429 is RFC 6749-shaped, not the
+// JSON-RPC one /mcp uses.
 describe('OAuth rate limiting', () => {
   it('never rate-limits /health, even past the 30-request oauth bucket', async () => {
     const statuses = await Promise.all(

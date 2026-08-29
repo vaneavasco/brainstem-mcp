@@ -25,7 +25,7 @@ export interface SupervisorOptions {
   token?: string;
   target: string;
   urlFile?: string;
-  spawn: (cmd: string, args: string[]) => ChildLike;
+  spawn: (cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) => ChildLike;
   log: (msg: string) => void;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -39,8 +39,10 @@ export function extractTunnelUrl(line: string): string | null {
 /**
  * Builds the cloudflared CLI arguments for the given mode. `quick` starts an
  * ephemeral tunnel to `target` with a URL cloudflared picks; `cloudflare`
- * runs a named tunnel identified by `token`, whose URL is fixed at creation
- * time and never changes.
+ * runs a named tunnel identified by the token, whose URL is fixed at creation
+ * time and never changes. The token itself is never an argument — cloudflared
+ * reads it from `TUNNEL_TOKEN` (see `childEnv` below), keeping it out of `ps`
+ * output and `docker inspect`.
  */
 export function cloudflaredArgs(o: Pick<SupervisorOptions, 'mode' | 'token' | 'target'>): string[] {
   if (o.mode === 'quick') {
@@ -49,7 +51,7 @@ export function cloudflaredArgs(o: Pick<SupervisorOptions, 'mode' | 'token' | 't
   if (!o.token) {
     throw new Error('cloudflare mode requires a token');
   }
-  return ['tunnel', '--no-autoupdate', 'run', '--token', o.token];
+  return ['tunnel', '--no-autoupdate', 'run'];
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -108,6 +110,9 @@ export async function runSupervisor(o: SupervisorOptions, signal: AbortSignal): 
   const urlFile = o.urlFile ?? DEFAULT_PUBLIC_URL_FILE;
   let attempt = 0;
   let lastUrl: string | null = null;
+  // Merged into the child's environment by the caller's `spawn` (see
+  // `supervisor-main.ts`); `undefined` means "inherit ours unchanged".
+  const childEnv = o.mode === 'cloudflare' && o.token ? { TUNNEL_TOKEN: o.token } : undefined;
 
   while (!signal.aborted) {
     if (o.mode === 'quick') {
@@ -122,7 +127,7 @@ export async function runSupervisor(o: SupervisorOptions, signal: AbortSignal): 
       lastUrl = null;
     }
     const args = cloudflaredArgs(o);
-    const child = o.spawn('cloudflared', args);
+    const child = o.spawn('cloudflared', args, { env: childEnv });
     const spawnedAt = Date.now();
     const onAbort = () => child.kill();
     signal.addEventListener('abort', onAbort, { once: true });

@@ -9,7 +9,7 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-}
       ALLOW_INSECURE_PUBLIC_URL: ${ALLOW_INSECURE_PUBLIC_URL:-false}
       PUBLIC_URL_FILE: ${PUBLIC_URL_FILE:-}
-      TUNNEL_MODE: ${TUNNEL_MODE:-none}
+      TUNNEL_MODE: ${TUNNEL_MODE:-quick}
       OWNER_SECRET: ${OWNER_SECRET:?run npm run setup}
       PORT: "3000"
       LOG_LEVEL: ${LOG_LEVEL:-info}

@@ -3,7 +3,7 @@ import { type NextFunction, type Request, type Response, Router, urlencoded } fr
 import type { Config } from '../../config.ts';
 import type { Logger } from '../../logger.ts';
 import { randomToken, sha256hex } from '../hash.ts';
-import { type AuthDeps, createOAuthRateLimiter } from '../mount.ts';
+import type { AuthDeps } from '../mount.ts';
 import type { TokenRecord, TokenStore } from '../store/types.ts';
 
 export const ROTATION_GRACE_MS = 60_000;
@@ -194,10 +194,6 @@ async function handleRefreshToken(
 
 export function createTokenRouter(config: Config, logger: Logger, auth: AuthDeps): Router {
   const router = Router();
-
-  // A separate bucket from /oauth/authorize's and /mcp's. Scoped to /oauth so it never
-  // throttles /mcp or /health requests that fall through this router.
-  router.use('/oauth', createOAuthRateLimiter(auth.now));
 
   router.post(
     '/oauth/token',

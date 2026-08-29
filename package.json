@@ -1,7 +1,7 @@
 {
   "name": "brainstem-mcp",
   "version": "0.1.0",
-  "description": "Multi-tenant MCP vault server (Google Drive / local FS) for Claude",
+  "description": "Single-user, self-hosted MCP vault server for Claude (Obsidian vault, Docker, Cloudflare tunnel)",
   "directories": {
     "doc": "docs"
   },

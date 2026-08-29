@@ -62,13 +62,75 @@ describe('cloudflaredArgs', () => {
       '--url',
       'http://app:3000',
     ]);
+    // The token goes to cloudflared through TUNNEL_TOKEN, never on the command
+    // line where `ps` and `docker inspect` would show it.
     expect(cloudflaredArgs({ mode: 'cloudflare', token: 'T', target: 'http://app:3000' })).toEqual([
       'tunnel',
       '--no-autoupdate',
       'run',
-      '--token',
-      'T',
     ]);
+  });
+});
+
+describe('runSupervisor child environment', () => {
+  it('passes the cloudflare token via TUNNEL_TOKEN instead of argv', async () => {
+    const children: FakeChild[] = [];
+    const spawns: { args: string[]; env?: NodeJS.ProcessEnv }[] = [];
+    const ac = new AbortController();
+    const run = runSupervisor(
+      {
+        mode: 'cloudflare',
+        token: 'secret-token',
+        target: 'http://app:3000',
+        urlFile: file,
+        log: () => {},
+        sleep: async () => {},
+        spawn: (_cmd, args, opts) => {
+          spawns.push({ args, env: opts?.env });
+          const c = new FakeChild();
+          children.push(c);
+          return c;
+        },
+      },
+      ac.signal,
+    );
+
+    await tick();
+    expect(at(spawns, 0).args).not.toContain('secret-token');
+    expect(at(spawns, 0).env?.TUNNEL_TOKEN).toBe('secret-token');
+
+    ac.abort();
+    at(children, 0).exit(0);
+    await run;
+  });
+
+  it('passes no child environment in quick mode', async () => {
+    const children: FakeChild[] = [];
+    const envs: (NodeJS.ProcessEnv | undefined)[] = [];
+    const ac = new AbortController();
+    const run = runSupervisor(
+      {
+        mode: 'quick',
+        target: 'http://app:3000',
+        urlFile: file,
+        log: () => {},
+        sleep: async () => {},
+        spawn: (_cmd, _args, opts) => {
+          envs.push(opts?.env);
+          const c = new FakeChild();
+          children.push(c);
+          return c;
+        },
+      },
+      ac.signal,
+    );
+
+    await tick();
+    expect(envs).toEqual([undefined]);
+
+    ac.abort();
+    at(children, 0).exit(0);
+    await run;
   });
 });
 

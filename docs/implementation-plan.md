@@ -1,6 +1,6 @@
 # Implementation Plan: `brainstem-mcp` — Multi-Storage MCP Vault Server (TypeScript)
 
-**Status:** v2.0 — re-scoped 2026-08-28 to single-user self-hosted (spec: `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md`). Supersedes v1.2 (scope frozen 2026-08-27, protocol/auth/infra revised after `docs/reviews/2026-08-27-plan-review.md`, §7 corrected after `docs/reviews/2026-08-28-auth-consistency-review.md`) — the v1.2 multi-tenant/Google/Drive product definition is preserved verbatim in §10 for the deferred path; resume from it (git history) if the goal changes.
+**Status:** v2.0 — re-scoped 2026-08-28 to single-user self-hosted, Phase 2′ complete 2026-08-29 (spec: `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md`). Supersedes v1.2 (scope frozen 2026-08-27, protocol/auth/infra revised after `docs/reviews/2026-08-27-plan-review.md`, §7 corrected after `docs/reviews/2026-08-28-auth-consistency-review.md`) — the v1.2 multi-tenant/Google/Drive product definition is preserved verbatim in §10 for the deferred path; resume from it (git history) if the goal changes.
 **Owner:** Vanea
 **Repo:** git@github.com:vaneavasco/brainstem-mcp.git
 **Executor:** Claude Code
@@ -36,7 +36,7 @@ The code keeps the seams that make these additions instead of rewrites: `Storage
 - **MCP:** `@modelcontextprotocol/server` 2.0.0 (`createMcpHandler(factory)`, `registerTool` config-object API, `ctx` handler context) + `@modelcontextprotocol/express` + `@modelcontextprotocol/node`. Streamable HTTP mounted at **`/mcp`** on Express 5.2.x.
 - **Google:** `@googleapis/drive` (Drive v3; per-API package, currently v21.x) + `google-auth-library` (`OAuth2Client`, `verifyIdToken`).
 - **Frontmatter:** `gray-matter` (or `yaml` + a 30-line splitter if gray-matter's YAML engine causes trouble — executor's call, one ADR line).
-- **DB:** Heroku Postgres essential-0 via `pg` + thin query layer (no heavy ORM). **Pool max 5**, `statement_timeout` 5 s. Stores users, encrypted Google refresh tokens, vault folder mappings, OAuth clients/pending requests/codes/tokens, audit events.
+- **DB:** *(deferred with the multi-user path — see §10.)* There is no database in the single-user build: all state is one JSON file in the vault (`_brainstem/state.json`, spec §4.4). The v1.2 plan was Heroku Postgres essential-0 via `pg` + a thin query layer, pool max 5, `statement_timeout` 5 s.
 - **Crypto:** AES-256-GCM for Google refresh tokens at rest, key from `ENCRYPTION_KEY` (32 bytes, base64). Plane A tokens stored as SHA-256 hashes only.
 - **Tests:** Vitest 4. Tenant-isolation, auth-bypass, audience-validation and CIMD-SSRF suites are release-blocking.
 - **Lint/format:** Biome (single binary, replaces eslint+prettier) — ESLint is acceptable if the executor wants type-aware rules; pick one in Phase 0, ADR line.
@@ -44,6 +44,8 @@ The code keeps the seams that make these additions instead of rewrites: `Storage
 - **CI:** GitHub Actions — typecheck, lint, tests, `npm audit --omit=dev` (fail on high/critical), Dependabot enabled.
 
 ## 3. Repository structure
+
+The tree below is the **v1.2 multi-tenant layout**, kept for the deferred path (§10). The single-user build ships without `auth/google/`, `tenancy/`, `audit/`, `db/`, `Procfile` and `app.json`; what it does have is `src/{auth/{as,rs,store},cli,storage,tools,tunnel,vault}` plus `compose.yaml` and `tunnel/`.
 
 ```
 brainstem-mcp/
@@ -78,9 +80,9 @@ brainstem-mcp/
       read.ts write.ts binary.ts search.ts manage.ts daily.ts canvas.ts analytics.ts
       annotations.ts       # readOnlyHint/destructiveHint/idempotentHint/openWorldHint per tool (§5)
       register.ts          # registers all 20 tools, injects TenantContext, outputSchemas, cache hints
-    audit/
+    audit/                 # DEFERRED (§10) — no audit table in the single-user build
       audit.ts             # Postgres audit_events writer (mutations always, reads optional)
-    db/
+    db/                    # DEFERRED (§10) — no database in the single-user build
       schema.sql migrations/ queries.ts
   tests/
     tenant-isolation.test.ts   # RELEASE-BLOCKING
@@ -196,7 +198,7 @@ Superseded 2026-08-28 by the single-user redesign: the server is now solely an O
 *Accept:* full tool suite green against a temp vault; parity spot-check vs reference behavior (edit dry-run diffs, soft delete, daily notes, binary write, analytics).
 
 **Phase 2′ — Single-user auth (owner secret) + CLI + tunnel (~3 d; spec: `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md`):** reserved `_brainstem/` prefix in the path policy; owner-secret AS+RS (metadata, CIMD fetcher + SSRF guard, consent page with global lockout, authorize/token/revoke, refresh rotation); `FileTokenStore` (hashed OAuth state as JSON in the vault); Cloudflare tunnel image + TypeScript supervisor (named/quick modes, URL file, app self-restart on URL change); `_brainstem/connection.md` + `instance.json`; cross-platform TypeScript CLI (`setup`/`up`/`url`/`status`/`down`/`logs`/`revoke-all`/`secret`). Detailed plan: `docs/plans/2026-08-28-phase-2-single-user-auth-cli.md` (16 tasks).
-*Status:* **complete 2026-08-28** — all 16 tasks merged, 283 automated tests passing. Only the owner-run acceptance items remain open; see the "Acceptance log" at the bottom of the detailed plan.
+*Status:* **complete 2026-08-29** — all 16 tasks merged plus the final-review fix wave, 301 automated tests passing. Only the owner-run acceptance items remain open; see the "Acceptance log" at the bottom of the detailed plan.
 *Accept (automated, done):* `owner`, `file-store`, `cimd`, `oauth-authorize`, `oauth-token`, `oauth-rs`, `context`, `verifier` suites green; an end-to-end OAuth flow via the official MCP SDK client (`tests/auth/e2e.test.ts`) completes against `createApp` and calls `vault_list`; Docker smoke (`scripts/docker-smoke.sh`) passes, including the unauthenticated-401 gate and the `_brainstem/connection.md` write; a quick tunnel came up live with a real `trycloudflare.com` URL answering `/health`.
 *Accept (owner-run, pending):* Claude Code and claude.ai web/mobile connect through a real tunnel URL (CIMD + loopback, secret typed once) and a note written from Claude appears in Obsidian; `docker compose restart tunnel` rotates the quick-tunnel URL and the app reconnects cleanly with `connection.md` updated; a real Cloudflare named-tunnel token keeps a stable URL and valid tokens across restarts; a Windows run of `setup`/`up` with the polling watcher confirmed by editing a note in Obsidian and reading it through Claude.
 

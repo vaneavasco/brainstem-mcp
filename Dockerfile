@@ -22,6 +22,8 @@ RUN mkdir -p /vault && chown -R node:node /vault /app
 # the bind-mounted vault is writable as the host user who owns it.
 USER node
 EXPOSE 3000
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
+# start-period covers the boot-time wait for the quick tunnel's public-url file
+# (up to 120 s in src/main.ts) — a shorter grace marks a normally-booting app unhealthy.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=130s --retries=5 \
   CMD curl -fsS http://localhost:3000/health || exit 1
 CMD ["node", "dist/main.js"]
