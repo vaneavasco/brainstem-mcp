@@ -10,6 +10,7 @@ import {
 import type { Express, RequestHandler } from 'express';
 import type { Config } from '../config.ts';
 import type { Logger } from '../logger.ts';
+import { createAuthorizeRouter } from './as/authorize.ts';
 import { type CimdResolver, createCimdResolver } from './as/cimd.ts';
 import { buildAuthorizationServerMetadata, SCOPE } from './as/metadata.ts';
 import { createOwnerAuth, type OwnerAuth } from './owner.ts';
@@ -77,9 +78,7 @@ export function bearerGate(config: Config, auth: AuthDeps): RequestHandler {
   });
 }
 
-// `logger` and `auth` are unused for now — Tasks 8/9 wire the `/oauth/*`
-// routers here, which need both.
-export function mountAuth(app: Express, config: Config, _logger: Logger, _auth: AuthDeps): void {
+export function mountAuth(app: Express, config: Config, logger: Logger, auth: AuthDeps): void {
   const metadataOptions = {
     oauthMetadata: buildAuthorizationServerMetadata(config.publicUrl),
     resourceServerUrl: config.mcpUrl,
@@ -95,5 +94,6 @@ export function mountAuth(app: Express, config: Config, _logger: Logger, _auth: 
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
     res.status(200).json(protectedResourceMetadata);
   });
-  // Tasks 8 and 9 add: app.use(createAuthorizeRouter(config, logger, auth)); app.use(createTokenRouter(config, logger, auth));
+  app.use(createAuthorizeRouter(config, logger, auth));
+  // Task 9 adds: app.use(createTokenRouter(config, logger, auth));
 }
