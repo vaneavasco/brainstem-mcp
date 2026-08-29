@@ -27,7 +27,7 @@ const ClientMetadataDocument = z
   .object({
     client_id: z.string(),
     client_name: z.string().min(1).max(200),
-    redirect_uris: z.array(z.url()).min(1),
+    redirect_uris: z.array(z.url({ protocol: /^https?$/ })).min(1),
     token_endpoint_auth_method: z.literal('none').optional(),
   })
   .loose();
@@ -109,13 +109,13 @@ export function createCimdResolver(opts: CimdResolverOptions): CimdResolver {
       }
 
       const now = opts.now();
-      const cached = await opts.store.getClient(clientId);
-      if (cached && cached.expiresAt > now) {
-        if (cached.negative) throw invalid('client metadata could not be fetched recently');
-        return cached;
-      }
-
       try {
+        const cached = await opts.store.getClient(clientId);
+        if (cached && cached.expiresAt > now) {
+          if (cached.negative) throw invalid('client metadata could not be fetched recently');
+          return cached;
+        }
+
         const ip = await lookup(url.hostname);
         assertPublicAddress(ip);
         const res = await fetchDocument(url, { timeoutMs: TIMEOUT_MS, maxBytes: MAX_BYTES, ip });
@@ -126,7 +126,16 @@ export function createCimdResolver(opts: CimdResolverOptions): CimdResolver {
           contentType === 'application/json' ||
           /^application\/[a-z0-9.+-]+\+json$/.test(contentType);
         if (!isJson) throw new Error(`unexpected content-type ${contentType}`);
-        const parsed = ClientMetadataDocument.safeParse(JSON.parse(res.body));
+        let json: unknown;
+        try {
+          json = JSON.parse(res.body);
+        } catch {
+          // Deliberately a fixed message: JSON.parse's own error embeds a
+          // snippet of the (untrusted) response body, which must never
+          // reach the warn log below.
+          throw new Error('document is not valid JSON');
+        }
+        const parsed = ClientMetadataDocument.safeParse(json);
         if (!parsed.success) throw new Error('client metadata document has an invalid shape');
         if (parsed.data.client_id !== clientId) throw new Error('client_id mismatch');
 
@@ -141,15 +150,26 @@ export function createCimdResolver(opts: CimdResolverOptions): CimdResolver {
         if (ttl > 0) await opts.store.putClient(record);
         return record;
       } catch (error) {
+        // A still-negative cache hit is already a well-formed OAuthError;
+        // pass it straight through rather than re-logging it as a fresh
+        // failure and rewriting (and thus extending) its negative-cache
+        // entry on every repeated lookup.
+        if (error instanceof OAuthError) throw error;
         opts.logger.warn({ clientId, err: error }, 'CIMD fetch rejected');
-        await opts.store.putClient({
-          clientId,
-          clientName: '',
-          redirectUris: [],
-          fetchedAt: now,
-          expiresAt: now + NEGATIVE_TTL_MS,
-          negative: true,
-        });
+        try {
+          await opts.store.putClient({
+            clientId,
+            clientName: '',
+            redirectUris: [],
+            fetchedAt: now,
+            expiresAt: now + NEGATIVE_TTL_MS,
+            negative: true,
+          });
+        } catch (cacheError) {
+          // Best-effort: a store fault here must not itself escape and
+          // shadow the real (already-determined) failure below.
+          opts.logger.debug({ clientId, err: cacheError }, 'CIMD negative-cache write failed');
+        }
         throw invalid('client metadata document is invalid or unreachable');
       }
     },
