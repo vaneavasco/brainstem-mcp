@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   baseName,
   isMarkdownPath,
+  isReservedPath,
   normalizeVaultPath,
   parentDir,
+  RESERVED_DIR,
   TRASH_DIR,
 } from '../../src/storage/path-policy.ts';
 import { VaultError } from '../../src/storage/types.ts';
@@ -100,5 +102,27 @@ describe('helpers', () => {
     expect(parentDir('c.md')).toBe('');
     expect(baseName('a/b/c.md')).toBe('c.md');
     expect(TRASH_DIR).toBe('.trash');
+  });
+});
+
+describe('reserved _brainstem prefix', () => {
+  it('rejects the reserved folder and anything under it', () => {
+    for (const p of ['_brainstem', '_brainstem/', '_brainstem/state.json', './_brainstem/x.md']) {
+      expect(() => normalizeVaultPath(p)).toThrow(/reserved/);
+    }
+  });
+  it('still accepts look-alikes that are not the reserved segment', () => {
+    expect(normalizeVaultPath('_brainstem2/a.md')).toBe('_brainstem2/a.md');
+    expect(normalizeVaultPath('notes/_brainstem/a.md')).toBe('notes/_brainstem/a.md');
+  });
+  it('allows the reserved folder for internal callers', () => {
+    expect(normalizeVaultPath('_brainstem/state.json', { allowInternal: true })).toBe(
+      '_brainstem/state.json',
+    );
+  });
+  it('isReservedPath matches only the first segment', () => {
+    expect(isReservedPath(RESERVED_DIR)).toBe(true);
+    expect(isReservedPath('_brainstem/a')).toBe(true);
+    expect(isReservedPath('a/_brainstem')).toBe(false);
   });
 });

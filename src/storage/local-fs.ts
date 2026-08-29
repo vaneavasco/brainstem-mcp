@@ -25,6 +25,7 @@ import {
   isMarkdownPath,
   normalizeVaultPath,
   parentDir,
+  RESERVED_DIR,
   TRASH_DIR,
 } from './path-policy.ts';
 import { applyTextPatches, unifiedDiff } from './text-diff.ts';
@@ -356,6 +357,7 @@ export class LocalFSAdapter implements StorageAdapter {
       dirents.sort((a, b) => a.name.localeCompare(b.name, 'en'));
       for (const dirent of dirents) {
         if (dirent.name.startsWith('.')) continue;
+        if (dir === '' && dirent.name === RESERVED_DIR) continue;
         const rel = dir === '' ? dirent.name : `${dir}/${dirent.name}`;
         const relToBase = base === '' ? rel : rel.slice(base.length + 1);
         const matches = matcher === null || matcher(relToBase);
@@ -502,6 +504,8 @@ export class LocalFSAdapter implements StorageAdapter {
       '!.*',
       '--glob',
       '!**/.*/**',
+      '--glob',
+      `!${RESERVED_DIR}/**`,
       ...[...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`]),
       '--',
       query,
@@ -564,7 +568,11 @@ export class LocalFSAdapter implements StorageAdapter {
   watch(onChange: (event: ChangeEvent) => void): Unsubscribe {
     const watcher = chokidarWatch(this.root, {
       ignoreInitial: true,
-      ignored: (absPath: string) => absPath !== this.root && path.basename(absPath).startsWith('.'),
+      ignored: (absPath: string) => {
+        if (absPath === this.root) return false;
+        if (path.basename(absPath).startsWith('.')) return true;
+        return path.relative(this.root, absPath).split(path.sep)[0] === RESERVED_DIR;
+      },
       awaitWriteFinish: false,
     });
     watcher.on('add', (abs) => onChange({ type: 'create', path: this.rel(abs) }));

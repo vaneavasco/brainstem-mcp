@@ -1,6 +1,12 @@
 import { VaultError } from './types.ts';
 
 export const TRASH_DIR = '.trash';
+/** Folder the server keeps its own state in. Never reachable through a tool. */
+export const RESERVED_DIR = '_brainstem';
+
+export function isReservedPath(p: string): boolean {
+  return p === RESERVED_DIR || p.startsWith(`${RESERVED_DIR}/`);
+}
 const MAX_PATH_CHARS = 1024;
 const CONTROL_CHARS = new RegExp(
   `[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`,
@@ -46,6 +52,9 @@ export function normalizeVaultPath(input: unknown, opts: PathPolicyOptions = {})
     if (raw.startsWith('.')) {
       const internalOk = opts.allowInternal === true && segments.length === 0 && raw === TRASH_DIR;
       if (!internalOk) reject('hidden files and folders are not accessible', trimmed);
+    }
+    if (segments.length === 0 && raw === RESERVED_DIR && opts.allowInternal !== true) {
+      reject(`${RESERVED_DIR}/ is reserved for the server`, trimmed);
     }
     segments.push(raw);
   }

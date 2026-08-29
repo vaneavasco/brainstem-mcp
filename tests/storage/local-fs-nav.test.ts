@@ -246,6 +246,27 @@ describe.skipIf(!hasRipgrep())('search (ripgrep)', () => {
   });
 });
 
+describe('reserved _brainstem directory', () => {
+  it('list() and watch() never expose the reserved _brainstem folder', async () => {
+    await fs.mkdir(path.join(root, '_brainstem'), { recursive: true });
+    await fs.writeFile(path.join(root, '_brainstem', 'state.json'), '{}');
+    await fs.writeFile(path.join(root, 'visible.md'), '# v');
+    const entries = await vault.list('', { depth: Number.POSITIVE_INFINITY });
+    expect(entries.map((e) => e.path)).toContain('visible.md');
+    expect(entries.some((e) => e.path.startsWith('_brainstem'))).toBe(false);
+
+    const seen: string[] = [];
+    const stop = vault.watch((ev) => seen.push(ev.path));
+    await new Promise((r) => setTimeout(r, 300));
+    await fs.writeFile(path.join(root, '_brainstem', 'public-url'), 'https://x');
+    await fs.writeFile(path.join(root, 'other.md'), '# o');
+    await new Promise((r) => setTimeout(r, 700));
+    stop();
+    expect(seen).toContain('other.md');
+    expect(seen.some((p) => p.startsWith('_brainstem'))).toBe(false);
+  });
+});
+
 describe('watch', () => {
   it('emits create/update/delete events with vault-relative paths', async () => {
     const adapter: StorageAdapter = vault;
