@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { confirm, input, select } from '@inquirer/prompts';
 import { Command } from 'commander';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
+import { runDoctor } from './commands/doctor.ts';
 import { runDown } from './commands/down.ts';
 import { runLogs } from './commands/logs.ts';
 import { runRevokeAll } from './commands/revoke-all.ts';
@@ -16,6 +17,7 @@ import { runUp } from './commands/up.ts';
 import { runUrl } from './commands/url.ts';
 import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
+import { createSystemProbe } from './system.ts';
 import type { VaultPathContext } from './vault-path.ts';
 
 const NON_INTERACTIVE_MESSAGE =
@@ -101,12 +103,18 @@ function buildSetupDeps(repoDir: string): SetupDeps {
   };
 }
 
-async function loadEnvMap(repoDir: string): Promise<Map<string, string>> {
+/** Parses `.env` from `repoDir`, or `null` when the file doesn't exist yet. */
+async function loadEnvMapOrNull(repoDir: string): Promise<Map<string, string> | null> {
   const text = await readFile(path.join(repoDir, '.env'));
-  if (text === null) {
+  return text === null ? null : parseEnv(text);
+}
+
+async function loadEnvMap(repoDir: string): Promise<Map<string, string>> {
+  const env = await loadEnvMapOrNull(repoDir);
+  if (env === null) {
     throw new Error('.env not found — run `npm run setup` first');
   }
-  return parseEnv(text);
+  return env;
 }
 
 function localPortOf(env: Map<string, string>): number {
@@ -162,6 +170,21 @@ export function buildProgram(repoDir: string): Command {
         console.error(err instanceof Error ? err.message : String(err));
         process.exitCode = 1;
       }
+    });
+
+  program
+    .command('doctor')
+    .description('Check prerequisites and configuration; print how to fix what is missing')
+    .action(async () => {
+      await runAction(async () => {
+        const env = await loadEnvMapOrNull(repoDir);
+        return runDoctor({
+          probe: createSystemProbe(),
+          env,
+          vaultCtx: createVaultCtx(repoDir),
+          print: (line) => console.log(line),
+        });
+      });
     });
 
   program
