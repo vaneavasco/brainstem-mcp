@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createOwnerResolver } from './auth/context.ts';
 import { createAuth } from './auth/mount.ts';
 import { FileTokenStore } from './auth/store/file-store.ts';
 import { StoreCorruptError } from './auth/store/types.ts';
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
     throw error;
   }
   const auth = createAuth(config, logger, store);
-  const running = await startServer(config, logger, async () => runtime, auth);
+  const running = await startServer(config, logger, createOwnerResolver(runtime), auth);
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
