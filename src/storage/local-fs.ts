@@ -500,13 +500,20 @@ export class LocalFSAdapter implements StorageAdapter {
       caseSensitive ? '--case-sensitive' : '--ignore-case',
       '--max-count',
       String(limit),
+      ...[...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`]),
+      // ripgrep applies "last matching glob wins", so these excludes must come after the
+      // extension includes above — otherwise an unanchored include like `*.md` would re-include
+      // everything under an excluded directory that happens to have an allowed extension.
       '--glob',
       '!.*',
       '--glob',
       '!**/.*/**',
+      // A leading '/' anchors this glob to `cwd` (set below to the vault root) rather than to
+      // wherever the server process happens to be running, and rather than matching the
+      // `_brainstem` basename at any depth — so a legitimate nested look-alike such as
+      // `notes/_brainstem/x.md` is still searchable.
       '--glob',
-      `!${RESERVED_DIR}/**`,
-      ...[...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`]),
+      `!/${RESERVED_DIR}/**`,
       '--',
       query,
       this.abs(prefix),
@@ -514,7 +521,7 @@ export class LocalFSAdapter implements StorageAdapter {
     const rg = this.rg;
     const out: Match[] = [];
     return await new Promise<Match[]>((resolve, reject) => {
-      const child = spawn(rg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(rg, args, { cwd: this.root, stdio: ['ignore', 'pipe', 'pipe'] });
       let killedForLimit = false;
       let settled = false;
       const finish = (fn: () => void): void => {

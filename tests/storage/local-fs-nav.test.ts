@@ -265,6 +265,15 @@ describe('reserved _brainstem directory', () => {
     expect(seen).toContain('other.md');
     expect(seen.some((p) => p.startsWith('_brainstem'))).toBe(false);
   });
+
+  it('search() never returns matches from inside the reserved _brainstem folder (JS fallback)', async () => {
+    const needle = 'xyzzybrainstemneedle';
+    await fs.mkdir(path.join(root, '_brainstem'), { recursive: true });
+    await fs.writeFile(path.join(root, '_brainstem', 'secret.md'), `${needle} secret\n`);
+    await vault.write('visible-needle.md', `${needle} visible\n`);
+    const results = await vault.search(needle);
+    expect(results.map((m) => m.path)).toEqual(['visible-needle.md']);
+  });
 });
 
 describe('watch', () => {
