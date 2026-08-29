@@ -20,3 +20,41 @@ jobs:
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
+
+  # The compose stack end-to-end: build, boot in `none` tunnel mode against a
+  # throwaway vault, then run the same smoke script used locally. Node is on the
+  # runner for the smoke's own `node -e` seeder and the `npx` MCP Inspector.
+  docker-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - name: Write .env
+        run: |
+          {
+            echo "OWNER_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")"
+            echo "TUNNEL_MODE=none"
+            echo "PUBLIC_URL=http://localhost:3000"
+            echo "ALLOW_INSECURE_PUBLIC_URL=true"
+            echo "VAULT_PATH=$GITHUB_WORKSPACE/vault-dev"
+            echo "HOST_UID=$(id -u)"
+            echo "HOST_GID=$(id -g)"
+          } > .env
+          mkdir -p vault-dev
+      - run: docker compose up -d --build
+      # `up -d` returns as soon as the container starts, not when the server listens.
+      - name: Wait for /health
+        run: |
+          for _ in $(seq 1 60); do
+            curl -fsS http://localhost:3000/health >/dev/null && exit 0
+            sleep 2
+          done
+          echo "app never answered /health"; exit 1
+      - run: bash scripts/docker-smoke.sh
+      - if: failure()
+        run: docker compose logs app
+      - if: always()
+        run: docker compose down

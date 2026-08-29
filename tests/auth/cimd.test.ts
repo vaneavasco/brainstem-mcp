@@ -73,6 +73,36 @@ describe('cacheTtlMs', () => {
   });
 });
 
+describe('fetchClientMetadataDocument overall deadline', () => {
+  let drip: http.Server;
+  let dripPort: number;
+  beforeAll(async () => {
+    // Writes one byte every 100 ms, forever: the socket is never idle, so the
+    // socket-level `timeout` can never fire. Only an overall deadline ends this.
+    drip = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const timer = setInterval(() => res.write('x'), 100);
+      res.on('close', () => clearInterval(timer));
+    });
+    await new Promise<void>((r) => drip.listen(0, '127.0.0.1', () => r()));
+    dripPort = (drip.address() as AddressInfo).port;
+  });
+  afterAll(() => new Promise<void>((r) => drip.close(() => r())));
+
+  it('rejects on the overall deadline while bytes keep trickling in', async () => {
+    const started = Date.now();
+    await expect(
+      fetchClientMetadataDocument(new URL(`http://cimd-test.invalid:${dripPort}/oauth/drip`), {
+        timeoutMs: 300,
+        maxBytes: 5000,
+        ip: '127.0.0.1',
+        allowInsecureHttp: true,
+      }),
+    ).rejects.toThrow(/timeout fetching client metadata/);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+});
+
 describe('fetchClientMetadataDocument + resolver', () => {
   let server: http.Server;
   let port: number;

@@ -3,7 +3,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type McpHttpHandler } from '@modelcontextprotocol/server';
 import type { Express, NextFunction, Request, Response } from 'express';
 import type { AuthDeps } from './auth/mount.ts';
-import { bearerGate, createRateLimiter, mountAuth } from './auth/mount.ts';
+import { bearerGate, createRateLimiter, createUnauthLimiter, mountAuth } from './auth/mount.ts';
 import type { Config } from './config.ts';
 import type { Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
@@ -87,10 +87,14 @@ export function createApp(
   });
 
   const node = toNodeHandler(handler);
+  // Order matters: the unauthenticated bucket first (so an anonymous flood is
+  // capped before it can touch the owner's), then the bearer gate, then the
+  // main 60/60 bucket — which only authenticated requests ever draw from.
   app.all(
     '/mcp',
-    createRateLimiter({ capacity: 60, refillPerSec: 60, now: auth.now }),
+    createUnauthLimiter(auth.now),
     bearerGate(config, auth),
+    createRateLimiter({ capacity: 60, refillPerSec: 60, now: auth.now }),
     (req, res) => {
       res.setHeader('X-Accel-Buffering', 'no');
       void node(req, res, req.body);

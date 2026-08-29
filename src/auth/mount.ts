@@ -82,6 +82,24 @@ export function createRateLimiter(opts: {
 }
 
 /**
+ * A second, much smaller bucket for `/mcp` requests that arrive WITHOUT an
+ * `Authorization` header, drawn BEFORE `bearerGate` (the main 60/60 bucket now
+ * sits behind it). Without this an anonymous flood would drain the owner's
+ * bucket and lock the real client out with 429s; with it, unauthenticated
+ * callers are capped at their own 20 / 5-per-second allowance and authenticated
+ * traffic skips this middleware entirely. Requests with a bogus token still
+ * pass through here and are rejected by the gate — the point is only that
+ * header-less floods can't reach the owner's bucket.
+ */
+export function createUnauthLimiter(now: () => number): RequestHandler {
+  const limiter = createRateLimiter({ capacity: 20, refillPerSec: 5, now });
+  return (req, res, next) => {
+    if (req.headers.authorization) return next();
+    limiter(req, res, next);
+  };
+}
+
+/**
  * The OAuth authorize/token/revoke endpoints share this bucket shape (spec-adjacent,
  * generous enough for interactive + CLI-retry use) and an RFC 6749 §5.2-shaped 429
  * body instead of /mcp's JSON-RPC one, with the same no-store caching as every other

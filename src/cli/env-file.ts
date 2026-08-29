@@ -19,9 +19,9 @@ function stripQuotes(value: string): string {
     // Single quotes are literal: what's between them is the value, verbatim.
     if (first === "'" && last === "'") return value.slice(1, -1);
     // Double quotes carry escapes (this is the fallback `formatValue` uses for
-    // values containing an apostrophe): undo the two it emits, `\\` and `\"`.
+    // values containing an apostrophe): undo the three it emits, `\\`, `\"` and `\$`.
     if (first === '"' && last === '"') {
-      return value.slice(1, -1).replace(/\\([\\"])/g, '$1');
+      return value.slice(1, -1).replace(/\\([\\"$])/g, '$1');
     }
   }
   return value;
@@ -44,19 +44,27 @@ export function parseEnv(text: string): Map<string, string> {
 }
 
 /**
- * Values containing a space or `#` need quoting so they round-trip through
- * `parseEnv` — and through Compose, which reads this same file. Quote with
- * SINGLE quotes: compose-go (and Node's `--env-file`) expand
- * `\a \b \f \n \r \t \v \\ \" \$` inside double quotes, which would mangle a
- * Windows vault path such as `C:\Users\vanea\Obsidian Vault`; inside single
- * quotes every character is literal. A value that contains an apostrophe
- * can't be single-quoted (neither parser supports an escape there), so it
- * falls back to double quotes with `\` and `"` escaped.
+ * Values containing a space, `#`, `$` or `'` need quoting so they round-trip
+ * through `parseEnv` — and through Compose, which reads this same file (`$`
+ * would otherwise be interpolated by compose-go). Quote with SINGLE quotes:
+ * compose-go (and Node's `--env-file`) expand `\a \b \f \n \r \t \v \\ \" \$`
+ * inside double quotes, which would mangle a Windows vault path such as
+ * `C:\Users\vanea\Obsidian Vault`; inside single quotes every character is
+ * literal. A value that contains an apostrophe can't be single-quoted:
+ * neither parser supports an escape there, and neither splices adjacent
+ * quoted segments (`'\''`) the way a shell does — so it falls back to double
+ * quotes with `\`, `"` and `$` escaped. Residual, accepted and verified against
+ * both parsers: compose-go undoes `\$` (and `\\`, `\"`) inside double quotes,
+ * while Node's `--env-file` strips the quotes and keeps everything between them
+ * literal — including the backslashes. So a value carrying an apostrophe
+ * TOGETHER WITH a `$` or a `\` reads as `it's $5` under Docker but as
+ * `it's \$5` under `npm run dev`. Only the apostrophe path is affected; every
+ * other value takes the single-quote branch, which both parsers read the same.
  */
 function formatValue(value: string): string {
-  if (!/[ #]/.test(value)) return value;
+  if (!/[ #$']/.test(value)) return value;
   if (!value.includes("'")) return `'${value}'`;
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}"`;
 }
 
 /**

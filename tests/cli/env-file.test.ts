@@ -62,6 +62,25 @@ describe('upsertEnv', () => {
     expect(parseEnv(r.text).get('VAULT_PATH')).toBe(value);
   });
 
+  it('single-quotes a value containing $ so neither Compose nor Node interpolates it', () => {
+    const r = upsertEnv('OWNER_SECRET=\n', { OWNER_SECRET: '$HOME-ish$ecret' });
+    expect(r.text).toBe("OWNER_SECRET='$HOME-ish$ecret'\n");
+    expect(parseEnv(r.text).get('OWNER_SECRET')).toBe('$HOME-ish$ecret');
+  });
+
+  // Residual, verified against both parsers: compose-go undoes `\$` (and `\\`, `\"`)
+  // inside double quotes, while Node's `--env-file` strips the quotes and keeps
+  // everything between them literal — so this value reads `it's $5 …` under Docker
+  // but `it's \$5 …` under `npm run dev`. Single quotes would avoid it, but neither
+  // parser splices `'\''` the way a shell does, so the double-quote form is the only
+  // round-trippable fallback. `parseEnv` below matches the compose-go reading.
+  it('double-quotes a value containing an apostrophe (escaping \\ " $) — a value with \' plus \\ or $ still differs between Node --env-file and Compose', () => {
+    const value = 'it\'s $5 C:\\Users "x"';
+    const r = upsertEnv('A=\n', { A: value });
+    expect(r.text).toBe('A="it\'s \\$5 C:\\\\Users \\"x\\""\n');
+    expect(parseEnv(r.text).get('A')).toBe(value);
+  });
+
   it('round-trips a quoted value with a space through parseEnv', () => {
     const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: 'C:\\Users\\u\\Obsidian Vault' });
     expect(parseEnv(r.text).get('VAULT_PATH')).toBe('C:\\Users\\u\\Obsidian Vault');

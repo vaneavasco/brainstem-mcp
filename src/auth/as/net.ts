@@ -196,9 +196,11 @@ export function fetchClientMetadataDocument(
   const mod = insecure ? http : https;
   return new Promise((resolve, reject) => {
     let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      if (deadline) clearTimeout(deadline);
       fn();
     };
     const family = opts.ip.includes(':') ? 6 : 4;
@@ -270,6 +272,14 @@ export function fetchClientMetadataDocument(
           );
         });
       },
+    );
+    // Two timeouts, both needed. `timeout` above is socket-IDLE based and never
+    // fires against a server that drips a byte at a time; this one is an overall
+    // deadline on the whole fetch, armed the moment the request exists and
+    // cleared by `settle` on any outcome.
+    deadline = setTimeout(
+      () => req.destroy(new Error('timeout fetching client metadata')),
+      opts.timeoutMs,
     );
     req.on('timeout', () => req.destroy(new Error('timeout fetching client metadata')));
     req.on('error', (err) => settle(() => reject(err)));

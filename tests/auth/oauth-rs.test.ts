@@ -149,6 +149,23 @@ describe('resource server', () => {
     limiter({} as import('express').Request, res, () => statuses.push(200));
     expect(statuses.at(-1)).toBe(200);
   });
+  it("drains a separate small bucket for unauthenticated /mcp bursts, never the owner's", async () => {
+    // The unauthenticated bucket (20 / 5 per s) sits BEFORE the bearer gate, so a
+    // flood of anonymous POSTs is capped there and can't touch the main 60/60
+    // bucket, which now sits behind the gate.
+    const unauth = await Promise.all(Array.from({ length: 25 }, () => rpc({})));
+    const statuses = unauth.map((r) => r.status);
+    expect(statuses).toContain(429);
+    expect(statuses.filter((s) => s === 401).length).toBeGreaterThan(0);
+    expect(statuses.every((s) => s === 401 || s === 429)).toBe(true);
+
+    const token = await issue();
+    const authed = await Promise.all(
+      Array.from({ length: 25 }, () => rpc({ authorization: `Bearer ${token}` })),
+    );
+    expect(authed.map((r) => r.status)).toEqual(Array.from({ length: 25 }, () => 200));
+  });
+
   it('stamps lastUsedAt on use', async () => {
     // Reuse the file's shared store (see the comment on `testAuth` above)
     // rather than opening a second FileTokenStore against the same file.
