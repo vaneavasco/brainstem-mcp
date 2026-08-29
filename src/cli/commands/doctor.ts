@@ -150,6 +150,9 @@ function tunnelModeCheck(env: Map<string, string>): Check {
  * checks first, then `.env`-derived ones), without printing anything. Stops
  * after the machine-level checks when `prerequisitesOnly` is set, or after
  * the `env` check when `.env` is missing — later checks all depend on it.
+ * The `docker-daemon` and `compose` checks are likewise omitted when `docker`
+ * itself is missing, so the returned list is not a fixed nine names: only a
+ * machine with Docker installed produces every check.
  */
 export async function runDoctorChecks(deps: DoctorDeps): Promise<Check[]> {
   const { probe } = deps;
@@ -178,31 +181,37 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<Check[]> {
     ),
   );
 
-  const dockerInfo = await probe.exec('docker', ['info']);
-  const daemonOk = dockerInfo.code === 0;
-  checks.push(
-    check(
-      'docker-daemon',
-      daemonOk,
-      daemonOk ? 'Docker daemon running' : 'Docker daemon — not running',
-      daemonOk
-        ? undefined
-        : platform === 'linux'
-          ? 'sudo systemctl start docker'
-          : 'start Docker Desktop',
-    ),
-  );
+  // Cascade: `docker info` and `docker compose version` both shell out to the
+  // same missing binary, so without this they add two more ✗ lines carrying the
+  // same remedy as the one above — one problem reported three times, with the
+  // real one buried. Skip them; installing Docker is the whole fix.
+  if (dockerOk) {
+    const dockerInfo = await probe.exec('docker', ['info']);
+    const daemonOk = dockerInfo.code === 0;
+    checks.push(
+      check(
+        'docker-daemon',
+        daemonOk,
+        daemonOk ? 'Docker daemon running' : 'Docker daemon — not running',
+        daemonOk
+          ? undefined
+          : platform === 'linux'
+            ? 'sudo systemctl start docker'
+            : 'start Docker Desktop',
+      ),
+    );
 
-  const composeVersion = await probe.exec('docker', ['compose', 'version']);
-  const composeOk = composeVersion.code === 0;
-  checks.push(
-    check(
-      'compose',
-      composeOk,
-      composeOk ? 'Docker Compose v2 available' : 'Docker Compose v2 — not available',
-      composeOk ? undefined : REMEDIES.docker[platform],
-    ),
-  );
+    const composeVersion = await probe.exec('docker', ['compose', 'version']);
+    const composeOk = composeVersion.code === 0;
+    checks.push(
+      check(
+        'compose',
+        composeOk,
+        composeOk ? 'Docker Compose v2 available' : 'Docker Compose v2 — not available',
+        composeOk ? undefined : REMEDIES.docker[platform],
+      ),
+    );
+  }
 
   if (deps.prerequisitesOnly) return checks;
 

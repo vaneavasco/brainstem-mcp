@@ -45,6 +45,8 @@ describe('parseMajor', () => {
 
 describe('runDoctorChecks', () => {
   it('passes on a healthy machine with a valid .env', async () => {
+    // All nine checks only appear when docker is present — the daemon and
+    // compose checks cascade off it (see the docker-missing test below).
     const checks = await runDoctorChecks({ probe: probe(), env: goodEnv(), vaultCtx, print() {} });
     expect(checks.every((c) => c.ok)).toBe(true);
     expect(checks.map((c) => c.name)).toEqual([
@@ -78,6 +80,26 @@ describe('runDoctorChecks', () => {
       print() {},
     });
     expect(missing.find((c) => c.name === 'docker')?.ok).toBe(false);
+    // `docker info` and `docker compose version` can only fail the same way for
+    // the same reason once the binary is missing; three ✗ lines with the same
+    // remedy read like three problems. Skip them and let the docker check speak.
+    expect(missing.map((c) => c.name)).toEqual([
+      'node',
+      'docker',
+      'env',
+      'owner-secret',
+      'vault-path',
+      'tunnel-mode',
+      'port',
+    ]);
+    const missingPrereqs = await runDoctorChecks({
+      probe: probe({ results: { 'docker --version': { code: 127 } } }),
+      env: null,
+      vaultCtx,
+      print() {},
+      prerequisitesOnly: true,
+    });
+    expect(missingPrereqs.map((c) => c.name)).toEqual(['node', 'docker']);
     const stopped = await runDoctorChecks({
       probe: probe({ results: { 'docker info': { code: 1 } } }),
       env: goodEnv(),

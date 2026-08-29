@@ -82,19 +82,34 @@ export function createRateLimiter(opts: {
 }
 
 /**
- * A second, much smaller bucket for `/mcp` requests that arrive WITHOUT an
- * `Authorization` header, drawn BEFORE `bearerGate` (the main 60/60 bucket now
- * sits behind it). Without this an anonymous flood would drain the owner's
- * bucket and lock the real client out with 429s; with it, unauthenticated
- * callers are capped at their own 20 / 5-per-second allowance and authenticated
- * traffic skips this middleware entirely. Requests with a bogus token still
- * pass through here and are rejected by the gate — the point is only that
- * header-less floods can't reach the owner's bucket.
+ * The shape of an access token as this server mints it: `randomToken()` is 32
+ * random bytes, i.e. exactly 43 base64url characters (`src/auth/hash.ts`).
+ * A cheap pre-check only — it says nothing about whether the token is real,
+ * unexpired or ours; `bearerGate` still decides that.
+ */
+const BEARER_SHAPE = /^Bearer [A-Za-z0-9_-]{43}$/;
+
+/**
+ * A second, much smaller bucket for `/mcp` requests that do not even *look*
+ * authenticated, drawn BEFORE `bearerGate` (the main 60/60 bucket now sits
+ * behind it). Without this an anonymous flood would drain the owner's bucket
+ * and lock the real client out with 429s; with it, unauthenticated callers are
+ * capped at their own 20 / 5-per-second allowance and real traffic skips this
+ * middleware entirely.
+ *
+ * "Unauthenticated" is decided by `BEARER_SHAPE`, not by the mere presence of
+ * an `Authorization` header: any header at all used to be enough to walk past
+ * this bucket, so `Authorization: Bearer nope` on every request re-opened the
+ * exact hole the bucket exists to close. A request whose header does not match
+ * the shape a real token has cannot be from a legitimate client, so it belongs
+ * in the small bucket. Well-shaped but invalid tokens still pass through here
+ * and are rejected by the gate — as they must be, since only the gate can tell
+ * a real token from a forged one.
  */
 export function createUnauthLimiter(now: () => number): RequestHandler {
   const limiter = createRateLimiter({ capacity: 20, refillPerSec: 5, now });
   return (req, res, next) => {
-    if (req.headers.authorization) return next();
+    if (BEARER_SHAPE.test(req.headers.authorization ?? '')) return next();
     limiter(req, res, next);
   };
 }

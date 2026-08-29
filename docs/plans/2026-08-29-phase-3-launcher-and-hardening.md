@@ -316,4 +316,26 @@ README structure: *What it is* (unchanged) · *Requirements* (Docker Desktop/Eng
 
 ## Acceptance log
 
-_(filled in at the end)_
+**Status: complete 2026-08-29** — Tasks 1–5 plus the final-review fix wave (F1–F6, M7–M10, M13–M14; see `.superpowers/sdd/2026-08-29-phase-3-launcher-and-hardening/final-fix-wave-report.md`).
+
+### Automated evidence
+
+- `npm test` — **337 passed, 7 skipped (344), 44 files** on the fix-wave branch (`326 passed / 333` at Task 5 exit, cff0f8c). `npm run lint` (Biome, 116 files) and `npm run typecheck` (tsc, no emit) both clean.
+- Launcher coverage — `tests/cli/launcher.test.ts`, **13 tests**: bash syntax (`bash -n`), the executable bit, an end-to-end `bash ./brainstem help` that reaches the real CLI and prints the catalog, the missing-node path, the CRLF/entrypoint shape of `brainstem.cmd`, five cases for the shared dependency-staleness one-liner, and three structural assertions on the install branch (no `--omit=dev` over a dev install, no `--silent`, README documents `BRAINSTEM_SKIP_INSTALL`). The install branch is asserted on the script *text*, not executed: running it would `npm ci` over the suite's own `node_modules` mid-run.
+- CI on cff0f8c (run [33274064468](https://github.com/vaneavasco/brainstem-mcp/actions/runs/33274064468)): `verify` **success**, `docker-smoke` **success** — the Task 5 job that builds the image, brings the Compose stack up and runs `scripts/docker-smoke.sh` against it.
+- Manual, on Linux: `./brainstem help`, `./brainstem help secret` (subcommand list intact after the built-in list was hidden), `./brainstem status` / `./brainstem secret show` with no `.env` (both now print ``.env not found — run `./brainstem setup` first``).
+
+### Owner-run, still pending
+
+These need machines this session does not have; none of them is covered by any test:
+
+- [ ] **Windows**: `.\brainstem start` end to end on a real Windows box, and specifically `.\brainstem update` — the `shell: true` + quoted-`process.execPath` spawn path (F1) and the `if exist node_modules\.bin\vitest` branch in `brainstem.cmd` (F4) have never executed under cmd.exe.
+- [ ] **macOS**: `./brainstem start` on a mac — the launcher avoids `readlink -f` for BSD's sake, but that is argued, not observed.
+- [ ] **First run on a clean clone**: `git clone && cd && ./brainstem start` with no `node_modules` at all, so the install branch (now `npm ci --omit=dev … --loglevel=error`) runs for real, followed by setup's prompts and a healthy stack.
+
+### Fix-later (carried forward, none blocking)
+
+- **The launcher's negative-PATH test passes by accident.** `tests/cli/launcher.test.ts` sets `PATH=/nonexistent` and asserts "Node.js 24 is required" — but `spawn` is given the launcher's own directory-relative path, and the message it gets comes from `command -v node` failing, which would also happen for reasons the test does not distinguish. It proves the branch is reachable, not that it is reached for the right reason.
+- **The launcher test needs a `docker` binary on PATH** to get past the prerequisite check and reach the delegation assertion; on a machine without Docker it fails for an unrelated reason instead of skipping.
+- **Non-TTY `start` cannot choose a tunnel mode.** `--tunnel-token`/`--public-url` select `cloudflare`, but there is no `--tunnel-mode` flag, so `quick` and `none` are unreachable without a TTY — CI and container-driven first runs have no way to ask for them.
+- **`.gitattributes` normalization**: `* text=auto` and `*.sh text eol=lf` were added in the fix wave alongside the two existing per-launcher rules; a checkout made before that on a CRLF-defaulting Windows client can still hold `scripts/docker-smoke.sh` with CRLF endings (`git add --renormalize .` fixes such a clone).

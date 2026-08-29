@@ -208,13 +208,15 @@ export function buildProgram(
         await runAction(() =>
           runStart({
             print,
-            doctor: () =>
+            doctor: async ({ prerequisitesOnly }) =>
               runDoctor({
                 probe: createSystemProbe(),
-                env: null,
+                // The full run needs `.env`; the prerequisites-only run is the
+                // one that happens because there isn't one yet.
+                env: prerequisitesOnly ? null : await loadEnvMapOrNull(repoDir),
                 vaultCtx: createVaultCtx(repoDir),
                 print,
-                prerequisitesOnly: true,
+                prerequisitesOnly,
               }),
             hasEnv: async () => (await loadEnvMapOrNull(repoDir)) !== null,
             setup: () =>
@@ -428,6 +430,16 @@ export function buildProgram(
         });
       });
     });
+
+  // The grouped catalog appended by `addHelpText('after', …)` is the command
+  // list; commander's built-in "Commands:" block printed the same eleven names
+  // and summaries directly above it, so `--help` listed everything twice.
+  // Hiding it here — AFTER every `.command()` call — matters: commander copies
+  // the help configuration into each subcommand as it is created, so doing this
+  // earlier would blank out `brainstem help secret`'s show/rotate list too.
+  // `help <command>` is unaffected either way: it resolves through
+  // `_findCommand`, not through `visibleCommands`.
+  program.configureHelp({ visibleCommands: () => [] });
 
   return program;
 }

@@ -153,9 +153,16 @@ describe('resource server', () => {
     // The unauthenticated bucket (20 / 5 per s) sits BEFORE the bearer gate, so a
     // flood of anonymous POSTs is capped there and can't touch the main 60/60
     // bucket, which now sits behind the gate.
-    const unauth = await Promise.all(Array.from({ length: 25 }, () => rpc({})));
+    //
+    // ORDERING CONSTRAINT: that bucket belongs to the app created once in
+    // `beforeAll`, so every unauthenticated request in this file — including the
+    // 401-challenge test above and the malformed-token test below — draws from
+    // the same 20 tokens, and it refills at 5/s of real wall-clock time while the
+    // suite runs. 40 requests (twice the capacity) rather than 25 keeps the
+    // assertion true no matter how much refill happened in between.
+    const unauth = await Promise.all(Array.from({ length: 40 }, () => rpc({})));
     const statuses = unauth.map((r) => r.status);
-    expect(statuses).toContain(429);
+    expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
     expect(statuses.filter((s) => s === 401).length).toBeGreaterThan(0);
     expect(statuses.every((s) => s === 401 || s === 429)).toBe(true);
 
@@ -164,6 +171,20 @@ describe('resource server', () => {
       Array.from({ length: 25 }, () => rpc({ authorization: `Bearer ${token}` })),
     );
     expect(authed.map((r) => r.status)).toEqual(Array.from({ length: 25 }, () => 200));
+  });
+
+  it('counts a bogus Authorization header as unauthenticated, not as a free pass', async () => {
+    // Any `Authorization` header at all used to skip the unauth bucket, so
+    // `Authorization: Bearer nope` on every request walked straight past it and
+    // drained the owner's 60/60 bucket instead — the exact flood the small bucket
+    // exists to stop. Only a well-formed 32-byte base64url token bypasses it now.
+    // (Shares the bucket with the burst above — see its ordering note.)
+    const flood = await Promise.all(
+      Array.from({ length: 25 }, () => rpc({ authorization: 'Bearer nope' })),
+    );
+    const statuses = flood.map((r) => r.status);
+    expect(statuses).toContain(429);
+    expect(statuses.every((s) => s === 401 || s === 429)).toBe(true);
   });
 
   it('stamps lastUsedAt on use', async () => {
