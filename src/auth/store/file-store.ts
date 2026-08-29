@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -284,7 +285,10 @@ function parseDoc(filePath: string, text: string): Doc {
 }
 
 async function writeAtomic(filePath: string, doc: Doc): Promise<void> {
-  const tmp = `${filePath}.tmp`;
+  // Unique per write (pid + random suffix) so two FileTokenStore instances on
+  // the same file — the running server and, e.g., a future `revoke-all` CLI —
+  // can't race each other's rename with a shared `<file>.tmp` name.
+  const tmp = `${filePath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   await fs.writeFile(tmp, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
   await fs.rename(tmp, filePath);
 }

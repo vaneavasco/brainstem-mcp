@@ -169,6 +169,21 @@ describe('/mcp with a 2025-era (legacy) client', () => {
     const del = await fetch(`${baseUrl}/mcp`, { method: 'DELETE' });
     expect(del.status).toBe(401);
   });
+
+  it('answers legacy GET (standalone SSE) and DELETE with 405 once authenticated', async () => {
+    // With a valid bearer, the request reaches the transport itself, which
+    // still rejects a standalone GET/DELETE as legacy-unsupported (405) —
+    // this is the behavior the pre-auth test above used to cover.
+    const get = await fetch(`${baseUrl}/mcp`, {
+      headers: { accept: 'text/event-stream', authorization: `Bearer ${token}` },
+    });
+    expect(get.status).toBe(405);
+    const del = await fetch(`${baseUrl}/mcp`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(del.status).toBe(405);
+  });
 });
 
 describe('error shaping', () => {

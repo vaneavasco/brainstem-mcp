@@ -34,7 +34,7 @@ export function createAuth(
   return {
     store,
     now,
-    verifier: createTokenVerifier(store, config.mcpUrl, now),
+    verifier: createTokenVerifier(store, config.mcpUrl, now, logger),
     ownerAuth: createOwnerAuth(config.ownerSecret, { now }),
     cimd:
       over.cimd ??
@@ -52,7 +52,10 @@ export function createRateLimiter(opts: {
   let last = opts.now();
   return (_req, res, next) => {
     const t = opts.now();
-    tokens = Math.min(opts.capacity, tokens + ((t - last) / 1000) * opts.refillPerSec);
+    // Guard a backwards clock (system clock adjustment, a stubbed `now` in
+    // tests) so it can never look like a huge elapsed interval and hand out
+    // a burst of free tokens.
+    tokens = Math.min(opts.capacity, tokens + (Math.max(0, t - last) / 1000) * opts.refillPerSec);
     last = t;
     if (tokens < 1) {
       res.setHeader('Retry-After', '1');
