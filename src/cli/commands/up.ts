@@ -26,7 +26,7 @@ export function upSummary(h: HealthInfo, opts: { secretHint: string }): string[]
   if (h.tunnelMode === 'quick') {
     lines.push(
       'Note: this URL changes on every restart — see _brainstem/connection.md in your vault; ' +
-        'for a stable URL run: npm run setup -- --tunnel-token <token> --public-url https://<host>',
+        'for a stable URL run: ./brainstem setup --tunnel-token <token> --public-url https://<host>',
     );
   } else if (h.tunnelMode === 'cloudflare') {
     lines.push('URL is stable (Cloudflare named tunnel)');
@@ -93,7 +93,7 @@ export async function runUp(args: { build?: boolean }, deps: UpDeps): Promise<nu
   }
 
   for (const line of upSummary(health, {
-    secretHint: 'in .env (npm run brainstem -- secret show)',
+    secretHint: 'in .env (./brainstem secret show)',
   })) {
     deps.print(line);
   }

@@ -112,6 +112,41 @@ describe('brainstem.cmd launcher (batch)', () => {
   });
 });
 
+/**
+ * Structural assertions on the launcher *text*: actually exercising the install
+ * branch would run `npm ci` mid-suite and rewrite this very `node_modules`, so
+ * both launchers are read rather than run. Keep the two scripts in agreement —
+ * whatever is asserted here has to hold for `brainstem` and `brainstem.cmd`.
+ */
+describe('launcher dependency install', () => {
+  const launchers = ['brainstem', 'brainstem.cmd'];
+
+  it('keeps a developer install intact: `npm ci` without --omit=dev when vitest is present', async () => {
+    for (const name of launchers) {
+      const raw = await fs.readFile(path.join(repoRoot, name), 'utf8');
+      // A dev checkout is detected by node_modules/.bin/vitest: `npm ci --omit=dev`
+      // there would silently delete every devDependency out from under the owner.
+      expect(raw, name).toMatch(/\.bin[\\/]vitest/);
+      expect(raw, name).toMatch(/npm ci --no-audit --no-fund/);
+      expect(raw, name).toMatch(/npm ci --omit=dev/);
+    }
+  });
+
+  it('does not hide install failures behind --silent', async () => {
+    for (const name of launchers) {
+      const raw = await fs.readFile(path.join(repoRoot, name), 'utf8');
+      expect(raw, name).not.toContain('--silent');
+      expect(raw, name).toContain('--loglevel=error');
+    }
+  });
+
+  it('documents BRAINSTEM_SKIP_INSTALL and the dev-install behaviour in the README', async () => {
+    const readme = await fs.readFile(path.join(repoRoot, 'README.md'), 'utf8');
+    expect(readme).toContain('BRAINSTEM_SKIP_INSTALL');
+    expect(readme).toContain('--omit=dev');
+  });
+});
+
 describe('dependency-staleness check (node one-liner shared by both launchers)', () => {
   /**
    * Runs STALENESS_CHECK in a scratch directory laid out like the repo root

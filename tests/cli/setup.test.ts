@@ -135,6 +135,28 @@ describe('runSetup', () => {
     ).rejects.toThrow();
   });
 
+  it('ends with the `./brainstem up` next step, and suppresses it for printNext: false', async () => {
+    const files = new Map<string, string>([[path.join(CWD, '.env.example'), EXAMPLE]]);
+    const printed: string[] = [];
+    await runSetup(
+      { vault: '/home/u/Vault' },
+      deps(files, { confirm: [false], select: ['quick'] }, 'linux', printed),
+    );
+    // Every user-facing hint speaks the launcher's vocabulary, never `npm run`.
+    expect(printed.join('\n')).not.toContain('npm run');
+    expect(printed.at(-1)).toBe('Next: ./brainstem up');
+
+    // `start` runs setup and then goes straight on to `up`, so telling the user
+    // to run `./brainstem up` next would be wrong there.
+    const files2 = new Map<string, string>([[path.join(CWD, '.env.example'), EXAMPLE]]);
+    const printed2: string[] = [];
+    await runSetup(
+      { vault: '/home/u/Vault', printNext: false },
+      deps(files2, { confirm: [false], select: ['quick'] }, 'linux', printed2),
+    );
+    expect(printed2.some((l) => l.startsWith('Next:'))).toBe(false);
+  });
+
   it('does not overwrite an already-set value on a second run without --force', async () => {
     const files = new Map<string, string>([[path.join(CWD, '.env.example'), EXAMPLE]]);
     await runSetup(

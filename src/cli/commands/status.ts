@@ -50,7 +50,7 @@ export async function runStatus(deps: StatusDeps): Promise<number> {
 
   const vaultPath = deps.env.get('VAULT_PATH') ?? '';
   if (vaultPath === '') {
-    deps.print('Vault path: (not set — run npm run setup)');
+    deps.print('Vault path: (not set — run ./brainstem setup)');
   } else {
     const verdict = await validateVaultPath(vaultPath, deps.vaultCtx);
     deps.print(
@@ -64,7 +64,7 @@ export async function runStatus(deps: StatusDeps): Promise<number> {
   deps.print(
     health
       ? `Health: ok (publicUrl=${health.publicUrl}, notes=${health.notes})`
-      : 'Health: not running (npm run up)',
+      : 'Health: not running (./brainstem up)',
   );
 
   if (!(await deps.compose.available())) {

@@ -16,7 +16,7 @@ const REMOTE_TIMEOUT_MS = 10_000;
 export async function runUrl(deps: UrlDeps): Promise<number> {
   const local = await fetchHealth(`http://localhost:${deps.localPort}/health`, deps.fetchImpl);
   if (!local) {
-    deps.print('app is not running (npm run up)');
+    deps.print('app is not running (./brainstem up)');
     return 1;
   }
 

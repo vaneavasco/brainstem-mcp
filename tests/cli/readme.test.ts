@@ -37,6 +37,14 @@ describe('README ↔ catalog consistency', () => {
     expect(beforeDevelopers).not.toContain('npm install');
   });
 
+  it('tells Windows readers to swap `./brainstem` for `.\\brainstem`', async () => {
+    const readme = await readReadme();
+    // Every command in the README is written `./brainstem …`; without this one
+    // sentence a Windows reader has nothing that runs.
+    expect(readme).toContain('.\\brainstem start');
+    expect(readme).toMatch(/On Windows, replace `\.\/brainstem` with `\.\\brainstem`/);
+  });
+
   it('has a command table for every catalog group', async () => {
     const readme = await readReadme();
     for (const group of ['Everyday', 'Configuration', 'Maintenance']) {

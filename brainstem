@@ -2,7 +2,7 @@
 # brainstem — one-command launcher. All logic lives in src/cli/brainstem.ts; this only
 # makes sure node + docker exist and dependencies are installed, then delegates.
 # Set BRAINSTEM_SKIP_INSTALL=1 to skip the dependency-install step entirely (used by
-# the launcher test, so a stale-lockfile check never runs `npm ci --omit=dev` mid-suite).
+# the launcher test, so a stale-lockfile check never rewrites node_modules mid-suite).
 set -euo pipefail
 
 # Resolve the directory this script lives in. `readlink -f` is GNU-only (no `-f` on
@@ -32,7 +32,14 @@ fi
 if [ "${BRAINSTEM_SKIP_INSTALL:-}" != "1" ]; then
   if ! node -e "function s(p){try{return require('fs').statSync(p).mtimeMs}catch(e){return -1}};process.exit(Math.sign(s('package-lock.json')-s('node_modules/.package-lock.json'))===1?1:0)"; then
     echo "Installing dependencies…" >&2
-    npm ci --omit=dev --silent --no-audit --no-fund
+    # node_modules/.bin/vitest present ⇒ this is a developer checkout with
+    # devDependencies installed; `npm ci --omit=dev` would delete every one of
+    # them. Install the full tree there and the runtime-only tree everywhere else.
+    if [ -e node_modules/.bin/vitest ]; then
+      npm ci --no-audit --no-fund --loglevel=error
+    else
+      npm ci --omit=dev --no-audit --no-fund --loglevel=error
+    fi
   fi
 fi
 exec node src/cli/brainstem.ts "$@"

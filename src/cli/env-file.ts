@@ -1,5 +1,5 @@
 /**
- * Minimal `.env` reader/writer for `npm run setup`. Preserves comments, blank
+ * Minimal `.env` reader/writer for `./brainstem setup`. Preserves comments, blank
  * lines and key order so re-running setup on a hand-edited `.env` doesn't
  * clobber it; only touches the keys it's told to.
  */

@@ -35,6 +35,12 @@ export interface SetupArgs {
   publicUrl?: string;
   force?: boolean;
   showSecret?: boolean;
+  /**
+   * Print the closing `Next: ./brainstem up` line (default `true`). `start`
+   * passes `false`: it runs `up` itself the moment setup returns, so telling
+   * the user to run it is wrong there.
+   */
+  printNext?: boolean;
 }
 
 type TunnelMode = 'cloudflare' | 'quick' | 'none';
@@ -217,8 +223,8 @@ export async function runSetup(args: SetupArgs, deps: SetupDeps): Promise<void> 
   if (tunnel.mode === 'quick') {
     deps.io.print(
       'Note: the connector URL changes on every restart — see `_brainstem/connection.md` ' +
-        'in your vault; for a stable URL rerun `npm run setup -- --tunnel-token …`.',
+        'in your vault; for a stable URL rerun `./brainstem setup --tunnel-token …`.',
     );
   }
-  deps.io.print('Next: npm run up');
+  if (args.printNext !== false) deps.io.print('Next: ./brainstem up');
 }

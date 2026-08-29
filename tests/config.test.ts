@@ -45,7 +45,7 @@ describe('loadConfig', () => {
     expect(ce.missing).toEqual(['PUBLIC_URL']);
     expect(ce.message).toContain('PUBLIC_URL');
     expect(ce.message).not.toContain('8080');
-    expect(ce.message).toContain('npm run setup');
+    expect(ce.message).toContain('./brainstem setup');
   });
 
   it('rejects a non-https PUBLIC_URL unless explicitly allowed', () => {

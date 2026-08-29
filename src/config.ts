@@ -96,11 +96,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new ConfigError(
       missing,
       invalid,
-      missing.length > 0 ? 'run `npm run setup` to generate .env' : undefined,
+      missing.length > 0 ? 'run `./brainstem setup` to generate .env' : undefined,
     );
   }
   if (missing.length > 0) {
-    throw new ConfigError(missing, [], 'run `npm run setup` to generate .env');
+    throw new ConfigError(missing, [], 'run `./brainstem setup` to generate .env');
   }
 
   const publicUrl = new URL(parsed.data.PUBLIC_URL);
@@ -132,8 +132,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       [],
       ['OWNER_SECRET'],
       secretBytes === -1
-        ? 'OWNER_SECRET must be base64url (run `npm run setup`)'
-        : `OWNER_SECRET must decode to at least ${OWNER_SECRET_MIN_BYTES} bytes (run \`npm run setup\`)`,
+        ? 'OWNER_SECRET must be base64url (run `./brainstem setup`)'
+        : `OWNER_SECRET must decode to at least ${OWNER_SECRET_MIN_BYTES} bytes (run \`./brainstem setup\`)`,
     );
   }
 

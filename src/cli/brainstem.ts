@@ -116,7 +116,7 @@ async function loadEnvMapOrNull(repoDir: string): Promise<Map<string, string> | 
 async function loadEnvMap(repoDir: string): Promise<Map<string, string>> {
   const env = await loadEnvMapOrNull(repoDir);
   if (env === null) {
-    throw new Error('.env not found — run `npm run setup` first');
+    throw new Error('.env not found — run `./brainstem setup` first');
   }
   return env;
 }
@@ -129,7 +129,7 @@ function localPortOf(env: Map<string, string>): number {
 function stateFileOf(env: Map<string, string>): string {
   const vaultPath = env.get('VAULT_PATH') ?? '';
   if (vaultPath === '') {
-    throw new Error('VAULT_PATH is missing from .env — run npm run setup');
+    throw new Error('VAULT_PATH is missing from .env — run ./brainstem setup');
   }
   return path.join(vaultPath, RESERVED_DIR, 'state.json');
 }
@@ -219,7 +219,14 @@ export function buildProgram(
             hasEnv: async () => (await loadEnvMapOrNull(repoDir)) !== null,
             setup: () =>
               runSetup(
-                { vault: opts.vault, tunnelToken: opts.tunnelToken, publicUrl: opts.publicUrl },
+                {
+                  vault: opts.vault,
+                  tunnelToken: opts.tunnelToken,
+                  publicUrl: opts.publicUrl,
+                  // `start` continues straight into `up`; setup's own
+                  // "Next: ./brainstem up" would be a wrong instruction here.
+                  printNext: false,
+                },
                 buildSetupDeps(repoDir),
               ),
             up: async () => {

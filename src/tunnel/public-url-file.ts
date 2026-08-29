@@ -48,7 +48,7 @@ export async function waitForPublicUrl(
     const url = await readPublicUrl(file);
     if (url) return url;
     if (Date.now() - start >= opts.timeoutMs) {
-      throw new Error('tunnel did not come up — run `npm run logs tunnel`');
+      throw new Error('tunnel did not come up — run `./brainstem logs tunnel`');
     }
     await sleep(opts.intervalMs);
   }

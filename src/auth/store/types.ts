@@ -79,7 +79,7 @@ export class StoreCorruptError extends Error {
 
   constructor(filePath: string, reason: string) {
     super(
-      `Auth state file ${filePath} is unusable (${reason}). Fix it or run \`npm run revoke-all -- --reset\`.`,
+      `Auth state file ${filePath} is unusable (${reason}). Fix it or run \`./brainstem revoke-all --reset\`.`,
     );
     this.name = 'StoreCorruptError';
     this.filePath = filePath;

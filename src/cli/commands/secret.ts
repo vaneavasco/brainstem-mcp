@@ -10,7 +10,7 @@ export interface SecretShowDeps {
 export function runSecretShow(deps: SecretShowDeps): number {
   const secret = deps.env.get('OWNER_SECRET') ?? '';
   if (secret === '') {
-    deps.print('OWNER_SECRET is not set — run npm run setup');
+    deps.print('OWNER_SECRET is not set — run ./brainstem setup');
     return 1;
   }
   deps.print(secret);
@@ -53,6 +53,6 @@ export async function runSecretRotate(deps: SecretRotateDeps): Promise<number> {
     );
   }
 
-  deps.print('Restart the app to pick up the new secret: npm run up');
+  deps.print('Restart the app to pick up the new secret: ./brainstem up');
   return 0;
 }

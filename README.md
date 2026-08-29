@@ -18,7 +18,9 @@ cd brainstem-mcp
 ./brainstem start
 ```
 
-Windows: `brainstem start`
+Windows: `.\brainstem start`
+
+On Windows, replace `./brainstem` with `.\brainstem` in every command below.
 
 `start` checks your prerequisites and tells you exactly what to install if something is missing. On first run it asks for your Obsidian vault folder and whether you have a Cloudflare tunnel token (see *Stable URL* below — say no to get a quick tunnel instead). Then it starts the stack and prints your connector URL.
 
@@ -126,5 +128,13 @@ npm run dev                        # run the server directly, without Docker
 npm run brainstem -- <command>     # run the CLI without the launcher's checks
 npm run docker:smoke               # end-to-end smoke test against the Docker image
 ```
+
+The launcher reinstalls dependencies only when `package-lock.json` is newer than
+`node_modules/.package-lock.json`. It installs the runtime-only tree
+(`npm ci --omit=dev`), *except* when it finds `node_modules/.bin/vitest` — the
+mark of a developer checkout — in which case it runs a plain `npm ci` so your
+devDependencies survive. Set `BRAINSTEM_SKIP_INSTALL=1` to skip the install step
+altogether (the launcher tests do this, so a stale lockfile can never rewrite
+`node_modules` mid-suite).
 
 See `docs/` for the spec, ADRs and implementation plans.

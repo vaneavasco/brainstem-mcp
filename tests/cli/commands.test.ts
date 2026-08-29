@@ -447,6 +447,6 @@ describe('secret show/rotate', () => {
       'number',
     );
     expect(lines.join('\n')).not.toContain('new-secret-value');
-    expect(lines.join('\n')).toMatch(/npm run up/);
+    expect(lines.join('\n')).toMatch(/\.\/brainstem up/);
   });
 });
