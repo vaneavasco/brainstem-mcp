@@ -368,6 +368,7 @@ export function buildProgram(
       await runAction(() =>
         runUpdate({
           exec: createSystemProbe().exec,
+          cwd: repoDir,
           run: createProcessRunner(repoDir),
           print: (line) => console.log(line),
         }),

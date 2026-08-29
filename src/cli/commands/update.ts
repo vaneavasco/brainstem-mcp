@@ -2,6 +2,12 @@ import type { SystemProbe } from '../system.ts';
 
 export interface UpdateDeps {
   exec: SystemProbe['exec'];
+  /**
+   * The repo directory. Passed explicitly to every `git` call: the CLI can be
+   * invoked from anywhere (the `./brainstem` launcher, an npm script run in a
+   * subdirectory), and a `git pull` in the wrong tree is worse than no update.
+   */
+  cwd: string;
   /** Inherit-stdio process runner, no shell, run in the repo directory. */
   run(cmd: string, args: string[]): Promise<number>;
   print(line: string): void;
@@ -9,8 +15,8 @@ export interface UpdateDeps {
 
 const PULL_CONFLICT_MESSAGE = 'local changes or diverged history — run git status';
 
-async function shortHead(exec: SystemProbe['exec']): Promise<string> {
-  const result = await exec('git', ['rev-parse', '--short', 'HEAD']);
+async function shortHead(exec: SystemProbe['exec'], cwd: string): Promise<string> {
+  const result = await exec('git', ['rev-parse', '--short', 'HEAD'], { cwd });
   return result.stdout.trim();
 }
 
@@ -22,15 +28,15 @@ async function shortHead(exec: SystemProbe['exec']): Promise<string> {
  * or diverged history) stops before touching anything else.
  */
 export async function runUpdate(deps: UpdateDeps): Promise<number> {
-  const before = await shortHead(deps.exec);
+  const before = await shortHead(deps.exec, deps.cwd);
 
-  const pull = await deps.exec('git', ['pull', '--ff-only']);
+  const pull = await deps.exec('git', ['pull', '--ff-only'], { cwd: deps.cwd });
   if (pull.code !== 0) {
     deps.print(PULL_CONFLICT_MESSAGE);
     return 1;
   }
 
-  const after = await shortHead(deps.exec);
+  const after = await shortHead(deps.exec, deps.cwd);
   deps.print(before === after ? 'already up to date' : `updated ${before} → ${after}`);
 
   const installCode = await deps.run('npm', ['ci', '--omit=dev']);

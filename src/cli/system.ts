@@ -5,8 +5,15 @@ import net from 'node:net';
 export interface SystemProbe {
   /** `process.versions.node`, e.g. `'24.13.1'`. */
   nodeVersion(): string;
-  /** Runs `cmd` with `args` (no shell); never rejects — a missing binary resolves `{ code: 127 }`. */
-  exec(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
+  /**
+   * Runs `cmd` with `args` (no shell) — in `opts.cwd` when given, otherwise the
+   * process's own directory; never rejects: a missing binary resolves `{ code: 127 }`.
+   */
+  exec(
+    cmd: string,
+    args: string[],
+    opts?: { cwd?: string },
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
   /** Probes whether `port` can be bound on `127.0.0.1`. */
   portFree(port: number): Promise<boolean>;
   platform: NodeJS.Platform;
@@ -17,7 +24,7 @@ export function createSystemProbe(): SystemProbe {
   return {
     nodeVersion: () => process.versions.node,
     platform: process.platform,
-    exec(cmd, args) {
+    exec(cmd, args, opts) {
       return new Promise((resolve) => {
         let settled = false;
         let stdout = '';
@@ -27,7 +34,7 @@ export function createSystemProbe(): SystemProbe {
           settled = true;
           resolve(result);
         };
-        const child = spawn(cmd, args, { stdio: 'pipe', shell: false });
+        const child = spawn(cmd, args, { stdio: 'pipe', shell: false, cwd: opts?.cwd });
         child.stdout?.on('data', (chunk: Buffer) => {
           stdout += chunk.toString('utf8');
         });
