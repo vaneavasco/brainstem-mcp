@@ -1,0 +1,68 @@
+export interface ClientRecord {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  fetchedAt: number;
+  expiresAt: number;
+  negative?: true;
+}
+
+export interface PendingRecord {
+  id: string;
+  clientId: string;
+  clientName: string;
+  redirectUri: string;
+  codeChallenge: string;
+  resource: string;
+  scope: string;
+  state: string;
+  nonce: string;
+  expiresAt: number;
+}
+
+export interface CodeRecord {
+  pendingId: string;
+  expiresAt: number;
+  usedAt?: number;
+}
+
+export interface TokenRecord {
+  kind: 'access' | 'refresh';
+  familyId: string;
+  clientId: string;
+  clientName: string;
+  resource: string;
+  scope: string;
+  expiresAt: number;
+  rotatedAt?: number;
+  revokedAt?: number;
+  lastUsedAt?: number;
+}
+
+export interface TokenStore {
+  getClient(clientId: string): Promise<ClientRecord | undefined>;
+  putClient(rec: ClientRecord): Promise<void>;
+  putPending(rec: PendingRecord): Promise<void>;
+  getPending(id: string): Promise<PendingRecord | undefined>;
+  deletePending(id: string): Promise<void>;
+  putCode(hash: string, rec: CodeRecord): Promise<void>;
+  consumeCode(hash: string, now: number): Promise<CodeRecord | undefined>; // undefined if missing/used/expired; marks usedAt
+  putToken(hash: string, rec: TokenRecord): Promise<void>;
+  getToken(hash: string): Promise<TokenRecord | undefined>;
+  updateToken(hash: string, patch: Partial<TokenRecord>): Promise<void>;
+  revokeFamily(familyId: string, now: number): Promise<number>; // returns count revoked
+  revokeAll(now: number): Promise<number>;
+  sweepExpired(now: number): Promise<void>; // drops expired pending/codes/tokens/negative clients
+}
+
+export class StoreCorruptError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, reason: string) {
+    super(
+      `Auth state file ${filePath} is unusable (${reason}). Fix it or run \`npm run revoke-all -- --reset\`.`,
+    );
+    this.name = 'StoreCorruptError';
+    this.filePath = filePath;
+  }
+}
