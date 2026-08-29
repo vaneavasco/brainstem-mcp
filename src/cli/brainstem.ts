@@ -152,12 +152,29 @@ function summaryOf(name: string): string {
   return info.summary;
 }
 
-/** Inherit-stdio process runner (no shell) for `update`'s `npm ci` and its restart child. */
+/**
+ * Inherit-stdio process runner for `update`'s `npm ci` and its restart child.
+ *
+ * `shell: true` on Windows only: npm is `npm.cmd` there, and `CreateProcess`
+ * cannot run a `.cmd` directly (ENOENT/EINVAL), which made `update` a no-op on
+ * Windows. Every command and argument reaching this runner is a compile-time
+ * constant (`npm ci --omit=dev`, `<node> src/cli/brainstem.ts up --build`), so
+ * the shell adds no injection surface — but `process.execPath` routinely
+ * contains a space (`C:\Program Files\nodejs\node.exe`), which cmd.exe would
+ * split, so quote the command when it does.
+ */
 function createProcessRunner(cwd: string): (cmd: string, args: string[]) => Promise<number> {
+  const shell = process.platform === 'win32';
   return (cmd, args) =>
     new Promise((resolve) => {
-      const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: false });
-      child.on('error', () => resolve(1));
+      const command = shell && /\s/.test(cmd) ? `"${cmd}"` : cmd;
+      const child = spawn(command, args, { cwd, stdio: 'inherit', shell });
+      child.on('error', (err) => {
+        // Without this an unspawnable `npm`/`node` failed with an exit code and
+        // no explanation at all.
+        console.error(err.message);
+        resolve(1);
+      });
       child.on('close', (code) => resolve(code ?? 1));
     });
 }
