@@ -2311,4 +2311,18 @@ const healthOk = (publicUrl: string): typeof fetch => async () =>
 
 ## Acceptance log
 
-_(filled in during Task 16)_
+### Automated evidence (2026-08-28)
+
+- **Unit/integration suites: 283 tests passing, 38 test files** (`npm test`, 2026-08-28). Covers `owner.test.ts` (constant-time compare, lockout), `file-store.test.ts` (atomic write, reload-on-mtime, sweep, concurrent mutations), `cimd.test.ts` (host allowlist, SSRF guard, cache semantics, `client_id` mismatch), `oauth-authorize.test.ts` / `oauth-token.test.ts` (authorize validation matrix, consent nonce/deny/wrong-secret, code exchange + PKCE, refresh rotation, grace window, family revocation, `invalid_grant`, revoke), `oauth-rs.test.ts` (401 shape, PRM, audience mismatch, expired tokens), `verifier.test.ts`, `context.test.ts` (owner-only runtime resolution).
+- **End-to-end OAuth via the official SDK client** (`tests/auth/e2e.test.ts`) — the `@modelcontextprotocol` client with its OAuth provider completes the full authorize → consent → token → refresh flow against `createApp` (a local CIMD document served by the test) and then successfully calls `vault_list`.
+- **Docker smoke, including the 401 gate and `connection.md`** (`scripts/docker-smoke.sh`, Task 13) — against the real `compose.yaml` stack: unauthenticated `POST /mcp` returns 401; `tools/list` shows all 20 `vault_*` tools; `vault_write` → `vault_read` → `vault_search` round-trip lands a file on the bind-mounted vault; `_brainstem/connection.md` exists after boot.
+- **Quick tunnel came up live** with a real `*.trycloudflare.com` URL answering `/health` through the tunnel (Task 13, `TUNNEL_MODE=quick`, no token) — the supervisor's URL extraction and the app's `PUBLIC_URL_FILE` wait/watch were exercised against the actual `cloudflared` binary, not a mock.
+- **Tunnel image built with `cloudflared 2026.8.2`** (Task 12, `tunnel/Dockerfile`, `CLOUDFLARED_VERSION` build arg) — `cloudflared --version` runs as an image-build check.
+
+### Owner-run acceptance (pending)
+
+- [ ] (a) Claude Code connects via the tunnel URL (`claude mcp add --transport http brainstem <url>/mcp`, CIMD + loopback redirect) and lists the vault tools, with the owner secret typed once at the consent page.
+- [ ] (b) claude.ai web and the Claude mobile app both connect through the same tunnel URL and write a note that appears in the actual Obsidian vault.
+- [ ] (c) `docker compose restart tunnel` in quick mode rotates the URL: the app detects the change, restarts itself, `_brainstem/connection.md` is rewritten with the new URL, and reconnecting the client (per the note's instructions) works.
+- [ ] (d) `TUNNEL_MODE=cloudflare` with a real Cloudflare tunnel token: the URL survives `docker compose restart` (both services) unchanged, and previously issued tokens stay valid across the restart.
+- [ ] (e) `npm run setup` and `npm run up` on a Windows machine, followed by editing a note directly in Obsidian and reading it back through Claude — confirms `VAULT_WATCH_POLL_MS` polling picks up bind-mount changes that native inotify would miss on Docker Desktop.

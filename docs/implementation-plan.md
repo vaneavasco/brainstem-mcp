@@ -1,6 +1,6 @@
 # Implementation Plan: `brainstem-mcp` — Multi-Storage MCP Vault Server (TypeScript)
 
-**Status:** v1.2 — scope frozen 2026-08-27; protocol/auth/infra sections revised the same day after the 2026-readiness review (`docs/reviews/2026-08-27-plan-review.md`); §7 account/auth model corrected 2026-08-28 after a live consistency check against the MCP spec, Claude connector docs, Google OAuth docs and SDK v2 (`docs/reviews/2026-08-28-auth-consistency-review.md`)
+**Status:** v2.0 — re-scoped 2026-08-28 to single-user self-hosted (spec: `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md`). Supersedes v1.2 (scope frozen 2026-08-27, protocol/auth/infra revised after `docs/reviews/2026-08-27-plan-review.md`, §7 corrected after `docs/reviews/2026-08-28-auth-consistency-review.md`) — the v1.2 multi-tenant/Google/Drive product definition is preserved verbatim in §10 for the deferred path; resume from it (git history) if the goal changes.
 **Owner:** Vanea
 **Repo:** git@github.com:vaneavasco/brainstem-mcp.git
 **Executor:** Claude Code
@@ -17,21 +17,18 @@
 | HTTP framework | **Express 5.2.x** (latest 5.x; adapter peer range `^4.18 \|\| ^5.0`) | Owner decision (2026-08-27). Express 5 has async-error propagation and a Web-standard-ish router; the MCP Express adapter supplies `requireBearerAuth`, `mcpAuthMetadataRouter`, `hostHeaderValidation`. |
 | Validation | Zod **^4.2** (SDK peer dep) | v1's Zod 3 schemas are not auto-converted in v2. |
 | Runtime | **Node 24.x** (Active LTS; Heroku default), TypeScript strict (TS 6 needs the explicit type config the SDK README describes) | Node 22 is Maintenance LTS (EOL 2027-04); Node 26 becomes LTS Oct 2026 — revisit then. |
-| Hosting | **Deferred (2026-08-28):** the acceptance environment through Phase 1–3 is a local **Docker Compose** stack (app + Postgres 17, bind-mounted vault). Heroku (Basic dyno + `heroku-postgresql:essential-0`) stays the intended production target and its constraints (§8, §11) still shape the code. | Owner decision: make everything work locally first; Heroku provisioning happens when we decide to go public. |
+| Hosting | Local Docker Compose on the owner's machine + Cloudflare tunnel; Heroku dropped | Owner decision 2026-08-28: single-user self-hosted is the whole product now, not an interim acceptance environment — see `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md`. |
 | Clients that must work at DoD | claude.ai web, Claude mobile (iOS/Android), Claude Desktop, **Claude Code** (`claude mcp add --transport http`) | Same Anthropic auth infra for hosted surfaces; Claude Code is a native client with CIMD + loopback redirect (exercises a different AS code path). **Hosted surfaces can only reach a hostname with a public IPv4 A record** (Claude rejects private/loopback/CGNAT resolutions), so the claude.ai/mobile acceptance needs a public URL (tunnel with public DNS, or Heroku); Claude Code and MCP Inspector work against `http://localhost`. |
 
 ## 1. Product definition (frozen — do not relitigate during build)
 
-A remote MCP server, written in TypeScript/Node, that gives Claude (web, desktop, mobile, Claude Code) read/write access to a user's personal markdown vault. Key differences vs. the reference project:
+**Goal:** one person (the owner) uses Claude — claude.ai web, Claude mobile, Claude Desktop, Claude Code — to read and write their **existing Obsidian vault**, which lives on their own machine. The server runs entirely in Docker on that machine; claude.ai reaches it through a **Cloudflare tunnel**. Installation and configuration must be trivial on Linux and Windows (macOS incidentally): `git clone`, `npm install`, `npm run setup`, `npm run up`.
 
-1. **Multi-tenant.** Each user logs in with their own Google account. Strict tenant isolation.
-2. **Pluggable storage.** A `StorageAdapter` interface with two v1 implementations: `LocalFSAdapter` (dev/self-host) and `GoogleDriveAdapter` (production default). GitHub adapter is Phase 2 — design the interface for it, do not build it.
-3. **Personal vaults only (v1).** Each user's notes live in a folder in **their own** Google Drive. No shared/team vault in v1 (explicitly deferred; see §10).
-4. **Hosted on Heroku** (Basic dyno). Ephemeral filesystem is acceptable because production storage is remote. **The server is stateless per request** (MCP 2026-07-28 model): any dyno can serve any request; all in-memory structures are caches.
+Decisions taken 2026-08-28 (owner): single user only; owner authenticates with a generated secret kept in `.env` (no Google); **two tunnel modes** — a Cloudflare *named* tunnel when the owner has a `TUNNEL_TOKEN` (stable URL, recommended), otherwise a *quick* tunnel (random `*.trycloudflare.com` hostname per start, for trying it out); the vault is the real Obsidian folder, bind-mounted; **all server state lives inside the vault** (`_brainstem/`, a reserved folder) so a synced vault carries the state to any other machine; everything that runs, runs in Docker; the CLI is TypeScript (cross-platform), not bash, and not a web UI.
 
-Non-goals for v1: team/shared vaults, GitHub/Postgres storage backends, semantic search, any UI beyond OAuth/consent pages, MCP Apps, Tasks extension, Obsidian plugin compatibility beyond plain `.md` + YAML frontmatter + `.canvas` JSON.
+**Non-goals (deferred — see §10):** multi-tenancy, tenant isolation suites, per-tenant rate limits, audit table, `/account` page · Google as identity provider, encrypted refresh-token storage, re-auth handling · Google Drive adapter · Postgres, SQLite (a SQLite file must never live in a synced folder — WAL/SHM sidecars and mid-transaction copies corrupt it; if a large machine-local cache ever needs SQLite it goes outside the vault) · Dynamic Client Registration · Heroku · Tailscale Funnel / ngrok as alternative exposure modes (a third `TUNNEL_MODE` would be additive).
 
-Context (for the "why build" ADR): Google now ships an official Drive MCP server (`drivemcp.googleapis.com`, developer preview since 2026-05) and Anthropic's Google Drive connector gained write actions (2026-08). Neither offers vault semantics (path policy, frontmatter index, soft delete, daily notes, canvas). We are complementary, not competing.
+The code keeps the seams that make these additions instead of rewrites: `StorageAdapter`, `RuntimeResolver(ctx)`, a `TokenStore` interface, and an AS whose only user-specific piece is `OwnerAuth`. Full detail: `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md` §1–2.
 
 ## 2. Tech stack
 
@@ -174,53 +171,7 @@ Per-tenant in-memory index (Map keyed by userId, **byte-bounded LRU** — Basic 
 
 ## 7. Auth architecture (two OAuth planes — keep them cleanly separated)
 
-### Plane A — Claude ↔ our server (we are both Authorization Server and Resource Server)
-
-**Standards:** OAuth 2.1 (draft-13), RFC 8414 (AS metadata), **RFC 9728 (Protected Resource Metadata)**, **RFC 8707 (Resource Indicators)**, **RFC 9207 (`iss`)**, PKCE S256, **Client ID Metadata Documents** (primary), RFC 7591 DCR (deprecated fallback). Mirror the reference repo's fail-closed posture and auth-bypass regression tests.
-
-**Resource server (`/mcp`):**
-- Every request passes `requireBearerAuth` before any tool code. No token / invalid / expired ⇒ **HTTP 401** with
-  `WWW-Authenticate: Bearer resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp", scope="vault"`.
-  Claude only honors the challenge on a 401 — never return an auth failure as a tool error or on a 200.
-- **PRM** at `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-protected-resource` (`mcpAuthMetadataRouter`): `resource = "<PUBLIC_URL>/mcp"` (must equal the URL the user types into Claude, exactly), `authorization_servers = [PUBLIC_URL]`, `scopes_supported = ["vault"]`, `bearer_methods_supported = ["header"]`. Do **not** list `offline_access` here.
-- **Audience validation (RFC 8707):** each access token row stores `resource`; the verifier rejects tokens whose `resource ≠ "<PUBLIC_URL>/mcp"`. Tokens are opaque random strings (≥32 bytes), stored as SHA-256 hashes.
-- **Token passthrough is forbidden:** the Claude-issued token never leaves this process; the Google token is a separate credential (Plane B). Test it.
-- Transport hardening: validate `Origin` (403 on mismatch), Host header pinned to `PUBLIC_URL` host, `Mcp-Method`/`Mcp-Name`/`MCP-Protocol-Version` header↔body validation (400 / `-32020`) — provided by `createMcpHandler`; covered by `transport.test.ts`. `GET`/`DELETE` on `/mcp` only exist for legacy-era clients (SDK legacy mode).
-- Single scope `vault` in v1 (avoids step-up flows). Rate limit per tenant before tool dispatch (429 as tool error with retry hint).
-
-**Authorization server metadata** (`/.well-known/oauth-authorization-server`), all URLs built from `PUBLIC_URL`:
-`issuer`, `authorization_endpoint`, `token_endpoint`, `registration_endpoint` (DCR fallback), `scopes_supported: ["vault"]`, `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code","refresh_token"]`, `code_challenge_methods_supported: ["S256"]` (**mandatory** — clients refuse to proceed without it), `token_endpoint_auth_methods_supported: ["none"]`, **`client_id_metadata_document_supported: true`**, **`authorization_response_iss_parameter_supported: true`**. (Claude selects CIMD only when both `client_id_metadata_document_supported` and `"none"` are present; otherwise it falls back to DCR.)
-
-**Client registration — priority order:**
-1. **Pre-registered client** (optional): user/admin pastes a client_id (+secret) into claude.ai's custom-connector dialog; we allow creating such a client via an env-seeded row. Not required for v1 launch.
-2. **CIMD (primary):** `client_id` is an HTTPS URL with an explicit path (no credentials, fragment or dot-segments; an explicit port is significant). AS behavior: fetch the document (timeout 5 s, **max 5 KB** streamed, `Accept: application/json`, accept `application/json` or `application/*+json` only, **SSRF guard**: resolve DNS once, reject every RFC 6890 special-use range — loopback/private/link-local/CGNAT/cloud-metadata — reject non-HTTPS, **follow no redirects at all**, pin the resolved IP for the connection while verifying TLS against the original hostname); validate JSON, required fields `client_id`, `client_name`, `redirect_uris`; `client_id` in document must equal the URL string-for-string; cache with shared-cache semantics (`s-maxage` > `max-age` > `Expires`, conditional revalidation, `no-store`/`private` ⇒ don't cache; default 1 h, negative-cache 5 min). These rules are deliberately stricter than the spec's SHOULDs (borrowed from `@better-auth/cimd`'s validator, 2026-08); `redirect_uri` in the request must exactly match an entry — **except loopback (`http://localhost/...`, `http://127.0.0.1/...`) where the port is ignored** (RFC 8252 §7.3; Claude Code needs this). Optional `CIMD_ALLOWED_HOSTS` trust policy (default: allow all, log hostname).
-3. **DCR (deprecated fallback):** `/oauth/register` accepts `application/json`, honors `application_type`, issues public clients only (`token_endpoint_auth_method: none`), stores `client_name` + `redirect_uris`; **rate-limited per IP** (e.g., 10/min) and rows expire after 30 days unused. Kept only because Claude falls back to it.
-
-**Authorize (`GET /oauth/authorize`):** require `response_type=code`, `client_id`, `redirect_uri` (validated as above), `code_challenge` + `code_challenge_method=S256` (reject `plain` or missing), `resource` (must equal `<PUBLIC_URL>/mcp`; if absent, default to it and log — Claude always sends it), `scope ⊆ {vault}`, `state` (echoed). Persist a `oauth_pending` row (all params, 10-min expiry). Then:
-- **Consent screen — mandatory, no cookie shortcut** (confused-deputy rule for OAuth proxies with a static upstream client: spec MUST): shows `client_name`, the redirect **hostname** (extra warning if loopback-only), and "this client will read and write your SecondBrain vault". Approve ⇒ continue; Deny ⇒ redirect with `error=access_denied` + `state` + `iss`. **CSRF binding:** the consent `POST` carries `pending_id` plus a random `nonce` stored on the `oauth_pending` row (hidden field; optionally mirrored in a `__Host-` cookie scoped to the flow, 10 min); mismatch or replay ⇒ `400` and the pending row is burned. "No cookie shortcut" means consent is never *skipped* for a returning user — per-flow CSRF state is required, not forbidden.
-- **Plane B hand-off:** redirect to Google (see below) with `state = pending.id`.
-- **Callback completion:** on Google success, find-or-create user, store refresh token if returned, mint a single-use authorization code (**≤ 60 s**, bound to `client_id`, `redirect_uri`, `code_challenge`, `resource`, `scope`, `user_id`), redirect to `redirect_uri` with `code`, `state`, and **`iss=<PUBLIC_URL>`** (RFC 9207; also on error responses).
-
-**Token (`POST /oauth/token`, `application/x-www-form-urlencoded` only — a JSON-only body parser returns 415 and breaks Claude):**
-- `grant_type=authorization_code`: verify code unused/unexpired, `client_id` match, `redirect_uri` match, PKCE `code_verifier` (S256), `resource` match. Issue access token (**TTL 1 h**) + refresh token (TTL 90 days sliding, `family_id`). Response is JSON with `token_type: "Bearer"`, `expires_in`, `scope`.
-- `grant_type=refresh_token`: **rotate** (OAuth 2.1 MUST for public clients): issue new access + new refresh, mark old refresh as rotated with a **60 s grace window** for network races; reuse of a token outside the grace window ⇒ revoke the whole family. Dead/revoked/expired ⇒ `400 {"error":"invalid_grant"}` (RFC 6749 code — Claude keys re-auth on it).
-- No upstream (Google) calls inside `/token` — Claude waits ≤10 s (≤30 s for refresh).
-- `client_credentials` grant is NOT offered (Claude does not support M2M; reference repo's headless grant is not ported).
-
-### Plane B — our server ↔ Google (we are an OAuth client, Google is the IdP)
-- Google code flow via `google-auth-library` `OAuth2Client`: scopes `openid email https://www.googleapis.com/auth/drive.file`, `access_type=offline`, `include_granted_scopes=true`, `state=<pending.id>`, redirect `PUBLIC_URL/oauth/google/callback`. **Two-step prompt logic** (we do not know *which* Google account will log in before the callback, so "do we already hold a refresh token for this user" cannot be decided up front): step 1 redirects with `prompt=select_account` (no consent); at the callback we learn `sub` — if we hold a valid encrypted refresh token for that `sub`, or Google returned a fresh one, we are done; if we hold none **and** Google returned none (it only issues one on first consent), step 2 redirects again with `prompt=consent&login_hint=<sub>` and completes on that callback. Never send `prompt=consent` blindly: Google caps refresh tokens at **100 per Google Account per OAuth client** (oldest silently invalidated) and each consent mints a new one.
-- Verify the ID token (`verifyIdToken` → `sub`, `email`, `aud` = our Google client_id) instead of calling userinfo. Store profile (`google_sub`, `email`) + AES-256-GCM-encrypted refresh token.
-- Google access tokens refreshed on demand (in-memory per-tenant, ~55 min); on `invalid_grant` (revoked / 6-month inactivity) mark `users.reauth_required = true`, return a tool error explaining that the connector must be reconnected, **and revoke every Plane A token family of that user**. Reason: while the Plane A token is valid Claude never re-runs the OAuth flow, so without the revocation the user would have to find "disconnect" manually; with it, Claude's next refresh gets `invalid_grant`, it shows its own "Connect" prompt, and the reconnect goes consent → Google (step 2 above applies, no stored token) → new refresh token → flag cleared. The tool error is still returned once so the failure is visible in the conversation.
-- Google Cloud consent screen in **Production** with only non-sensitive scopes ⇒ no verification audit, no 7-day refresh-token expiry, no 100-test-user cap. Brand verification (logo) optional. Console facts (Google Auth Platform, since 2025-06): the **client secret is shown once at creation** (only the last 4 chars afterwards) — paste it into `.env` immediately; **OAuth clients unused for 6 months are auto-deleted** (30-day recovery) — irrelevant once real users exist, relevant for a long pause between Phase 2 and go-live.
-- Trust `email` only when the ID token has `email_verified: true`; the email is for display/audit, never for identity (a Google Account can change emails; `sub` never changes).
-
-### Account model (what an "account" is)
-- **Account = one Google identity (`sub`).** One `users` row per Google Account; a person with two Google accounts gets two independent tenants (v1 decision — no account linking).
-- Under an account: **grants per Claude client** (claude.ai web/mobile/Desktop share one hosted client; Claude Code is a separate CIMD client) = separate Plane A token families, revocable independently; **one** Google refresh token (Plane B); **one** vault (`vaults` row: Drive folder id or `VAULT_PATH/<userId>` on LocalFS).
-- **Lifecycle endpoints:** `POST /oauth/revoke` (RFC 7009, `revocation_endpoint` advertised in AS metadata; revokes the token's whole family) ships in Phase 2 — Claude is not documented to call it on "disconnect", but it is cheap and correct. Phase 4 adds a minimal **`/account` page** (Google login → list grants by `client_name` + last use, revoke a grant, **delete account**: revoke the Google refresh token at `https://oauth2.googleapis.com/revoke`, delete the user's rows; vault data is never deleted by the app — the Drive folder belongs to the user). Until then "delete my data" is a manual SQL + Google *Third-party access* revocation, documented in the README.
-
-### Data model (Postgres)
-`users(id, google_sub UNIQUE, email, email_verified bool, reauth_required bool, created_at)` · `google_tokens(user_id PK, refresh_token_enc, updated_at)` · `vaults(user_id PK, backend, root_ref, settings jsonb)` · `oauth_clients(client_id PK, kind 'prereg'|'dcr'|'cimd', client_name, redirect_uris jsonb, metadata jsonb, fetched_at, expires_at)` · `oauth_pending(id PK, client_id, redirect_uri, code_challenge, resource, scope, state, nonce, created_at, consented_at)` · `oauth_codes(code_hash PK, pending_id, user_id, expires_at, used_at)` · `oauth_tokens(token_hash PK, kind 'access'|'refresh', family_id, user_id, client_id, resource, scope, expires_at, rotated_at, revoked_at, last_used_at)` · `audit_events(id, user_id, ts, op, path, path_to, bytes_before, bytes_after, sha_before, sha_after, request_id, client_name, status, error)`.
+Superseded 2026-08-28 by the single-user redesign: the server is now solely an OAuth 2.1 Authorization Server + Resource Server towards Claude, gated by an owner secret instead of a second OAuth plane to Google — there is no Plane B in this scope, and no Postgres-backed account/data model. Full component-level detail (resource server, authorization server, owner authentication, token store, request context, config, tunnel modes, `_brainstem/` state layout, CLI) lives in `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md` §4 (Components); the kept-vs-cut security posture (what carries over from this section unchanged, e.g. PKCE S256, CIMD + SSRF guard, refresh rotation, consent CSRF binding, `iss`, and what is cut because there is only one user, e.g. tenant isolation, audit table, Plane B) is in its §7 (Security). The two-plane (Claude + Google) design this section originally described — Plane A/B split, account model, Postgres schema — is not reproduced here; resume its full detail from plan v1.2 in git history (§10 keeps the old Phase 2/3/4 milestone text verbatim as a starting point) if the multi-user goal comes back.
 
 ## 8. Security requirements (release-blocking checklist)
 
@@ -244,14 +195,15 @@ Per-tenant in-memory index (Map keyed by userId, **byte-bounded LRU** — Basic 
 **Phase 1 — Core tools on LocalFS (2.5d):** path-policy, LocalFSAdapter (atomic temp+rename writes, chokidar watch, ripgrep argv with JS fallback), frontmatter index, all **20** tools registered with annotations + outputSchemas.
 *Accept:* full tool suite green against a temp vault; parity spot-check vs reference behavior (edit dry-run diffs, soft delete, daily notes, binary write, analytics).
 
-**Phase 2 — Auth (3.5d):** Plane A RS (PRM, 401 challenge, bearer verifier, audience), Plane A AS (metadata, CIMD fetcher + SSRF guard, DCR fallback, consent page with CSRF nonce, authorize, token with rotation, `/oauth/revoke`, `iss`), Plane B (Google IdP with the two-step prompt logic, encrypted token storage, reauth handling via Plane A family revocation), tenancy context/registry/rate limit, audit log.
-*Accept:* full connect flow completes from **Claude Code and MCP Inspector against the local Docker Compose stack**, then from **claude.ai web and Claude mobile** against a public URL (tunnel with public DNS, or Heroku) — Claude Code exercises CIMD + loopback, hosted surfaces exercise CIMD-or-DCR; `oauth-as`, `oauth-rs`, `cimd-ssrf`, `transport`, `tenant-isolation` suites green; refresh rotation observed in logs after 1 h.
+**Phase 2′ — Single-user auth (owner secret) + CLI + tunnel (~3 d; spec: `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md`):** reserved `_brainstem/` prefix in the path policy; owner-secret AS+RS (metadata, CIMD fetcher + SSRF guard, consent page with global lockout, authorize/token/revoke, refresh rotation); `FileTokenStore` (hashed OAuth state as JSON in the vault); Cloudflare tunnel image + TypeScript supervisor (named/quick modes, URL file, app self-restart on URL change); `_brainstem/connection.md` + `instance.json`; cross-platform TypeScript CLI (`setup`/`up`/`url`/`status`/`down`/`logs`/`revoke-all`/`secret`). Detailed plan: `docs/plans/2026-08-28-phase-2-single-user-auth-cli.md` (16 tasks).
+*Status:* **complete 2026-08-28** — all 16 tasks merged, 283 automated tests passing. Only the owner-run acceptance items remain open; see the "Acceptance log" at the bottom of the detailed plan.
+*Accept (automated, done):* `owner`, `file-store`, `cimd`, `oauth-authorize`, `oauth-token`, `oauth-rs`, `context`, `verifier` suites green; an end-to-end OAuth flow via the official MCP SDK client (`tests/auth/e2e.test.ts`) completes against `createApp` and calls `vault_list`; Docker smoke (`scripts/docker-smoke.sh`) passes, including the unauthenticated-401 gate and the `_brainstem/connection.md` write; a quick tunnel came up live with a real `trycloudflare.com` URL answering `/health`.
+*Accept (owner-run, pending):* Claude Code and claude.ai web/mobile connect through a real tunnel URL (CIMD + loopback, secret typed once) and a note written from Claude appears in Obsidian; `docker compose restart tunnel` rotates the quick-tunnel URL and the app reconnects cleanly with `connection.md` updated; a real Cloudflare named-tunnel token keeps a stable URL and valid tokens across restarts; a Windows run of `setup`/`up` with the polling watcher confirmed by editing a note in Obsidian and reading it through Claude.
 
-**Phase 3 — GoogleDriveAdapter (2.5d):** folder bootstrap, flat-listing path↔fileId map, all 20 tools green on Drive, appProperties, backoff, analytics caching.
-*Accept:* end-to-end on claude.ai mobile + web: login with Google → write note → read/search it → visible as `.md` in the user's own Drive folder; 10 rapid appends to a daily note do not create pinned revisions.
+**Phase 3′ — Hardening + README polish (0.5 d):** walk the §8 checklist items still relevant at single-user scope (limits, error taxonomy, no secrets/tokens/note-content in logs); finish this README and ADR 0005 (this document, Task 16); close out the "owner-run, pending" acceptance items above with dates in the Acceptance log.
+*Accept:* every "owner-run, pending" item above checked off with a date; README, ADR 0005 and this plan v2.0 merged.
 
-**Phase 4 — Hardening + onboarding (1.5d):** limits, error taxonomy, result-size windowing, logging (pino, no PII/secrets), README + 5-line user onboarding doc (connector URL + 3 example prompts), minimal `/account` page (grants, revoke, delete account — §7 account model), seed templates written to `00-inbox/README.md` on vault creation, §8 checklist walked item by item.
-*Accept:* 2 real users (Vanea + 1 colleague) connected in production from phones; security checklist §8 fully checked.
+Phase 2 (multi-user auth) and Phase 3 (GoogleDriveAdapter) as originally scoped, plus the Phase 4 (hardening + onboarding) that depended on them, are deferred — kept verbatim below in §10 for the multi-user product path.
 
 ## 10. Deferred (do not build in v1 — reopen only with demonstrated need)
 
@@ -264,27 +216,42 @@ Per-tenant in-memory index (Map keyed by userId, **byte-bounded LRU** — Basic 
 - Flipping SDK to `legacy: 'reject'` (2026-07-28-only) once all Claude surfaces negotiate the new revision.
 - MCP roadmap items (DPoP-bound tokens, agent identity, Streamable-HTTP-over-stdio) — track, don't build.
 
+### Deferred — multi-user product path (resume from plan v1.2 in git history if the goal changes)
+
+The milestone text below is the v1.2 plan's §9 as written before the 2026-08-28 re-scope, kept verbatim so resuming this path doesn't mean re-deriving it. It assumes the full multi-tenant/Google/Drive/Postgres/Heroku design in the old §1/§7 (git history: `docs/implementation-plan.md` at the `v1.2` state, or the `9b94d13` commit) — not the single-user design above.
+
+**Phase 2 — Auth (3.5d):** Plane A RS (PRM, 401 challenge, bearer verifier, audience), Plane A AS (metadata, CIMD fetcher + SSRF guard, DCR fallback, consent page with CSRF nonce, authorize, token with rotation, `/oauth/revoke`, `iss`), Plane B (Google IdP with the two-step prompt logic, encrypted token storage, reauth handling via Plane A family revocation), tenancy context/registry/rate limit, audit log.
+*Accept:* full connect flow completes from **Claude Code and MCP Inspector against the local Docker Compose stack**, then from **claude.ai web and Claude mobile** against a public URL (tunnel with public DNS, or Heroku) — Claude Code exercises CIMD + loopback, hosted surfaces exercise CIMD-or-DCR; `oauth-as`, `oauth-rs`, `cimd-ssrf`, `transport`, `tenant-isolation` suites green; refresh rotation observed in logs after 1 h.
+
+**Phase 3 — GoogleDriveAdapter (2.5d):** folder bootstrap, flat-listing path↔fileId map, all 20 tools green on Drive, appProperties, backoff, analytics caching.
+*Accept:* end-to-end on claude.ai mobile + web: login with Google → write note → read/search it → visible as `.md` in the user's own Drive folder; 10 rapid appends to a daily note do not create pinned revisions.
+
+**Phase 4 — Hardening + onboarding (1.5d):** limits, error taxonomy, result-size windowing, logging (pino, no PII/secrets), README + 5-line user onboarding doc (connector URL + 3 example prompts), minimal `/account` page (grants, revoke, delete account — old §7 account model), seed templates written to `00-inbox/README.md` on vault creation, §8 checklist walked item by item.
+*Accept:* 2 real users (Vanea + 1 colleague) connected in production from phones; security checklist §8 fully checked.
+
 ## 11. Environment variables
 
-| Var | Required | Notes |
-|---|---|---|
-| `PUBLIC_URL` | yes | e.g. `https://brainstem-mcp.herokuapp.com`; pins issuer, PRM `resource` (`PUBLIC_URL/mcp`), all advertised endpoints, `iss`. Never derive URLs from `Host`/`X-Forwarded-*`. For the claude.ai/mobile test it must resolve to a public IPv4 address (tunnel or Heroku); `http://localhost:3000` (with `ALLOW_INSECURE_PUBLIC_URL=true`) is enough for Claude Code and Inspector. |
-| `DATABASE_URL` | yes | Heroku Postgres essential-0 (pool max 5) |
-| `ENCRYPTION_KEY` | yes | 32-byte base64; fail-closed if missing/malformed |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | yes | OAuth client (Web application type). The secret is displayed once at creation — store it in `.env` right away; never paste it into chat or commits. |
-| `STORAGE_BACKEND` | no | `drive` (default) / `localfs` |
-| `VAULT_FOLDER_NAME` | no | default `SecondBrain` |
-| `VAULT_PATH` | localfs only | root dir for LocalFSAdapter |
-| `ACCESS_TOKEN_TTL_S` / `REFRESH_TOKEN_TTL_S` | no | defaults 3600 / 7776000 (90 d) |
-| `CIMD_ALLOWED_HOSTS` | no | optional comma-separated trust policy for CIMD `client_id` hosts; default allow-all with logging |
-| `DCR_ENABLED` | no | default `true` (Claude falls back to DCR when CIMD isn't selected); set `false` once CIMD is verified on all surfaces |
-| `AUDIT_INCLUDE_READS` | no | default `false` |
-| `MCP_LEGACY_MODE` | no | `stateless` (default; serves 2025-era clients) / `reject` |
-| `LOG_LEVEL` | no | default `info` |
+Every key is created by `npm run setup` in `.env` (from `.env.example`); most are filled automatically, and `setup` prompts only for the vault path and the tunnel choice. Hand-editing `.env` is only needed to override a default.
 
-Heroku: `app.set('trust proxy', 1)` only so Express knows the request was HTTPS (secure cookies) — never for URL construction. `server.keepAliveTimeout = 95_000` (router keeps connections 90 s). Express `engines.node: "24.x"`.
-
-Google Cloud setup (manual, before Phase 2): create project, enable Drive API, OAuth consent screen in **Production** with only `openid`, `email`, `drive.file` scopes, authorized redirects `PUBLIC_URL/oauth/google/callback` **and** `http://localhost:3000/oauth/google/callback` (Google exempts localhost from the HTTPS rule, so the real Google flow also works against the local Compose stack).
+| Var | Notes |
+|---|---|
+| `OWNER_SECRET` | Required. 32 random bytes, base64url — the password typed into the consent page. Generated by `setup`; show it with `npm run brainstem -- secret show`. |
+| `VAULT_PATH` | Required. Absolute path to your Obsidian vault; bind-mounted into the container at `/vault`. |
+| `TUNNEL_MODE` | `cloudflare` (stable URL, needs `TUNNEL_TOKEN` + `PUBLIC_URL`) \| `quick` (default; random URL each start) \| `none` (Claude Code / localhost only). |
+| `TUNNEL_TOKEN` | Cloudflare named-tunnel token; required only in `cloudflare` mode. Never printed by the CLI. |
+| `PUBLIC_URL` | The URL Claude connects to; pins the OAuth issuer, PRM `resource` and every advertised endpoint. Fixed hostname in `cloudflare` mode, `http://localhost:3000` in `none` mode; ignored in `quick` mode once `PUBLIC_URL_FILE` has content. |
+| `PUBLIC_URL_FILE` | Path the quick-tunnel supervisor writes the current URL to (default `/vault/_brainstem/public-url`); takes precedence over `PUBLIC_URL` when set. |
+| `ALLOW_INSECURE_PUBLIC_URL` | Allows a non-https `PUBLIC_URL` — only for `none` mode / localhost. |
+| `VAULT_TIMEZONE` | IANA timezone used to resolve "today" for daily notes; `setup` fills it from the host. |
+| `VAULT_WATCH_POLL_MS` | When set, chokidar polls the vault at this interval instead of native fs events — needed on Docker Desktop bind mounts (Windows/macOS), which don't propagate inotify; `setup` sets `2000` automatically on non-Linux hosts. |
+| `DAILY_NOTES_FOLDER` | Folder daily notes are stored under (default: vault root). |
+| `DAILY_NOTES_FORMAT` | `date-fns` format string for the daily-note filename (default `yyyy-MM-dd`). |
+| `PORT` | Local port the app listens on, and that `up`/`url`/`status` poll (default `3000`). |
+| `LOG_LEVEL` | pino log level (default `info`). |
+| `MCP_LEGACY_MODE` | `stateless` (default; also serves 2025-era MCP clients) \| `reject`. |
+| `CIMD_ALLOWED_HOSTS` | Allow-listed hostnames for Client ID Metadata Document discovery (default `claude.ai,claude.com`). |
+| `ACCESS_TOKEN_TTL_S` / `REFRESH_TOKEN_TTL_S` | OAuth token lifetimes in seconds (defaults `3600` / `7776000` — 90 days). |
+| `HOST_UID` / `HOST_GID` | Linux only. The container runs as this uid:gid so files it writes in the vault are owned by you, not root; `setup` fills these from the current user on Linux. |
 
 ## 12. Working agreements for Claude Code
 
@@ -301,8 +268,9 @@ Everything in this plan is implementable with released software today. Risks, in
 
 1. **SDK v2 is one month old** (2.0.0 published 2026-07-27). API churn and bugs are likely in Phase 0–1; mitigations: exact pins, weekly bumps, `legacy: 'stateless'` on, fallback path = `@modelcontextprotocol/sdk` 1.30 + `npx @modelcontextprotocol/codemod v1-to-v2` later. Express adapter peer range (`^4.18 || ^5.0`) covers Express 5.2.x.
 2. **Claude's 2026-07-28 support is still rolling out** (connector docs on 2026-08-28 still list only the 2025 revisions) — we cannot yet verify the modern era end-to-end against claude.ai; legacy mode makes this a non-blocker. Re-test when Anthropic announces GA.
-3. **CIMD selection by Claude is behavioral** (needs both metadata flags — confirmed verbatim in the connector docs on 2026-08-28) — verify on real claude.ai in Phase 2; DCR fallback stays on until then.
+3. **CIMD selection by Claude is behavioral** (needs both metadata flags — confirmed verbatim in the connector docs on 2026-08-28); the design offers CIMD only (no `registration_endpoint`, no DCR fallback — §4.2 of the tunnel-design spec). Verified in Phase 2′ via `cimd.test.ts` and the end-to-end OAuth test against the SDK client; still pending a live claude.ai/Claude-mobile connection (owner-run acceptance item).
    **Build-vs-delegate was re-checked on 2026-08-28** (`docs/reviews/2026-08-28-auth-consistency-review.md`): SDK v2 dropped its authorization-server helpers (only the RS half remains), hosted IdPs with CIMD + a Google token vault (WorkOS AuthKit+Pipes, Scalekit, Descope) all require an external SaaS even for local dev and move the user's Drive token to a vendor, and the self-hosted Better Auth MCP plugin pins `legacy: 'reject'` and leaves Google-token custody unverified. Decision: keep the self-built AS.
-4. **Heroku constraints** (20 DB connections, 512 MB, 55 s idle, 5 s default keep-alive) are all handled by explicit settings in §11; forgetting any one of them produces intermittent H13/H18/H15 errors that look like MCP bugs.
-5. **Google `drive.file`** hides files the app didn't create — accepted product limitation (§4).
-6. Timeline ~11 dev-days assumes one executor and no scope creep; Phase 2 is the long pole.
+4. **Quick tunnel URL rotation:** in `TUNNEL_MODE=quick`, the `*.trycloudflare.com` hostname changes on every restart (reboot, `docker compose restart`, crash), which invalidates the OAuth issuer for tokens issued under the old URL — Claude gets a 401 and the connector must be removed and re-added, since the URL is part of the connector's identity. Mitigation: the app watches `PUBLIC_URL_FILE` and restarts itself the moment the URL changes (rather than silently serving a stale issuer), `_brainstem/connection.md` always carries the current URL and reconnect steps into the (synced) vault, and `TUNNEL_MODE=cloudflare` with a real `TUNNEL_TOKEN` — the recommended default — makes the URL permanent.
+5. **Docker Desktop bind mounts do not propagate inotify** (Windows, macOS): chokidar's native filesystem events don't fire for edits made through a Docker Desktop bind mount, so notes edited directly in Obsidian would not be picked up by the live watch/index without a fix. Mitigation: `VAULT_WATCH_POLL_MS` switches chokidar to polling; `npm run setup` sets it to `2000` automatically on non-Linux hosts; the Windows acceptance item (§9) explicitly re-verifies this by editing a note in Obsidian and reading it back through Claude.
+6. **Google `drive.file`** hides files the app didn't create — accepted product limitation (§4), relevant only if the deferred Drive adapter (§10) is resumed.
+7. Timeline ~11 dev-days assumed one executor and no scope creep; Phase 2′ replaced the original (multi-user) Phase 2 as the long pole and closed at ~3 days per the tunnel-design spec's estimate.

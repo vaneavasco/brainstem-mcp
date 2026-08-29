@@ -1,62 +1,98 @@
 # brainstem-mcp
 
-Multi-tenant remote MCP server that gives Claude (web, mobile, Desktop, Claude Code) read/write access to a personal markdown vault stored in the user's own Google Drive (or a local folder for self-hosting).
+## What it is
 
-- Spec: `docs/implementation-plan.md` · Plans: `docs/plans/` · ADRs: `docs/adr/`
-- Protocol: MCP 2026-07-28 (2025-era clients served via legacy stateless mode)
-- Stack: Node 24, TypeScript, Express 5, `@modelcontextprotocol/server` 2.x, Postgres, Heroku
+A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claude mobile, Claude Desktop, Claude Code — read/write access to your own Obsidian vault. It runs entirely in Docker on your machine; a Cloudflare tunnel makes it reachable from those Claude surfaces without opening any ports yourself.
 
-## Develop
+## Requirements
+
+- Docker Desktop (Windows/macOS) or Docker Engine + Compose v2 (Linux)
+- Node.js 24.x
+- git
+
+## Install & run
 
 ```bash
-cp .env.example .env
+git clone https://github.com/vaneavasco/brainstem-mcp.git
+cd brainstem-mcp
 npm install
-npm run dev          # http://localhost:3000/mcp
-npm test             # vitest
-npm run typecheck && npm run lint
+npm run setup
+npm run up
 ```
 
-The `.env.example` defaults `STORAGE_BACKEND=localfs` with `VAULT_PATH=./vault-dev` so `npm run dev` runs against a local vault out of the box (the directory is created automatically and is gitignored). `STORAGE_BACKEND=drive` (Google Drive) lands in Phase 3; until then `main.ts` refuses to start with that backend.
+`npm run setup` creates `.env` and asks two things: the path to your Obsidian vault folder, and whether you have a Cloudflare tunnel token (see *Stable URL* below — say no to get a quick tunnel instead). It generates the owner secret for you. `npm run up` builds the image, starts the stack, waits for it to become healthy, and prints your connector URL.
 
-## Run with Docker (local acceptance environment)
+## Connect Claude
+
+**claude.ai (web or mobile):** Settings → Connectors → *Add custom connector* → paste `<your URL>/mcp` → Connect → type the owner secret → Approve.
+
+**Claude Code:**
 
 ```bash
-mkdir -p vault-dev
-npm run docker:up        # builds the image, starts app (:3000) + postgres (host :5433 → container 5432)
-npm run docker:smoke     # health, tools/list, write→read, file visible in ./vault-dev
-npm run docker:logs
-npm run docker:down
+claude mcp add --transport http brainstem <your URL>/mcp
 ```
 
-The vault is the bind-mounted `./vault-dev` folder — open it in Obsidian to see notes Claude writes. Postgres is idle until Phase 2 (auth). If your user is not uid/gid 1000, run `HOST_UID=$(id -u) HOST_GID=$(id -g) npm run docker:up` (or put those two lines in a `.env` file next to `compose.yaml`).
+then run `/mcp` and authenticate.
 
-## Tools
+The owner secret lives in `.env`. Show it any time with:
 
-Every tool is `vault_`-prefixed, ported name-for-name from the reference repo (`docs/implementation-plan.md` §5), plus a `brainstem_ping` health-check tool. All tools carry `title`, a description, and full annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint: false`).
+```bash
+npm run brainstem -- secret show
+```
 
-| Group | Tools | readOnly | destructive | idempotent |
-|---|---|---|---|---|
-| Read & search | `vault_read`, `vault_batch_read`, `vault_search`, `vault_search_frontmatter`, `vault_list`, `vault_canvas_read`, `vault_daily_note_path`, `vault_daily_note_read`, `vault_analytics_summary`, `vault_analytics_findings` | true | false | true |
-| Overwrite | `vault_write`, `vault_write_binary`, `vault_batch_frontmatter_update`, `vault_canvas_add_node`, `vault_canvas_add_edge` | false | true | true |
-| Append / partial edit | `vault_edit`, `vault_append`, `vault_daily_note_append` | false | false | false |
-| Move / delete | `vault_move`, `vault_delete` | false | true | false |
+## Stable URL (recommended)
 
-`vault_delete` only soft-deletes (moves to `.trash/`) and requires `confirm=true`. `vault_edit` applies ordered exact-text patches and supports `dryRun=true` for a unified-diff preview. See `tests/tools/surface.test.ts` for the full tool-surface contract (names, annotations, description-length bounds, deterministic `tools/list` ordering).
+A quick tunnel's URL changes every time the stack restarts (see below), so for anything beyond trying it out, get a Cloudflare *named* tunnel — free, no domain purchase required if you use a Cloudflare-provided hostname:
 
-## Environment variables
+1. Cloudflare dashboard → Zero Trust → Networks → Tunnels → create a tunnel, copy its token.
+2. Add a **Public Hostname** on that tunnel pointing to `http://app:3000`.
+3. Run:
+   ```bash
+   npm run setup -- --tunnel-token <token> --public-url https://<your-hostname>
+   npm run up
+   ```
 
-In addition to the Phase 0 vars (`PUBLIC_URL`, `ALLOW_INSECURE_PUBLIC_URL`, `PORT`, `LOG_LEVEL`, `MCP_LEGACY_MODE`, `DATABASE_URL`):
+The URL never changes again, and OAuth tokens survive restarts.
 
-| Var | Default | Notes |
-|---|---|---|
-| `STORAGE_BACKEND` | `drive` | `drive` \| `localfs`. `drive` is not implemented yet (Phase 3) — the server exits with an explanatory message. |
-| `VAULT_PATH` | — | Required when `STORAGE_BACKEND=localfs`; root directory for the local vault. |
-| `DAILY_NOTES_FOLDER` | `''` (vault root) | Folder daily notes are stored under. |
-| `DAILY_NOTES_FORMAT` | `yyyy-MM-dd` | `date-fns` format string (strftime-style `%Y-%m-%d` tokens are also accepted). |
-| `DAILY_NOTES_TEMPLATE` | unset | Optional template content used when a daily note is created via `vault_daily_note_append`. |
-| `VAULT_TIMEZONE` | `UTC` | IANA timezone used to resolve "today" for daily notes; validated with `Intl.DateTimeFormat` at startup. |
-| `REQUIRED_FRONTMATTER` | `''` | Comma-separated frontmatter keys checked by `vault_analytics_summary`/`_findings`. |
+## Quick tunnel caveat
 
-## Deploy (Heroku)
+Without a tunnel token, `setup` configures a quick tunnel: a random `*.trycloudflare.com` URL assigned on every start. Whenever the stack restarts (reboot, `docker compose restart`, a crash), the URL changes, existing tokens stop working (401), and **the connector must be removed and re-added** in claude.ai / Claude Code — the URL is part of the connector's identity, this can't be avoided.
 
-See `docs/plans/2026-08-28-phase-0-scaffold.md` Task 6. `PUBLIC_URL` must be the exact https origin users will paste into Claude. Heroku deploy for Phase 1 is deferred by owner decision (2026-08-28); the Phase 1 acceptance environment is the local Docker Compose stack (Task 16).
+`_brainstem/connection.md`, a note written inside your vault, always shows the current URL and the exact reconnect steps — and because it's in the vault, it syncs to your phone too. The app notices the URL change and restarts itself automatically; you don't need to do anything on the server side.
+
+## Vault sync notes
+
+The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the connection note, instance info) so that whatever syncs your vault also carries that state to another machine.
+
+- **Obsidian Sync:** enable *Sync all other types* in the sync settings — plain JSON files are not synced by default, and `_brainstem/state.json` needs to travel.
+- **Syncthing / git / Dropbox:** nothing to configure; they sync everything already.
+- Run brainstem-mcp on **one machine at a time**. Two instances writing to the same synced vault concurrently is unsupported (the app logs a warning if it detects another live instance, but doesn't prevent it).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm run setup [-- --vault <path> --tunnel-token <t> --public-url <u> --force --show-secret]` | Create or update `.env`: owner secret, vault path, tunnel mode |
+| `npm run up [-- --no-build]` | Start the stack and wait for it to become healthy; print the connector URL |
+| `npm run url` | Print the connector URL and check that it's reachable |
+| `npm run status` | Show vault, tunnel, health and container status |
+| `npm run down` | Stop the stack (state stays in the vault) |
+| `npm run logs [-- <service>]` | Follow container logs (`app` or `tunnel`; omit for both) |
+| `npm run revoke-all [-- --reset --yes]` | Revoke every OAuth token, forcing all clients to reconnect (`--reset` deletes the state file instead) |
+| `npm run brainstem -- secret show\|rotate` | Show, or generate a new, owner secret |
+
+## Security model
+
+- The owner secret gates the consent page for every new client; five wrong attempts lock it for 15 minutes.
+- OAuth tokens are stored only as SHA-256 hashes in `_brainstem/state.json`, so a synced copy of that file leaks nothing usable.
+- Every new client goes through a consent screen that shows the redirect hostname before granting access — no client is trusted silently.
+- Client discovery (Client ID Metadata Documents) is restricted to an allowlist (`claude.ai,claude.com` by default) and fetched with an SSRF-hardened client: no redirects, private/loopback addresses rejected, size and time capped.
+- `_brainstem/` is a reserved folder: every tool (list, search, read, write) refuses to touch it, so it's invisible to Claude.
+
+## Troubleshooting
+
+- **401 / "needs authentication" right after a restart, in quick-tunnel mode:** expected — the tunnel URL changed. Read `_brainstem/connection.md` in your vault for the new URL and reconnect the connector.
+- **"Docker is not running or not installed":** start Docker Desktop (or the Docker daemon on Linux) and rerun the command.
+- **Locked out of the consent page:** five wrong owner-secret attempts lock it for 15 minutes; check the correct value with `npm run brainstem -- secret show`.
+- **A client won't reconnect, or you rotated the secret:** `npm run revoke-all` forces every client to go through consent again.
+- **Something looks wrong in general:** `npm run logs` (or `npm run logs -- tunnel` / `npm run logs -- app`) to see what the containers are doing.
