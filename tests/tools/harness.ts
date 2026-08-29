@@ -13,6 +13,7 @@ import {
   type LocalRuntimeOptions,
   type VaultRuntime,
 } from '../../src/vault/runtime.ts';
+import { baseEnv } from '../helpers/env.ts';
 
 export interface Harness {
   client: Client;
@@ -29,7 +30,7 @@ export async function startHarness(overrides?: LocalRuntimeOptions['settings']):
     ripgrepPath: null,
     settings: overrides,
   });
-  const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
+  const config = loadConfig(baseEnv());
   const { app } = createApp(config, createLogger('fatal'), async () => runtime);
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));

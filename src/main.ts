@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel);
   if (config.storage.backend !== 'localfs') {
     logger.fatal(
-      'STORAGE_BACKEND=drive is implemented in Phase 3. Set STORAGE_BACKEND=localfs and VAULT_PATH for now.',
+      'only STORAGE_BACKEND=localfs is supported. Set STORAGE_BACKEND=localfs and VAULT_PATH.',
     );
     process.exit(1);
   }

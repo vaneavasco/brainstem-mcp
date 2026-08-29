@@ -10,8 +10,9 @@ import { createApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
 import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
+import { baseEnv } from './helpers/env.ts';
 
-const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
+const config = loadConfig(baseEnv());
 const logger = createLogger('fatal');
 
 let server: Server;
@@ -216,10 +217,7 @@ describe('transport hardening', () => {
 });
 
 describe('legacy mode reject', () => {
-  const rejectConfig = loadConfig({
-    PUBLIC_URL: 'https://brainstem.example.com',
-    MCP_LEGACY_MODE: 'reject',
-  });
+  const rejectConfig = loadConfig(baseEnv({ MCP_LEGACY_MODE: 'reject' }));
 
   let rejectServer: Server;
   let rejectBaseUrl: string;

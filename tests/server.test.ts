@@ -10,6 +10,7 @@ import { loadConfig } from '../src/config.ts';
 import { createLogger } from '../src/logger.ts';
 import { startServer } from '../src/server.ts';
 import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
+import { baseEnv } from './helpers/env.ts';
 
 let runtime: VaultRuntime;
 let vaultRoot: string;
@@ -26,7 +27,7 @@ afterEach(async () => {
 
 describe('startServer', () => {
   it('listens with Heroku-compatible keep-alive settings and closes cleanly', async () => {
-    const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
+    const config = loadConfig(baseEnv());
     const running = await startServer(config, createLogger('fatal'), async () => runtime, 0);
     try {
       const { port } = running.httpServer.address() as AddressInfo;
@@ -43,7 +44,7 @@ describe('startServer', () => {
   });
 
   it('closes promptly even when an idle keep-alive connection is open', async () => {
-    const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
+    const config = loadConfig(baseEnv());
     const running = await startServer(config, createLogger('fatal'), async () => runtime, 0);
     const { port } = running.httpServer.address() as AddressInfo;
     const agent = new http.Agent({ keepAlive: true });
@@ -65,7 +66,7 @@ describe('startServer', () => {
   });
 
   it('aborts a still-open exchange after the drain window', async () => {
-    const config = loadConfig({ PUBLIC_URL: 'https://brainstem.example.com' });
+    const config = loadConfig(baseEnv());
     const running = await startServer(config, createLogger('fatal'), async () => runtime, 0, {
       drainMs: 300,
     });

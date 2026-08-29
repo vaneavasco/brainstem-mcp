@@ -4,6 +4,7 @@ import { resolveDailyNotePath } from './vault/daily-notes.ts';
 
 export type LegacyMode = 'stateless' | 'reject';
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
+export type TunnelMode = 'cloudflare' | 'quick' | 'none';
 
 export type StorageConfig = { backend: 'localfs'; vaultPath: string } | { backend: 'drive' };
 
@@ -18,9 +19,23 @@ export interface Config {
   port: number;
   logLevel: LogLevel;
   legacyMode: LegacyMode;
-  databaseUrl: string | undefined;
+  ownerSecret: string;
+  cimdAllowedHosts: string[];
+  accessTokenTtlS: number;
+  refreshTokenTtlS: number;
+  watchPollMs: number | null;
+  publicUrlFile: string | null;
+  stateDir: string | null;
+  tunnelMode: TunnelMode;
   storage: StorageConfig;
   vaultSettings: VaultSettingsConfig;
+}
+
+export const OWNER_SECRET_MIN_BYTES = 32;
+
+export function decodeOwnerSecretBytes(s: string): number {
+  if (!/^[A-Za-z0-9_-]+$/.test(s)) return -1;
+  return Buffer.from(s, 'base64url').length;
 }
 
 export class ConfigError extends Error {
@@ -45,8 +60,19 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   MCP_LEGACY_MODE: z.enum(['stateless', 'reject']).default('stateless'),
-  DATABASE_URL: z.string().min(1).optional(),
-  STORAGE_BACKEND: z.enum(['drive', 'localfs']).default('drive'),
+  OWNER_SECRET: z.string().optional(),
+  CIMD_ALLOWED_HOSTS: z.string().default('claude.ai,claude.com'),
+  ACCESS_TOKEN_TTL_S: z.coerce.number().int().min(60).max(86_400).default(3600),
+  REFRESH_TOKEN_TTL_S: z.coerce
+    .number()
+    .int()
+    .min(3600)
+    .default(90 * 24 * 3600),
+  VAULT_WATCH_POLL_MS: z.coerce.number().int().min(250).max(60_000).optional(),
+  PUBLIC_URL_FILE: z.string().min(1).optional(),
+  STATE_DIR: z.string().min(1).optional(),
+  TUNNEL_MODE: z.enum(['cloudflare', 'quick', 'none']).default('none'),
+  STORAGE_BACKEND: z.enum(['drive', 'localfs']).default('localfs'),
   VAULT_PATH: z.string().min(1).optional(),
   DAILY_NOTES_FOLDER: z.string().default(''),
   DAILY_NOTES_FORMAT: z.string().min(1).default('yyyy-MM-dd'),
@@ -55,18 +81,27 @@ const EnvSchema = z.object({
   REQUIRED_FRONTMATTER: z.string().default(''),
 });
 
-const REQUIRED = ['PUBLIC_URL'] as const;
+const REQUIRED = ['PUBLIC_URL', 'OWNER_SECRET'] as const;
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
-  const missing = REQUIRED.filter((key) => !env[key] || env[key]?.trim() === '');
-  const parsed = EnvSchema.safeParse(env);
+  // .env templates ship empty keys (FOO=); treat an empty value as unset everywhere.
+  const cleaned = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== ''));
+
+  const missing = REQUIRED.filter((key) => !cleaned[key] || cleaned[key]?.trim() === '');
+  const parsed = EnvSchema.safeParse(cleaned);
   if (!parsed.success) {
     const invalid = [...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))].filter(
       (key) => !missing.includes(key as (typeof REQUIRED)[number]),
     );
-    throw new ConfigError(missing, invalid);
+    throw new ConfigError(
+      missing,
+      invalid,
+      missing.length > 0 ? 'run `npm run setup` to generate .env' : undefined,
+    );
   }
-  if (missing.length > 0) throw new ConfigError(missing, []);
+  if (missing.length > 0) {
+    throw new ConfigError(missing, [], 'run `npm run setup` to generate .env');
+  }
 
   const publicUrl = new URL(parsed.data.PUBLIC_URL);
   publicUrl.hash = '';
@@ -83,6 +118,29 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   mcpUrl.pathname = `${publicUrl.pathname === '/' ? '' : publicUrl.pathname}/mcp`;
 
   const d = parsed.data;
+
+  const secretBytes = decodeOwnerSecretBytes(d.OWNER_SECRET as string);
+  if (secretBytes < OWNER_SECRET_MIN_BYTES) {
+    throw new ConfigError(
+      [],
+      ['OWNER_SECRET'],
+      secretBytes === -1
+        ? 'OWNER_SECRET must be base64url (run `npm run setup`)'
+        : `OWNER_SECRET must decode to at least ${OWNER_SECRET_MIN_BYTES} bytes (run \`npm run setup\`)`,
+    );
+  }
+
+  const cimdAllowedHosts = d.CIMD_ALLOWED_HOSTS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (cimdAllowedHosts.some((h) => !/^[a-z0-9.-]+$/i.test(h))) {
+    throw new ConfigError(
+      [],
+      ['CIMD_ALLOWED_HOSTS'],
+      'CIMD_ALLOWED_HOSTS is a comma-separated list of hostnames',
+    );
+  }
+
   if (d.STORAGE_BACKEND === 'localfs' && !d.VAULT_PATH) {
     throw new ConfigError(
       ['VAULT_PATH'],
@@ -140,7 +198,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     port: parsed.data.PORT,
     logLevel: parsed.data.LOG_LEVEL,
     legacyMode: parsed.data.MCP_LEGACY_MODE,
-    databaseUrl: parsed.data.DATABASE_URL,
+    ownerSecret: d.OWNER_SECRET as string,
+    cimdAllowedHosts,
+    accessTokenTtlS: d.ACCESS_TOKEN_TTL_S,
+    refreshTokenTtlS: d.REFRESH_TOKEN_TTL_S,
+    watchPollMs: d.VAULT_WATCH_POLL_MS ?? null,
+    publicUrlFile: d.PUBLIC_URL_FILE ?? null,
+    stateDir: d.STATE_DIR ?? null,
+    tunnelMode: d.TUNNEL_MODE,
     storage,
     vaultSettings,
   };
