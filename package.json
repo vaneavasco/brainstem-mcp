@@ -19,6 +19,7 @@
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f app",
     "docker:smoke": "bash scripts/docker-smoke.sh",
+    "mcp:call": "node scripts/mcp-call.ts",
     "brainstem": "node src/cli/brainstem.ts",
     "setup": "node src/cli/brainstem.ts setup",
     "up": "node src/cli/brainstem.ts up",

@@ -8,4 +8,5 @@ coverage/
 .DS_Store
 .superpowers/
 vault-dev/
+.brainstem-dev-tokens.json
 .worktrees/
