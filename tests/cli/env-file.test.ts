@@ -58,7 +58,7 @@ describe('upsertEnv', () => {
   it('falls back to escaped double quotes when the value itself contains an apostrophe', () => {
     const value = "C:\\Users\\Ana's PC\\Obsidian Vault";
     const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: value });
-    expect(r.text).toBe('VAULT_PATH="C:\\\\Users\\\\Vanea\'s PC\\\\Obsidian Vault"\n');
+    expect(r.text).toBe('VAULT_PATH="C:\\\\Users\\\\Ana\'s PC\\\\Obsidian Vault"\n');
     expect(parseEnv(r.text).get('VAULT_PATH')).toBe(value);
   });
 
