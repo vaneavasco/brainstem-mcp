@@ -73,14 +73,22 @@ describe('daily note tools', () => {
       date: '2026-08-29',
       content: '- did a thing',
     });
-    expect(a.structuredContent).toEqual({ path: 'journal/2026-08-29.md', created: true });
+    expect(a.structuredContent).toEqual({
+      path: 'journal/2026-08-29.md',
+      created: true,
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     const r = await h.call('vault_daily_note_read', { date: '2026-08-29' });
     expect(text(r)).toBe('# 2026-08-29\n\n## Log\n- did a thing\n');
     const a2 = await h.call('vault_daily_note_append', {
       date: '2026-08-29',
       content: '- another',
     });
-    expect(a2.structuredContent).toEqual({ path: 'journal/2026-08-29.md', created: false });
+    expect(a2.structuredContent).toEqual({
+      path: 'journal/2026-08-29.md',
+      created: false,
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     const today = await h.call('vault_daily_note_path', {});
     expect((today.structuredContent as { date: string }).date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const bad = await h.call('vault_daily_note_path', { date: 'tomorrow' });

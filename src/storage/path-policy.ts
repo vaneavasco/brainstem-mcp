@@ -74,3 +74,18 @@ export function baseName(path: string): string {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? path : path.slice(idx + 1);
 }
+
+/**
+ * Best-effort normalization for contexts that must never throw — per-item error reporting
+ * (`batchRead`, `batchFrontmatterUpdate`) and lock-key derivation for a batch of possibly-invalid
+ * paths. Falls back to the raw input (stringified) when it doesn't even normalize, so an invalid
+ * path can still be reported or used as a (deliberately inert) lock key instead of aborting the
+ * whole call.
+ */
+export function normalizedOrRaw(input: unknown): string {
+  try {
+    return normalizeVaultPath(input);
+  } catch {
+    return String(input);
+  }
+}

@@ -120,6 +120,41 @@ describe('WriteGate', () => {
     gate1.resolve();
     await withTimeoutGuard(p1);
   });
+
+  it('prunes a path from its internal map once its lock chain is fully released', async () => {
+    const gate = new WriteGate();
+    expect(gate.pendingCount).toBe(0);
+    await withTimeoutGuard(gate.withLock(['solo'], async () => {}));
+    expect(gate.pendingCount).toBe(0);
+
+    // Multiple distinct keys, all released — none should linger.
+    await withTimeoutGuard(
+      Promise.all([
+        gate.withLock(['a'], async () => {}),
+        gate.withLock(['b', 'c'], async () => {}),
+      ]),
+    );
+    expect(gate.pendingCount).toBe(0);
+  });
+
+  it('keeps a path entry only while a later caller is still queued behind an earlier one', async () => {
+    const gate = new WriteGate();
+    const first = deferred<void>();
+
+    const p1 = gate.withLock(['q'], async () => {
+      await first.promise;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(gate.pendingCount).toBe(1); // the first holder's own chain entry
+
+    const p2 = gate.withLock(['q'], async () => {});
+    await new Promise((r) => setTimeout(r, 10));
+    expect(gate.pendingCount).toBe(1); // still one entry — the second caller's chained promise
+
+    first.resolve();
+    await withTimeoutGuard(Promise.all([p1, p2]));
+    expect(gate.pendingCount).toBe(0); // fully drained once both releases have run
+  });
 });
 
 describe('assertExpectedHash', () => {

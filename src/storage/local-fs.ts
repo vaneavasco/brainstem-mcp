@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -24,6 +24,7 @@ import {
 import {
   baseName,
   isMarkdownPath,
+  normalizedOrRaw,
   normalizeVaultPath,
   parentDir,
   RESERVED_DIR,
@@ -79,15 +80,6 @@ function isEnoent(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && (error as { code?: string }).code === 'ENOENT'
   );
-}
-
-/** Best-effort normalization for error reporting: falls back to the raw input when it doesn't even normalize. */
-function normalizedOrRaw(raw: unknown): string {
-  try {
-    return normalizeVaultPath(raw);
-  } catch {
-    return String(raw);
-  }
 }
 
 /** Windows a search match's line text so one very long line cannot blow the result-size cap. */
@@ -240,9 +232,11 @@ export class LocalFSAdapter implements StorageAdapter {
   }
 
   /**
-   * sha256hex of the file's decoded text (matching `Note.hash`), or `null` when the file does
-   * not exist, is a directory, or is not valid UTF-8 text (e.g. a binary attachment) — none of
-   * those have a comparable "content hash" in this model.
+   * sha256hex of the file's content, or `null` when it does not exist or is a directory —
+   * those are the only cases with no comparable "content hash". Text (valid UTF-8, matching
+   * `Note.hash`) is hashed as decoded text; content that fails to decode (e.g. a binary
+   * attachment written via vault_write_binary) is hashed over its raw bytes instead, so every
+   * existing file gets a real, round-trippable hash for expectedHash.
    */
   async hashOf(inputPath: string): Promise<string | null> {
     const p = requireFilePath(inputPath);
@@ -254,7 +248,7 @@ export class LocalFSAdapter implements StorageAdapter {
     try {
       return sha256hex(this.decodeText(p, bytes));
     } catch {
-      return null;
+      return createHash('sha256').update(bytes).digest('hex');
     }
   }
 

@@ -3,6 +3,14 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Harness, startHarness, text } from './harness.ts';
 
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 let h: Harness;
 
 beforeEach(async () => {
@@ -148,5 +156,77 @@ describe('vault_move / vault_delete', () => {
     expect(h.runtime.index.get('02-areas/health.md')).toBeUndefined();
     const gone = await h.call('vault_read', { path: '02-areas/health.md' });
     expect(text(gone)).toMatch(/NOT_FOUND/);
+  });
+
+  it('locks every path already inside a folder being moved, so a concurrent write to an existing file in it cannot race the rename', async () => {
+    await h.call('vault_write', { path: 'projF/plan.md', content: 'original\n' });
+    await h.call('vault_write', { path: 'projF/notes.md', content: 'notes\n' });
+
+    const events: string[] = [];
+    const gate = deferred<void>();
+    const originalMove = h.runtime.adapter.move.bind(h.runtime.adapter);
+    h.runtime.adapter.move = (async (...args: Parameters<typeof originalMove>) => {
+      events.push('move-start');
+      await gate.promise;
+      const result = await originalMove(...args);
+      events.push('move-end');
+      return result;
+    }) as typeof originalMove;
+
+    const movePromise = h.call('vault_move', { from: 'projF', to: 'projF2' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events).toEqual(['move-start']); // move is holding the lock, waiting on `gate`
+
+    const writePromise = h.call('vault_write', { path: 'projF/plan.md', content: 'concurrent\n' });
+    await new Promise((r) => setTimeout(r, 30));
+    // Must still be blocked: with the fix, vault_write shares the 'projF/plan.md' lock key with
+    // the folder move (before the fix, this key was disjoint from the move's [src, dst] lock and
+    // the write would have run immediately here).
+    expect(events).toEqual(['move-start']);
+
+    gate.resolve();
+    const [moveResult, writeResult] = await Promise.all([movePromise, writePromise]);
+    expect(events).toEqual(['move-start', 'move-end']);
+    expect(moveResult.isError).toBeFalsy();
+    expect(writeResult.isError).toBeFalsy();
+
+    // Fully serialized (the move ran to completion before the write, per the event order above):
+    // the original note ends up only at the destination, and the write created an independent
+    // new file at the now-vacated source path — the original content is never present twice.
+    expect(text(await h.call('vault_read', { path: 'projF2/plan.md' }))).toBe('original\n');
+    expect(text(await h.call('vault_read', { path: 'projF/plan.md' }))).toBe('concurrent\n');
+    expect(text(await h.call('vault_read', { path: 'projF2/notes.md' }))).toBe('notes\n');
+  });
+
+  it('locks every path already inside a folder being deleted, so a concurrent write cannot race the soft-delete', async () => {
+    await h.call('vault_write', { path: 'projG/plan.md', content: 'original\n' });
+
+    const events: string[] = [];
+    const gate = deferred<void>();
+    const originalSoftDelete = h.runtime.adapter.softDelete.bind(h.runtime.adapter);
+    h.runtime.adapter.softDelete = (async (...args: Parameters<typeof originalSoftDelete>) => {
+      events.push('delete-start');
+      await gate.promise;
+      const result = await originalSoftDelete(...args);
+      events.push('delete-end');
+      return result;
+    }) as typeof originalSoftDelete;
+
+    const deletePromise = h.call('vault_delete', { path: 'projG', confirm: true });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events).toEqual(['delete-start']);
+
+    const writePromise = h.call('vault_write', { path: 'projG/plan.md', content: 'concurrent\n' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events).toEqual(['delete-start']);
+
+    gate.resolve();
+    const [deleteResult, writeResult] = await Promise.all([deletePromise, writePromise]);
+    expect(events).toEqual(['delete-start', 'delete-end']);
+    expect(deleteResult.isError).toBeFalsy();
+    expect(writeResult.isError).toBeFalsy();
+
+    expect(await fs.readFile(path.join(h.root, '.trash/projG/plan.md'), 'utf8')).toBe('original\n');
+    expect(text(await h.call('vault_read', { path: 'projG/plan.md' }))).toBe('concurrent\n');
   });
 });

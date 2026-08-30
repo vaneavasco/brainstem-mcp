@@ -88,7 +88,7 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
       description:
         'Append text to the daily note for a date (default today), creating it from the configured template (default: frontmatter with type/date plus a title) when missing.',
       inputSchema: z.object({ content: z.string().min(1), date: DateArg }),
-      outputSchema: z.object({ path: z.string(), created: z.boolean() }),
+      outputSchema: z.object({ path: z.string(), created: z.boolean(), hash: z.string() }),
       annotations: APPEND_ONLY,
     },
     ({ content, date }) =>
@@ -109,8 +109,9 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
           }
           await adapter.append(path, content);
           await touch(tc, path);
+          const hash = (await adapter.read(path)).hash;
           return okJson(
-            { path, created },
+            { path, created, hash },
             `${created ? 'Created and appended to' : 'Appended to'} ${path}.`,
           );
         });

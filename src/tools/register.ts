@@ -27,11 +27,12 @@ export function locked<T>(tc: ToolContext, paths: string[], fn: () => Promise<T>
 /** Shared input schema fragment for every tool that supports optimistic concurrency. */
 export const ExpectedHashArg = z
   .string()
-  .length(64)
+  .regex(/^[0-9a-f]{64}$/, 'must be a lowercase 64-character hex sha256 hash')
   .optional()
   .describe(
-    'sha256 content hash from a previous read or write of this file. If the file changed ' +
-      'since, the call fails with CONFLICT instead of overwriting silently — re-read and retry.',
+    'sha256 content hash (lowercase hex) from a previous read or write of this file. If the ' +
+      'file changed since, the call fails with CONFLICT instead of overwriting silently — ' +
+      're-read and retry.',
   );
 
 export function registerVaultTools(server: McpServer, tc: ToolContext): void {

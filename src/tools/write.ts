@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { BINARY_MIME_ALLOWLIST, MAX_BATCH, MAX_FILE_BYTES } from '../storage/limits.ts';
-import { normalizeVaultPath } from '../storage/path-policy.ts';
+import { normalizedOrRaw, normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { assertExpectedHash } from '../storage/write-gate.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
@@ -71,7 +71,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         path: z.string(),
         bytes: z.number(),
         mimeType: z.string(),
-        hash: z.string().nullable(),
+        hash: z.string(),
       }),
       annotations: OVERWRITE,
     },
@@ -82,6 +82,9 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           const bytes = decodeBase64Strict(base64);
           await adapter.writeBinary(p, bytes, mimeType, { expectedHash });
           const hash = await adapter.hashOf(p);
+          // Unreachable in practice: we just wrote this exact file successfully, so it exists
+          // and hashOf only returns null for a missing path or a directory.
+          if (hash === null) throw new VaultError('IO', `Could not compute a hash for ${p}.`);
           return okJson(
             { path: p, bytes: bytes.byteLength, mimeType, hash },
             `Wrote ${p} (${bytes.byteLength} bytes, ${mimeType}).`,
@@ -236,7 +239,10 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     },
     ({ updates }) =>
       guarded(tc.log, async () => {
-        const paths = updates.map((u) => normalizeVaultPath(u.path));
+        // Non-throwing normalization: an invalid path (reserved, traversal, ...) must still
+        // land in adapter.batchFrontmatterUpdate's per-item failed[], not abort the whole
+        // batch by throwing while computing lock keys.
+        const paths = updates.map((u) => normalizedOrRaw(u.path));
         return locked(tc, paths, async () => {
           const result = await adapter.batchFrontmatterUpdate(updates);
           await touch(tc, ...result.updated);

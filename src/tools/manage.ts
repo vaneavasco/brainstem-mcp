@@ -9,6 +9,19 @@ import { guarded, okJson } from './results.ts';
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
   const { adapter, index } = tc.runtime;
 
+  /**
+   * Every indexed note or asset path nested under folder `prefix`. Used to expand a folder
+   * move/delete's lock set beyond the folder path itself, so a concurrent write to a file already
+   * inside the folder is serialized against the rename/delete instead of racing it (a disjoint
+   * lock key would otherwise let it interleave with the rename and potentially resurrect the
+   * folder, or silently lose the write).
+   */
+  function pathsUnder(prefix: string): string[] {
+    const under = (p: string): boolean => p.startsWith(`${prefix}/`);
+    const notePaths = index.all().map((entry) => entry.path);
+    return [...notePaths, ...index.assets()].filter(under);
+  }
+
   server.registerTool(
     'vault_list',
     {
@@ -68,10 +81,14 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
       guarded(tc.log, async () => {
         const src = normalizeVaultPath(from);
         const dst = normalizeVaultPath(to);
-        return locked(tc, [src, dst], async () => {
+        const isNote = index.get(src) !== undefined;
+        // A folder move must also lock everything currently known to live inside it — see
+        // pathsUnder's doc comment.
+        const lockPaths = isNote ? [src, dst] : [src, dst, ...pathsUnder(src)];
+        return locked(tc, lockPaths, async () => {
           await adapter.move(src, dst, { expectedHash });
           // Keep the index coherent for a single note or a whole folder.
-          if (index.get(src)) {
+          if (isNote) {
             index.rename(src, dst);
             await touch(tc, dst);
           } else {
@@ -105,7 +122,9 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     ({ path, confirm, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
-        return locked(tc, [p], async () => {
+        // A superset covering both cases: pathsUnder(p) is empty when p is a single file.
+        const lockPaths = [p, ...pathsUnder(p)];
+        return locked(tc, lockPaths, async () => {
           await adapter.softDelete(p, confirm, { expectedHash });
           if (isMarkdownPath(p)) index.remove(p);
           for (const entry of index.all())

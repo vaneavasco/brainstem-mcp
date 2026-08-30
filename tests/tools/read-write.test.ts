@@ -412,4 +412,77 @@ describe('expectedHash / CONFLICT', () => {
     });
     expect(edgeOk.isError).toBeFalsy();
   });
+
+  it('vault_write_binary hash is round-trippable through vault_move.expectedHash, even for real (non-UTF-8) binary content', async () => {
+    // A real PNG header — not valid UTF-8 text, unlike the tiny 4-byte buffers used elsewhere in
+    // this file, which exercises the "hash raw bytes, not decoded text" fallback in hashOf().
+    const pngBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    ]);
+    const written = await h.call('vault_write_binary', {
+      path: 'img/photo.png',
+      base64: pngBytes.toString('base64'),
+      mimeType: 'image/png',
+    });
+    expect(written.isError).toBeFalsy();
+    const h1 = (written.structuredContent as { hash: string }).hash;
+    expect(h1).toMatch(/^[0-9a-f]{64}$/);
+
+    const staleMove = await h.call('vault_move', {
+      from: 'img/photo.png',
+      to: 'img/photo2.png',
+      expectedHash: staleHash,
+    });
+    expectConflict(staleMove, h1);
+
+    const ok = await h.call('vault_move', {
+      from: 'img/photo.png',
+      to: 'img/photo2.png',
+      expectedHash: h1,
+    });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.structuredContent).toMatchObject({
+      from: 'img/photo.png',
+      to: 'img/photo2.png',
+      hash: h1,
+    });
+  });
+
+  it('vault_batch_frontmatter_update keeps updating valid items when another item has an invalid (reserved) path', async () => {
+    await h.call('vault_write', { path: 'valid.md', content: '---\na: 1\n---\nx\n' });
+    const r = await h.call('vault_batch_frontmatter_update', {
+      updates: [
+        { path: '_brainstem/x.md', set: { a: 2 } },
+        { path: 'valid.md', set: { a: 2 } },
+      ],
+    });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as {
+      updated: string[];
+      failed: { path: string; error: string }[];
+    };
+    expect(body.updated).toEqual(['valid.md']);
+    expect(body.failed).toHaveLength(1);
+    expect(body.failed[0]?.error).toMatch(/reserved/);
+    expect((await h.call('vault_read', { path: 'valid.md' })).structuredContent).toMatchObject({
+      frontmatter: { a: 2 },
+    });
+  });
+});
+
+describe('WriteGate (end-to-end, through the real harness)', () => {
+  it('two overlapping vault_append calls to the same file both land — no lost update', async () => {
+    await h.call('vault_write', { path: 'concurrent.md', content: 'start\n' });
+    const [r1, r2] = await Promise.all([
+      h.call('vault_append', { path: 'concurrent.md', content: 'line-A' }),
+      h.call('vault_append', { path: 'concurrent.md', content: 'line-B' }),
+    ]);
+    expect(r1.isError).toBeFalsy();
+    expect(r2.isError).toBeFalsy();
+    const lines = text(await h.call('vault_read', { path: 'concurrent.md' }))
+      .split('\n')
+      .filter((l) => l.length > 0);
+    expect(lines).toHaveLength(3);
+    expect(lines).toEqual(expect.arrayContaining(['start', 'line-A', 'line-B']));
+  });
 });

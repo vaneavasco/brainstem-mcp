@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -219,9 +220,14 @@ describe('LocalFSAdapter core', () => {
       expect(await vault.hashOf('a-folder')).toBeNull();
     });
 
-    it('returns null rather than throwing for content that is not valid UTF-8 text', async () => {
-      await fs.writeFile(path.join(root, 'bin.png'), Buffer.from([0xff, 0xfe, 0x00, 0x41]));
-      expect(await vault.hashOf('bin.png')).toBeNull();
+    it('hashes the raw bytes (not text-decoded, never null) for content that is not valid UTF-8', async () => {
+      const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x41]);
+      await fs.writeFile(path.join(root, 'bin.png'), bytes);
+      const hash = await vault.hashOf('bin.png');
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(hash).toBe(createHash('sha256').update(bytes).digest('hex'));
+      // ...and not the (meaningless) hash of the replacement-character decode of those bytes.
+      expect(hash).not.toBe(sha256hex(Buffer.from(bytes).toString('utf8')));
     });
   });
 

@@ -13,6 +13,11 @@ import { VaultError } from './types.ts';
 export class WriteGate {
   private readonly chains = new Map<string, Promise<void>>();
 
+  /** Number of paths with an in-flight or queued lock right now. Diagnostic / test hook only. */
+  get pendingCount(): number {
+    return this.chains.size;
+  }
+
   async withLock<T>(paths: readonly string[], fn: () => Promise<T>): Promise<T> {
     const sorted = [...new Set(paths)].sort();
     const releases: (() => void)[] = [];
@@ -33,15 +38,20 @@ export class WriteGate {
   /** Waits for the current holder of `p` (if any), then installs this call as the new holder. */
   private async acquire(p: string, releases: (() => void)[]): Promise<void> {
     const prior = this.chains.get(p) ?? Promise.resolve();
-    let release!: () => void;
+    let resolveHeld!: () => void;
     const held = new Promise<void>((resolve) => {
-      release = resolve;
+      resolveHeld = resolve;
     });
-    this.chains.set(
-      p,
-      prior.then(() => held),
-    );
-    releases.push(release);
+    const chained = prior.then(() => held);
+    this.chains.set(p, chained);
+    releases.push(() => {
+      resolveHeld();
+      // Nobody queued behind us since we started holding `p` — drop the finished chain instead
+      // of leaking a map entry for every path ever touched over the server's lifetime. If someone
+      // did queue behind us, `chains.get(p)` is now *their* chained promise, not this one, so this
+      // is a no-op and their entry is left alone.
+      if (this.chains.get(p) === chained) this.chains.delete(p);
+    });
     await prior;
   }
 }
