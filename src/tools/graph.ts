@@ -183,7 +183,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     'vault_links',
     {
       title: 'Note links',
-      description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) to also find plain-text mentions of the note's basename or aliases in notes that do not already link to it. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks, ${MAX_UNLINKED_MENTIONS} unlinked mentions.`,
+      description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) to also find plain-text mentions of the note's basename or aliases in notes that do not already link to it. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions.`,
       inputSchema: z.object({ path: PathArg, include: z.array(LinkInclude).optional() }),
       outputSchema: z.object({
         path: z.string(),
@@ -194,6 +194,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         truncated: z.object({
           outgoing: z.boolean(),
           backlinks: z.boolean(),
+          embeds: z.boolean(),
           unlinkedMentions: z.boolean(),
         }),
       }),
@@ -217,14 +218,16 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           : backlinksAll;
 
         const embedsAll = want.has('embeds') ? graph.embedsOf(p) : [];
+        const embedsTruncated = embedsAll.length > MAX_GRAPH_ITEMS;
+        const embedsCapped = embedsTruncated ? embedsAll.slice(0, MAX_GRAPH_ITEMS) : embedsAll;
 
         const contextFor = await contextByLine(adapter, [
           ...backlinksCapped.map((b) => ({ source: b.source, line: b.link.line })),
-          ...embedsAll.map((b) => ({ source: b.source, line: b.link.line })),
+          ...embedsCapped.map((b) => ({ source: b.source, line: b.link.line })),
         ]);
 
         const backlinks = backlinksCapped.map((b) => toContextHit(b, contextFor));
-        const embeds = embedsAll.map((b) => toContextHit(b, contextFor));
+        const embeds = embedsCapped.map((b) => toContextHit(b, contextFor));
 
         let unlinkedMentions: { path: string; line: number; context: string }[] = [];
         let unlinkedTruncated = false;
@@ -244,6 +247,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           truncated: {
             outgoing: outgoingTruncated,
             backlinks: backlinksTruncated,
+            embeds: embedsTruncated,
             unlinkedMentions: unlinkedTruncated,
           },
         });

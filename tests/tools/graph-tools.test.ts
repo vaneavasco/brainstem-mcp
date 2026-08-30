@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MAX_GRAPH_ITEMS } from '../../src/storage/limits.ts';
 import { type Harness, startHarness, text } from './harness.ts';
 
 interface OutgoingLink {
@@ -24,7 +25,7 @@ interface LinksResult {
   backlinks: ContextHit[];
   embeds: ContextHit[];
   unlinkedMentions: ContextHit[];
-  truncated: { outgoing: boolean; backlinks: boolean; unlinkedMentions: boolean };
+  truncated: { outgoing: boolean; backlinks: boolean; embeds: boolean; unlinkedMentions: boolean };
 }
 
 interface TagsListResult {
@@ -99,7 +100,12 @@ describe('vault_links', () => {
     const body = r.structuredContent as LinksResult;
     expect(body.path).toBe('a.md');
     expect(body.outgoing).toHaveLength(8);
-    expect(body.truncated).toEqual({ outgoing: false, backlinks: false, unlinkedMentions: false });
+    expect(body.truncated).toEqual({
+      outgoing: false,
+      backlinks: false,
+      embeds: false,
+      unlinkedMentions: false,
+    });
 
     const byTarget = (target: string) => body.outgoing.filter((o) => o.target === target);
 
@@ -177,6 +183,25 @@ describe('vault_links', () => {
     const r = await h.call('vault_links', { path: 'nope.md' });
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/^NOT_FOUND: /);
+  });
+});
+
+describe('vault_links embeds cap', () => {
+  it('caps embeds at MAX_GRAPH_ITEMS and reports truncation', async () => {
+    await h.call('vault_write', { path: 'target.md', content: 'Target note.' });
+
+    // Write MAX_GRAPH_ITEMS + 1 embedding notes directly through the adapter (bypassing the
+    // MCP round trip per note) and refresh the index for each, so the fixture stays fast.
+    const total = MAX_GRAPH_ITEMS + 1;
+    const paths = Array.from({ length: total }, (_, i) => `embedder-${i}.md`);
+    await Promise.all(paths.map((p) => h.runtime.adapter.write(p, '![[target]]')));
+    await Promise.all(paths.map((p) => h.runtime.index.refreshPath(h.runtime.adapter, p)));
+
+    const r = await h.call('vault_links', { path: 'target.md', include: ['embeds'] });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as LinksResult;
+    expect(body.embeds).toHaveLength(MAX_GRAPH_ITEMS);
+    expect(body.truncated.embeds).toBe(true);
   });
 });
 
