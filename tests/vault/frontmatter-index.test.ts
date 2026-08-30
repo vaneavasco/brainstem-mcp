@@ -86,6 +86,34 @@ describe('mutation helpers', () => {
     await index.refreshPath(vault, 'moved/a.md'); // file does not exist on disk -> removed
     expect(index.get('moved/a.md')).toBeUndefined();
   });
+
+  it('rename() does not leak bytes when the target path already holds an entry', async () => {
+    const rRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-index-rename-'));
+    const rVault = await LocalFSAdapter.create(rRoot, { ripgrepPath: null });
+    await rVault.write('a.md', '---\ntitle: A\n---\nAlpha body with a few extra words to size it.');
+    await rVault.write('b.md', 'B');
+    const index = await FrontmatterIndex.build(rVault);
+    expect(index.size()).toBe(2);
+
+    index.rename('a.md', 'b.md');
+    expect(index.size()).toBe(1);
+
+    const survivor = index.get('b.md');
+    if (!survivor) throw new Error('expected b.md to survive the rename');
+    expect(survivor.path).toBe('b.md');
+
+    // Compare against a fresh index holding only the surviving entry: if rename() failed to
+    // subtract the byte size of the entry it overwrote at "b.md", index.byteSize() would still
+    // include the discarded original b.md entry's bytes and this would not match.
+    const freshRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-index-rename-fresh-'));
+    const freshVault = await LocalFSAdapter.create(freshRoot, { ripgrepPath: null });
+    const fresh = await FrontmatterIndex.build(freshVault); // no files -> starts at 0 bytes
+    fresh.upsert(survivor);
+    expect(index.byteSize()).toBe(fresh.byteSize());
+
+    await fs.rm(rRoot, { recursive: true, force: true });
+    await fs.rm(freshRoot, { recursive: true, force: true });
+  });
 });
 
 describe('attach', () => {

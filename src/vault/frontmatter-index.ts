@@ -143,6 +143,7 @@ export class FrontmatterIndex {
     this.bytes -= this.entrySize(existing);
     this.entries.delete(path);
     this.bumpVersion();
+    this.checkByteBudget();
   }
 
   rename(from: string, to: string): void {
@@ -150,6 +151,8 @@ export class FrontmatterIndex {
     if (!existing) return;
     this.bytes -= this.entrySize(existing);
     this.entries.delete(from);
+    const overwritten = this.entries.get(to);
+    if (overwritten) this.bytes -= this.entrySize(overwritten);
     const renamed = { ...existing, path: to };
     this.entries.set(to, renamed);
     this.bytes += this.entrySize(renamed);
@@ -177,7 +180,7 @@ export class FrontmatterIndex {
 
   /** Vault-relative paths of every non-markdown file the index has seen — never dot or reserved paths. */
   assets(): ReadonlySet<string> {
-    return this.assetPaths;
+    return new Set(this.assetPaths);
   }
 
   addAsset(path: string): void {
