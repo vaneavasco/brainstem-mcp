@@ -21,6 +21,11 @@ jobs:
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
+      # Boots the tool registry through a plain Node import. Vitest resolves modules differently
+      # and neither tsc nor biome sees evaluation order, so an import-cycle temporal-dead-zone
+      # crash (a shared Zod fragment read at module scope) is invisible to all three — this is
+      # the only step that catches it before the server fails to start.
+      - run: node -e "import('./src/tools/register.ts').then(()=>console.log('tools boot ok'))"
 
   # The compose stack end-to-end: build, boot in `none` tunnel mode against a
   # throwaway vault, then run the same smoke script used locally. Node is on the

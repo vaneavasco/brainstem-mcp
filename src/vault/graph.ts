@@ -165,15 +165,21 @@ export class VaultGraph {
     return { frontmatterNotes, inlineNotes };
   }
 
+  /**
+   * Notes with neither a resolved outgoing link nor a backlink. A link that resolves to its own
+   * source — `[[#Heading]]`/`[[^block]]` (target ''), or a by-name link to the note itself —
+   * connects the note to nothing, so it counts as neither: it must not rescue a note from
+   * orphanhood, nor inflate its rank in `hubs()`.
+   */
   orphans(exclude?: (path: string) => boolean): string[] {
     this.ensureFresh();
     const result: string[] = [];
     for (const entry of this.index.all()) {
       if (!isMarkdownPath(entry.path)) continue;
       const hasResolvedOut = (this.outgoingByPath.get(entry.path) ?? []).some(
-        (rl) => rl.resolution.status === 'resolved',
+        (rl) => rl.resolution.status === 'resolved' && rl.resolution.path !== entry.path,
       );
-      const hasBacklinks = (this.backlinksByPath.get(entry.path)?.length ?? 0) > 0;
+      const hasBacklinks = this.foreignBacklinkCount(entry.path) > 0;
       if (hasResolvedOut || hasBacklinks) continue;
       if (exclude?.(entry.path)) continue;
       result.push(entry.path);
@@ -181,13 +187,21 @@ export class VaultGraph {
     return result.sort();
   }
 
+  /** Backlinks from *other* notes only — see `orphans()` for why self-links do not count. */
+  private foreignBacklinkCount(path: string): number {
+    let count = 0;
+    for (const b of this.backlinksByPath.get(path) ?? []) if (b.source !== path) count += 1;
+    return count;
+  }
+
+  /** Most-linked-to notes first. Self-links are excluded, exactly as in `orphans()`. */
   hubs(limit?: number): { path: string; backlinks: number }[] {
     this.ensureFresh();
     const all = this.index
       .all()
       .map((entry) => ({
         path: entry.path,
-        backlinks: this.backlinksByPath.get(entry.path)?.length ?? 0,
+        backlinks: this.foreignBacklinkCount(entry.path),
       }))
       .filter((h) => h.backlinks > 0)
       .sort(

@@ -7,7 +7,8 @@ import { parseCanvas, rewriteFileNodes, serializeCanvas } from '../vault/canvas.
 import { newTargetText, rewriteLinks, type TargetRewrite } from '../vault/link-rewrite.ts';
 import type { LinkRef } from '../vault/note-parse.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
-import { ExpectedHashArg, locked, type ToolContext, touch } from './register.ts';
+import { ExpectedHashArg } from './args.ts';
+import { locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
@@ -101,8 +102,9 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           .boolean()
           .optional()
           .describe(
-            'Rewrite links to the moved note(s) in other notes and canvas file nodes. Default: true ' +
-              'when moving a markdown note or a folder containing notes/assets, false otherwise.',
+            'Rewrite links to the moved note(s)/attachment(s) in other notes and canvas file ' +
+              'nodes. Default: true when moving a markdown note, an attachment, or a folder ' +
+              'containing either; false otherwise.',
           ),
       }),
       outputSchema: z.object({
@@ -122,7 +124,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         const isAsset = !isNote && index.assets().has(src);
         // Folder contents, tagged by kind — empty when src is a single file.
         const under = entriesUnder(src);
-        const effectiveUpdateLinks = updateLinks ?? (isNote || under.length > 0);
+        const effectiveUpdateLinks = updateLinks ?? (isNote || isAsset || under.length > 0);
 
         // The set of paths this move renames, computed from the pre-move index (a single note or
         // asset, or every note/asset currently under a moved folder). Used to keep the index
@@ -165,14 +167,19 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           : [];
 
         // A folder move must also lock everything currently known to live inside it (see
-        // entriesUnder's doc comment), plus every source note this call may rewrite and every
-        // canvas it may touch.
+        // entriesUnder's doc comment) *and* the new path each of those files ends up at — a moved
+        // note that links to another moved note is rewritten at its new path, which is a different
+        // lock key from its old one — plus every source note this call may rewrite and every
+        // canvas it may touch. Deduped because a canvas inside a moved folder is in both lists.
         const lockPaths = [
-          src,
-          dst,
-          ...under.map((e) => e.path),
-          ...rewritesBySource.keys(),
-          ...canvasPaths,
+          ...new Set([
+            src,
+            dst,
+            ...moved.map((m) => m.oldPath),
+            ...moved.map((m) => m.newPath),
+            ...rewritesBySource.keys(),
+            ...canvasPaths,
+          ]),
         ];
         return locked(tc, lockPaths, async () => {
           await adapter.move(src, dst, { expectedHash });
@@ -239,9 +246,29 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           for (const canvasPath of canvasPaths) {
             // A moved .canvas file itself is listed at its old path (collected before the move).
             const actualCanvasPath = movedNewPathByOld.get(canvasPath) ?? canvasPath;
-            const canvas = parseCanvas((await adapter.read(actualCanvasPath)).content);
-            const { canvas: rewritten, count } = rewriteFileNodes(canvas, movedLower);
-            if (count > 0) await adapter.write(actualCanvasPath, serializeCanvas(rewritten));
+            // Same contract as the note loop above: one canvas the server cannot parse (an empty
+            // object, a format from a newer Obsidian) is reported in failed[] — it must never
+            // abort a move that has already renamed files and rewritten notes.
+            try {
+              const file = await adapter.read(actualCanvasPath);
+              const canvas = parseCanvas(file.content);
+              const { canvas: rewritten, count } = rewriteFileNodes(canvas, movedLower);
+              // file.hash is the hash of exactly the bytes parsed above, read inside the lock:
+              // a concurrent edit that slipped in fails with CONFLICT instead of being clobbered.
+              if (count > 0) {
+                await adapter.write(actualCanvasPath, serializeCanvas(rewritten), {
+                  expectedHash: file.hash,
+                });
+              }
+            } catch (error) {
+              if (error instanceof VaultError) {
+                const message =
+                  error.code === 'CONFLICT' ? `${error.code}: ${error.message}` : error.message;
+                failed.push({ path: actualCanvasPath, error: message });
+              } else {
+                throw error;
+              }
+            }
           }
 
           // null for a moved folder; a real hash for a moved file.
@@ -276,9 +303,16 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         const lockPaths = [p, ...pathsUnder(p)];
         return locked(tc, lockPaths, async () => {
           await adapter.softDelete(p, confirm, { expectedHash });
+          // Keep the index coherent for both kinds of file: a single deleted note or asset, and
+          // everything the index knows under a deleted folder. Assets matter as much as notes —
+          // a stale asset entry keeps `[[img.png]]` resolving to a file that is now in .trash/.
           if (isMarkdownPath(p)) index.remove(p);
+          else index.removeAsset(p);
           for (const entry of index.all())
             if (entry.path.startsWith(`${p}/`)) index.remove(entry.path);
+          // Snapshot first: removeAsset mutates the set `assets()` is derived from.
+          for (const assetPath of [...index.assets()])
+            if (assetPath.startsWith(`${p}/`)) index.removeAsset(assetPath);
           return okJson({ path: p, trashed: true }, `Moved ${p} to .trash/.`);
         });
       }),

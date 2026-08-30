@@ -37,15 +37,14 @@ export function clampText(
 
 export function errorToResult(error: unknown, log: (e: unknown) => void): CallToolResult {
   if (error instanceof VaultError) {
-    const text = `${error.code}: ${error.message}`;
-    if (error.code === 'CONFLICT') {
-      return {
-        isError: true,
-        content: [{ type: 'text', text }],
-        structuredContent: { code: error.code, ...error.details },
-      };
-    }
-    return fail(text);
+    // Every VaultError carries its code (and any details — a CONFLICT's currentHash, a NOT_FOUND's
+    // path, ...) as structuredContent, so a client can branch on the code instead of parsing the
+    // human-readable text, which stays exactly as it was.
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `${error.code}: ${error.message}` }],
+      structuredContent: { code: error.code, ...error.details },
+    };
   }
   if (error instanceof ZodError) {
     const first = error.issues[0];

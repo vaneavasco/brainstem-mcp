@@ -48,9 +48,21 @@ describe('results helpers', () => {
   it('maps errors to actionable tool errors without leaking internals', () => {
     const logged: unknown[] = [];
     const log = (e: unknown) => logged.push(e);
-    expect(errorToResult(new VaultError('NOT_FOUND', 'a.md does not exist.'), log)).toEqual(
-      fail('NOT_FOUND: a.md does not exist.'),
+    // Every VaultError carries machine-readable structuredContent, not just CONFLICT.
+    expect(errorToResult(new VaultError('NOT_FOUND', 'a.md does not exist.'), log)).toEqual({
+      ...fail('NOT_FOUND: a.md does not exist.'),
+      structuredContent: { code: 'NOT_FOUND' },
+    });
+    const withDetails = errorToResult(
+      new VaultError('INVALID_INPUT', 'bad heading.', { path: 'a.md', heading: 'Nope' }),
+      log,
     );
+    expect(withDetails.structuredContent).toEqual({
+      code: 'INVALID_INPUT',
+      path: 'a.md',
+      heading: 'Nope',
+    });
+    expect((withDetails.content[0] as { text: string }).text).toBe('INVALID_INPUT: bad heading.');
     const zodErr = z.object({ n: z.number() }).safeParse({ n: 'x' });
     const zr = errorToResult(zodErr.success ? null : zodErr.error, log);
     expect(zr.isError).toBe(true);
@@ -86,6 +98,6 @@ describe('results helpers', () => {
     const r = await guarded(log, async () => {
       throw new VaultError('TOO_LARGE', 'big');
     });
-    expect(r).toEqual(fail('TOO_LARGE: big'));
+    expect(r).toEqual({ ...fail('TOO_LARGE: big'), structuredContent: { code: 'TOO_LARGE' } });
   });
 });

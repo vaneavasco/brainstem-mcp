@@ -12,12 +12,9 @@ import { VaultError } from '../storage/types.ts';
 import type { Backlink, ResolvedLink } from '../vault/graph.ts';
 import type { Heading } from '../vault/note-parse.ts';
 import { READ_ONLY } from './annotations.ts';
+import { DetailedPathArg } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
-
-const PathArg = z
-  .string()
-  .describe('Vault-relative path, e.g. "01-projects/plan.md". No leading slash, no "..".');
 
 const LinkInclude = z.enum(['outgoing', 'backlinks', 'embeds', 'unlinkedMentions']);
 type LinkIncludeT = z.infer<typeof LinkInclude>;
@@ -184,7 +181,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Note links',
       description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) to also find plain-text mentions of the note's basename or aliases in notes that do not already link to it. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions.`,
-      inputSchema: z.object({ path: PathArg, include: z.array(LinkInclude).optional() }),
+      inputSchema: z.object({ path: DetailedPathArg, include: z.array(LinkInclude).optional() }),
       outputSchema: z.object({
         path: z.string(),
         outgoing: z.array(OutgoingLink),
@@ -300,7 +297,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
       title: 'Note outline',
       description:
         'Structural summary of one note from the in-memory index: frontmatter keys, tags, a heading tree, block IDs, word count, and link/backlink counts. Never reads the file from disk.',
-      inputSchema: z.object({ path: PathArg }),
+      inputSchema: z.object({ path: DetailedPathArg }),
       outputSchema: z.object({
         path: z.string(),
         hash: z.string(),

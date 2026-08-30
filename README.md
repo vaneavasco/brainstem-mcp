@@ -4,7 +4,7 @@
 
 A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claude mobile, Claude Desktop, Claude Code — read/write access to your own Obsidian vault. It runs entirely in Docker on your machine; a Cloudflare tunnel makes it reachable from those Claude surfaces without opening any ports yourself.
 
-Over 30 tools cover the vault the way Obsidian sees it: reading and writing notes, sections, frontmatter and attachments; the link/tag graph (backlinks, orphans, hubs); structured queries and recency; safe concurrent edits and multi-note transactions; canvases; templates; daily notes. See "What Claude can do" below.
+30 tools cover the vault the way Obsidian sees it: reading and writing notes, sections, frontmatter and attachments; the link/tag graph (backlinks, orphans, hubs); structured queries and recency; safe concurrent edits and multi-note transactions; canvases; templates; daily notes. See "What Claude can do" below.
 
 ## Status
 

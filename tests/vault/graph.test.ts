@@ -146,6 +146,22 @@ describe('orphans', () => {
     expect(graph.orphans()).toEqual(['dup.md', 'lonely.md']);
     expect(graph.orphans((p) => p.startsWith('dup'))).toEqual(['lonely.md']);
   });
+
+  it('does not let a self-resolving link rescue a note from orphanhood, or make it a hub', () => {
+    // '[[#H]]' (an anchor into the same note) and a by-name link to itself both resolve to
+    // selfie.md — neither connects it to anything else in the vault.
+    index.upsert(entry('selfie.md', '# H\n[[#H]] and [[selfie]] again'));
+    expect(graph.orphans()).toContain('selfie.md');
+    expect(graph.hubs().map((h) => h.path)).not.toContain('selfie.md');
+    // Real hubs are unchanged.
+    expect(graph.hubs(1)).toEqual([{ path: 'b.md', backlinks: 4 }]);
+  });
+
+  it('still counts a link to another note, in either direction', () => {
+    index.upsert(entry('linky.md', '[[lonely]]'));
+    expect(graph.orphans()).not.toContain('linky.md');
+    expect(graph.orphans()).not.toContain('lonely.md');
+  });
 });
 
 describe('unresolved and ambiguous', () => {

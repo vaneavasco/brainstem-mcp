@@ -1,5 +1,4 @@
 import type { McpServer } from '@modelcontextprotocol/server';
-import { z } from 'zod';
 import type { VaultRuntime } from '../vault/runtime.ts';
 import { registerAnalyticsTools } from './analytics.ts';
 import { registerCanvasTools } from './canvas.ts';
@@ -27,16 +26,10 @@ export function locked<T>(tc: ToolContext, paths: string[], fn: () => Promise<T>
   return tc.runtime.gate.withLock(paths, fn);
 }
 
-/** Shared input schema fragment for every tool that supports optimistic concurrency. */
-export const ExpectedHashArg = z
-  .string()
-  .regex(/^[0-9a-f]{64}$/, 'must be a lowercase 64-character hex sha256 hash')
-  .optional()
-  .describe(
-    'sha256 content hash (lowercase hex) from a previous read or write of this file. If the ' +
-      'file changed since, the call fails with CONFLICT instead of overwriting silently — ' +
-      're-read and retry.',
-  );
+/** Re-exported for compatibility: the shared argument fragments now live in the leaf module
+ *  `args.ts`, so a tool module can read them at module scope without touching this file (and its
+ *  import cycle). New code should import them from `./args.ts` directly. */
+export { DetailedPathArg, ExpectedHashArg, PathArg } from './args.ts';
 
 export function registerVaultTools(server: McpServer, tc: ToolContext): void {
   registerReadTools(server, tc);

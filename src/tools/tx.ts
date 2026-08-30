@@ -8,62 +8,55 @@ import {
   type TxResult,
 } from '../storage/transaction.ts';
 import { OVERWRITE } from './annotations.ts';
-import { ExpectedHashArg, type ToolContext, touch } from './register.ts';
+import { ExpectedHashArg, PathArg } from './args.ts';
+import { type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
-const PathArg = z.string().describe('Vault-relative path, e.g. "00-inbox/idea.md".');
-
-/**
- * Built lazily, inside the register call: `ExpectedHashArg` lives in register.ts, which imports
- * this module back, so reading it while this module is still evaluating hits the import cycle's
- * temporal dead zone and yields `undefined` (every other tool module only touches it inside a
- * function body, which is why they get away with the top-level import).
- */
-function opSchema(): z.ZodType<TxOp> {
-  return z.discriminatedUnion('op', [
-    z.object({
-      op: z.literal('write'),
-      path: PathArg,
-      content: z.string(),
-      mergeFrontmatter: z.boolean().optional(),
-      expectedHash: ExpectedHashArg,
-    }),
-    z.object({
-      op: z.literal('edit'),
-      path: PathArg,
-      patches: z
-        .array(z.object({ find: z.string().min(1), replace: z.string() }))
-        .min(1)
-        .max(50),
-      expectedHash: ExpectedHashArg,
-    }),
-    z.object({
-      op: z.literal('append'),
-      path: PathArg,
-      content: z.string().min(1),
-      expectedHash: ExpectedHashArg,
-    }),
-    z.object({
-      op: z.literal('frontmatter_update'),
-      path: PathArg,
-      set: z.record(z.string(), z.unknown()).optional(),
-      unset: z.array(z.string()).optional(),
-      expectedHash: ExpectedHashArg,
-    }),
-    z.object({
-      op: z.literal('move'),
-      from: PathArg,
-      to: PathArg,
-      expectedHash: ExpectedHashArg,
-    }),
-    z.object({
-      op: z.literal('delete'),
-      path: PathArg,
-      confirm: z.boolean(),
-      expectedHash: ExpectedHashArg,
-    }),
-  ]);
-}
+/** Built at module scope: the shared argument fragments live in the leaf module `args.ts`, which
+ *  is fully initialized before any tool module runs (see the note there). */
+const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('write'),
+    path: PathArg,
+    content: z.string(),
+    mergeFrontmatter: z.boolean().optional(),
+    expectedHash: ExpectedHashArg,
+  }),
+  z.object({
+    op: z.literal('edit'),
+    path: PathArg,
+    patches: z
+      .array(z.object({ find: z.string().min(1), replace: z.string() }))
+      .min(1)
+      .max(50),
+    expectedHash: ExpectedHashArg,
+  }),
+  z.object({
+    op: z.literal('append'),
+    path: PathArg,
+    content: z.string().min(1),
+    expectedHash: ExpectedHashArg,
+  }),
+  z.object({
+    op: z.literal('frontmatter_update'),
+    path: PathArg,
+    set: z.record(z.string(), z.unknown()).optional(),
+    unset: z.array(z.string()).optional(),
+    expectedHash: ExpectedHashArg,
+  }),
+  z.object({
+    op: z.literal('move'),
+    from: PathArg,
+    to: PathArg,
+    expectedHash: ExpectedHashArg,
+  }),
+  z.object({
+    op: z.literal('delete'),
+    path: PathArg,
+    confirm: z.boolean(),
+    expectedHash: ExpectedHashArg,
+  }),
+]);
 
 const OpResultSchema = z.object({
   index: z.number(),
@@ -122,7 +115,7 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
         // No Zod .min/.max here on purpose: both caps are enforced inside runTransaction so a
         // violation comes back as INVALID_INPUT like every other vault error, instead of the
         // SDK's generic "Input validation error".
-        ops: z.array(opSchema()).describe(`Ordered operations, 1 to ${MAX_TX_OPS} of them.`),
+        ops: z.array(TxOpSchema).describe(`Ordered operations, 1 to ${MAX_TX_OPS} of them.`),
         dryRun: z.boolean().optional().describe('Validate and return diffs without writing.'),
       }),
       outputSchema: z.object({

@@ -4,12 +4,9 @@ import { MAX_BATCH, MAX_RESULT_CHARS } from '../storage/limits.ts';
 import { VaultError } from '../storage/types.ts';
 import { describeUnknownHeading, findSection, sliceSection } from '../vault/sections.ts';
 import { READ_ONLY } from './annotations.ts';
+import { DetailedPathArg } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { clampText, guarded, okJson } from './results.ts';
-
-const PathArg = z
-  .string()
-  .describe('Vault-relative path, e.g. "01-projects/plan.md". No leading slash, no "..".');
 
 const NoteSummary = z.object({
   path: z.string(),
@@ -30,7 +27,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
       description:
         'Read one file from the vault. Returns the full text (frontmatter + body) and parsed frontmatter. Large files are truncated at 120k characters. With "section" (a heading path like "Heading" or "H1 > H2", case-insensitive), returns only that section\'s text and its sectionRange instead of the whole file.',
       inputSchema: z.object({
-        path: PathArg,
+        path: DetailedPathArg,
         section: z
           .string()
           .optional()
@@ -81,7 +78,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Read several notes',
       description: `Read up to ${MAX_BATCH} files in one call. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
-      inputSchema: z.object({ paths: z.array(PathArg).min(1).max(MAX_BATCH) }),
+      inputSchema: z.object({ paths: z.array(DetailedPathArg).min(1).max(MAX_BATCH) }),
       outputSchema: z.object({
         notes: z.array(NoteSummary.extend({ body: z.string(), truncated: z.boolean() })),
         missing: z.array(z.string()),

@@ -3,6 +3,7 @@ import { baseName, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import type { IndexEntry } from './frontmatter-index.ts';
 import type { VaultGraph } from './graph.ts';
+import { compileSafePattern, type SafeMatcher } from './safe-regex.ts';
 
 export type Op =
   | 'eq'
@@ -46,7 +47,6 @@ export interface QueryResult {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
-const MAX_REGEX_CHARS = 200;
 const MAX_GROUP_PATHS = 20;
 const NONE_GROUP_KEY = '(none)';
 
@@ -208,26 +208,12 @@ function matchesOrder(fieldVal: unknown, value: unknown, op: 'gt' | 'gte' | 'lt'
   }
 }
 
-/** Rejects regex patterns that are too long or carry a backreference, before any note is scanned. */
-function compileSafeRegex(value: unknown): RegExp {
-  const pattern = String(value);
-  if (pattern.length > MAX_REGEX_CHARS) {
-    throw new VaultError(
-      'INVALID_INPUT',
-      `regex pattern exceeds ${MAX_REGEX_CHARS} characters (got ${pattern.length}).`,
-    );
-  }
-  if (/\\\d/.test(pattern)) {
-    throw new VaultError(
-      'INVALID_INPUT',
-      'regex pattern must not contain backreferences (e.g. "\\1").',
-    );
-  }
-  try {
-    return new RegExp(pattern, 'i');
-  } catch {
-    throw new VaultError('INVALID_INPUT', `invalid regex pattern: ${pattern}`);
-  }
+/** Compiles the `regex` op's pattern with the linear-time, reduced-syntax matcher in
+ *  `safe-regex.ts` — never a JavaScript `RegExp`, whose backtracking engine would let a pattern
+ *  like `(a+)+` hang the event loop for every scanned note. Full-match semantics, per the design
+ *  spec's "regex is anchored to the value". */
+function compileSafeRegex(value: unknown): SafeMatcher {
+  return compileSafePattern(String(value));
 }
 
 type CompiledCond = (entry: IndexEntry, graph: VaultGraph) => boolean;
@@ -237,8 +223,8 @@ type CompiledCond = (entry: IndexEntry, graph: VaultGraph) => boolean;
  *  few) entries are scanned. */
 function compileCond(cond: Cond): CompiledCond {
   if (cond.op === 'regex') {
-    const re = compileSafeRegex(cond.value);
-    return (entry, graph) => re.test(String(fieldValue(entry, graph, cond.field)));
+    const matcher = compileSafeRegex(cond.value);
+    return (entry, graph) => matcher.test(String(fieldValue(entry, graph, cond.field)));
   }
   if (cond.op === 'in' && !Array.isArray(cond.value)) {
     throw new VaultError('INVALID_INPUT', '"in" requires an array value.');

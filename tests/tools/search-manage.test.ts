@@ -285,6 +285,30 @@ describe('vault_move / vault_delete', () => {
     expect(text(clash)).toMatch(/ALREADY_EXISTS/);
   });
 
+  it('drops deleted attachments from the index, alone and under a deleted folder', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+    await h.call('vault_write_binary', { path: 'att/img.png', base64: png, mimeType: 'image/png' });
+    await h.call('vault_write_binary', {
+      path: 'more/deep/img2.png',
+      base64: png,
+      mimeType: 'image/png',
+    });
+    // The chokidar watcher registers new assets asynchronously; do it deterministically here.
+    h.runtime.index.addAsset('att/img.png');
+    h.runtime.index.addAsset('more/deep/img2.png');
+    await h.call('vault_write', { path: 'uses.md', content: '![[att/img.png]]\n' });
+    expect(h.runtime.graph.resolve('att/img.png', 'uses.md').status).toBe('resolved');
+
+    const one = await h.call('vault_delete', { path: 'att/img.png', confirm: true });
+    expect(one.isError).toBeFalsy();
+    expect([...h.runtime.index.assets()]).not.toContain('att/img.png');
+    expect(h.runtime.graph.resolve('att/img.png', 'uses.md').status).toBe('unresolved');
+
+    const folder = await h.call('vault_delete', { path: 'more', confirm: true });
+    expect(folder.isError).toBeFalsy();
+    expect([...h.runtime.index.assets()]).not.toContain('more/deep/img2.png');
+  });
+
   it('requires confirm=true and soft-deletes into .trash', async () => {
     const refused = await h.call('vault_delete', { path: '02-areas/health.md', confirm: false });
     expect(text(refused)).toMatch(/CONFIRM_REQUIRED/);

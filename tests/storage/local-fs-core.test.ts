@@ -12,6 +12,8 @@ import {
   MAX_FILE_BYTES,
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
+  MAX_SEARCH_RESULTS,
+  MAX_SEARCH_SCAN,
 } from '../../src/storage/limits.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import { RESERVED_DIR, TRASH_DIR } from '../../src/storage/path-policy.ts';
@@ -493,6 +495,31 @@ describe('search: regex and paths options (JS fallback, always runs)', () => {
     await vault.write('untouched.md', 'needle should not appear\n');
     const r = await vault.search('needle', { paths: ['_brainstem/x.md', '.hidden/y.md'] });
     expect(r).toEqual([]);
+  });
+});
+
+describe('search: the limit ceiling (what vault_links unlinked mentions relies on)', () => {
+  /** One file, `count` lines each containing the needle. */
+  async function seedMatches(path: string, count: number): Promise<void> {
+    await vault.write(
+      path,
+      `${Array.from({ length: count }, (_, i) => `needle line ${i}`).join('\n')}\n`,
+    );
+  }
+
+  it(`returns more than MAX_SEARCH_RESULTS (${MAX_SEARCH_RESULTS}) matches when asked for more`, async () => {
+    // vault_links asks for MAX_UNLINKED_MENTIONS * 2 = 200; the adapter must honour that instead
+    // of silently clamping every caller back down to the tool layer's public default of 50.
+    await seedMatches('many.md', 120);
+    const hits = await vault.search('needle', { limit: 200 });
+    expect(hits).toHaveLength(120);
+    expect(hits.length).toBeGreaterThan(MAX_SEARCH_RESULTS);
+  });
+
+  it(`clamps an absurd limit to MAX_SEARCH_SCAN (${MAX_SEARCH_SCAN})`, async () => {
+    await seedMatches('huge.md', MAX_SEARCH_SCAN + 50);
+    const hits = await vault.search('needle', { limit: 999_999 });
+    expect(hits).toHaveLength(MAX_SEARCH_SCAN);
   });
 });
 

@@ -56,6 +56,15 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   `expectedHash` at no extra cost.
 - `vault_search` output adds `files[]` (matches grouped per file, preferred);
   the flat `matches[]` array is kept for compatibility.
+- The `regex` operator in `vault_query`/`vault_search` `where` conditions now
+  runs on a built-in linear-time matcher over a reduced syntax (literals, `.`,
+  `[classes]`, `* + ? {m,n}`, `|`, `(...)`) instead of a JavaScript `RegExp`:
+  patterns are a FULL match against the value (`^`/`$`, backreferences,
+  lookarounds and named groups are rejected with `INVALID_INPUT`), so no
+  pattern can hang the server. Regex `vault_search` over file *contents* still
+  goes through ripgrep and is unchanged.
+- Every error result now carries `structuredContent` with its `code` (and any
+  details, e.g. a `CONFLICT`'s `currentHash`), not just `CONFLICT`.
 
 ## [0.2.0] — 2026-08-30
 

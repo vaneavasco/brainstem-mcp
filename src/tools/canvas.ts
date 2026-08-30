@@ -15,7 +15,8 @@ import {
   updateNode,
 } from '../vault/canvas.ts';
 import { OVERWRITE, READ_ONLY } from './annotations.ts';
-import { ExpectedHashArg, locked, type ToolContext } from './register.ts';
+import { ExpectedHashArg } from './args.ts';
+import { locked, type ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 function requireCanvasPath(input: string): string {

@@ -26,19 +26,26 @@ import { guarded, okJson } from './results.ts';
 // local avoids a second, needless cross-tool-module dependency for one small shape).
 const SearchCondSchema: z.ZodType<Cond> = z.object({
   field: z.string().min(1),
-  op: z.enum([
-    'eq',
-    'neq',
-    'contains',
-    'startsWith',
-    'exists',
-    'gt',
-    'gte',
-    'lt',
-    'lte',
-    'in',
-    'regex',
-  ]),
+  op: z
+    .enum([
+      'eq',
+      'neq',
+      'contains',
+      'startsWith',
+      'exists',
+      'gt',
+      'gte',
+      'lt',
+      'lte',
+      'in',
+      'regex',
+    ])
+    .describe(
+      'Comparison operator. "regex" is a FULL match — the pattern is implicitly anchored to the ' +
+        'whole value — over a reduced, linear-time syntax: literals, ".", "[classes]", "* + ? ' +
+        '{m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", backreferences, ' +
+        'lookarounds or named groups; max 200 characters.',
+    ),
   value: z.unknown().optional(),
 });
 

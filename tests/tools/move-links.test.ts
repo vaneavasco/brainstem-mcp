@@ -201,4 +201,140 @@ describe('vault_move — link rewriting', () => {
     expect(text(await h.call('vault_read', { path: 'a.md' }))).toBe('[[b]] one.\n');
     expect(text(await h.call('vault_read', { path: 'c.md' }))).toBe('[[b2]] two.\n');
   });
+  it('reports an unparseable .canvas in failed[] without aborting the move or the rewrites', async () => {
+    await h.call('vault_write', { path: 'b.md', content: 'B\n' });
+    await h.call('vault_write', { path: 'a.md', content: '[[b]] one.\n' });
+    // Schema-invalid but perfectly realistic: an empty JSON object, or a canvas saved by a
+    // future Obsidian version this server cannot parse.
+    await h.call('vault_write', { path: 'boards/board.canvas', content: '{}' });
+
+    const mv = await h.call('vault_move', { from: 'b.md', to: 'notes/b2.md' });
+    expect(mv.isError).toBeFalsy();
+    const body = mv.structuredContent as MoveResult;
+    expect(body.to).toBe('notes/b2.md');
+    expect(body.linksUpdated).toEqual([{ path: 'a.md', count: 1 }]);
+    expect(body.failed).toEqual([
+      { path: 'boards/board.canvas', error: expect.stringContaining('Canvas file') },
+    ]);
+    // The move itself and every note rewrite still happened.
+    expect(text(await h.call('vault_read', { path: 'notes/b2.md' }))).toBe('B\n');
+    expect(text(await h.call('vault_read', { path: 'a.md' }))).toBe('[[b2]] one.\n');
+    expect(text(await h.call('vault_read', { path: 'boards/board.canvas' }))).toBe('{}');
+  });
+
+  it('passes expectedHash on the canvas rewrite, so a concurrent canvas edit lands in failed[]', async () => {
+    await h.call('vault_write', { path: 'b.md', content: 'B note.\n' });
+    await h.call('vault_canvas_add_node', {
+      path: 'boards/board.canvas',
+      node: { type: 'file', file: 'b.md', x: 0, y: 0, width: 100, height: 100 },
+    });
+
+    const originalWrite = h.runtime.adapter.write.bind(h.runtime.adapter);
+    const canvasOpts: (string | undefined)[] = [];
+    h.runtime.adapter.write = (async (
+      ...args: Parameters<typeof originalWrite>
+    ): ReturnType<typeof originalWrite> => {
+      const [path, , opts] = args;
+      if (path.endsWith('.canvas')) canvasOpts.push(opts?.expectedHash);
+      return originalWrite(...args);
+    }) as typeof originalWrite;
+
+    const mv = await h.call('vault_move', { from: 'b.md', to: 'notes/b2.md' });
+    expect(mv.isError).toBeFalsy();
+    expect((mv.structuredContent as MoveResult).failed).toEqual([]);
+    expect(canvasOpts).toEqual([expect.stringMatching(/^[0-9a-f]{64}$/)]);
+  });
+
+  it('rewrites wikilinks, markdown links and canvas nodes for a single moved asset by default', async () => {
+    await h.call('vault_write_binary', {
+      path: 'att/img.png',
+      base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+      mimeType: 'image/png',
+    });
+    // The chokidar watcher registers new assets asynchronously; do it deterministically here.
+    h.runtime.index.addAsset('att/img.png');
+    await h.call('vault_write', {
+      path: 'a.md',
+      content: '![[att/img.png]] and [x](att/img.png)\n',
+    });
+    await h.call('vault_canvas_add_node', {
+      path: 'boards/board.canvas',
+      node: { type: 'file', file: 'att/img.png', x: 0, y: 0, width: 100, height: 100 },
+    });
+
+    const mv = await h.call('vault_move', { from: 'att/img.png', to: 'assets/img.png' });
+    expect(mv.isError).toBeFalsy();
+    const body = mv.structuredContent as MoveResult;
+    expect(body.failed).toEqual([]);
+    expect(body.linksUpdated).toEqual([{ path: 'a.md', count: 2 }]);
+    expect(text(await h.call('vault_read', { path: 'a.md' }))).toBe(
+      '![[assets/img.png]] and [x](assets/img.png)\n',
+    );
+    const read = await h.call('vault_canvas_read', { path: 'boards/board.canvas' });
+    const nodes = (read.structuredContent as { nodes: { file?: string }[] }).nodes;
+    expect(nodes[0]?.file).toBe('assets/img.png');
+  });
+
+  it('folder move: rewrites a full-path asset link but leaves an equivalent bare one alone', async () => {
+    await h.call('vault_write_binary', {
+      path: 'folder/img.png',
+      base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+      mimeType: 'image/png',
+    });
+    h.runtime.index.addAsset('folder/img.png');
+    await h.call('vault_write', {
+      path: 'a.md',
+      content: 'bare ![[img.png]] and full [[folder/img.png]]\n',
+    });
+
+    const mv = await h.call('vault_move', { from: 'folder', to: 'archive/folder' });
+    expect(mv.isError).toBeFalsy();
+    const body = mv.structuredContent as MoveResult;
+    expect(body.failed).toEqual([]);
+    expect(body.linksUpdated).toEqual([{ path: 'a.md', count: 2 }]);
+    // The bare link still resolves by basename (unique after the move), so it keeps its style;
+    // the full-path one is remapped.
+    expect(text(await h.call('vault_read', { path: 'a.md' }))).toBe(
+      'bare ![[img.png]] and full [[archive/folder/img.png]]\n',
+    );
+  });
+
+  it('folder move: a .canvas inside the folder is remapped and its own file nodes rewritten', async () => {
+    await h.call('vault_write', { path: 'folder/n.md', content: 'N note.\n' });
+    await h.call('vault_canvas_add_node', {
+      path: 'folder/board.canvas',
+      node: { type: 'file', file: 'folder/n.md', x: 0, y: 0, width: 100, height: 100 },
+    });
+
+    const mv = await h.call('vault_move', { from: 'folder', to: 'archive/folder' });
+    expect(mv.isError).toBeFalsy();
+    expect((mv.structuredContent as MoveResult).failed).toEqual([]);
+
+    const gone = await h.call('vault_canvas_read', { path: 'folder/board.canvas' });
+    expect(text(gone)).toMatch(/NOT_FOUND/);
+    const read = await h.call('vault_canvas_read', { path: 'archive/folder/board.canvas' });
+    expect(read.isError).toBeFalsy();
+    const nodes = (read.structuredContent as { nodes: { file?: string }[] }).nodes;
+    expect(nodes[0]?.file).toBe('archive/folder/n.md');
+  });
+
+  it('locks the new inner paths a folder move writes to, not just the old ones', async () => {
+    await h.call('vault_write', { path: 'folder/p.md', content: '[[folder/q]] see also.\n' });
+    await h.call('vault_write', { path: 'folder/q.md', content: 'Q content.\n' });
+
+    const gate = h.runtime.gate;
+    const originalWithLock = gate.withLock.bind(gate);
+    let locked: string[] = [];
+    gate.withLock = (<T>(paths: readonly string[], fn: () => Promise<T>): Promise<T> => {
+      if (paths.includes('folder')) locked = [...paths];
+      return originalWithLock(paths, fn);
+    }) as typeof gate.withLock;
+
+    const mv = await h.call('vault_move', { from: 'folder', to: 'archive/folder2' });
+    expect(mv.isError).toBeFalsy();
+    // p.md is rewritten at its NEW path — that path must be held for the duration of the move.
+    expect(locked).toContain('archive/folder2/p.md');
+    expect(locked).toContain('archive/folder2/q.md');
+    expect(locked).toContain('folder/p.md');
+  });
 });

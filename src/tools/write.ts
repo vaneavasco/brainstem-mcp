@@ -6,10 +6,9 @@ import { VaultError } from '../storage/types.ts';
 import { assertExpectedHash } from '../storage/write-gate.ts';
 import { describeUnknownHeading, findSection, insertIntoSection } from '../vault/sections.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
-import { ExpectedHashArg, locked, type ToolContext, touch } from './register.ts';
+import { ExpectedHashArg, PathArg } from './args.ts';
+import { locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
-
-const PathArg = z.string().describe('Vault-relative path, e.g. "00-inbox/idea.md".');
 
 function decodeBase64Strict(input: string): Uint8Array {
   const cleaned = input.replace(/\s+/g, '');

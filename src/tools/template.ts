@@ -4,10 +4,9 @@ import { baseName, normalizeVaultPath, parentDir } from '../storage/path-policy.
 import { VaultError } from '../storage/types.ts';
 import { uniquePrefix as buildUniquePrefix, renderTemplate } from '../vault/templates.ts';
 import { APPEND_ONLY } from './annotations.ts';
+import { PathArg } from './args.ts';
 import { locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
-
-const PathArg = z.string().describe('Vault-relative path, e.g. "00-inbox/idea.md".');
 
 /** The target's basename without a trailing ".md" (case-insensitive), Obsidian's own default for
  *  a freshly created note's {{title}}. Non-".md" targets (e.g. a template producing a ".base" or

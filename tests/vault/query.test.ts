@@ -142,7 +142,7 @@ describe('evaluateQuery — backlinks/outgoing degree (regression: must be count
 
   it('sort backlinks desc ranks the 2-backlink note before the 1-backlink note', () => {
     const r = run({
-      where: [{ field: 'path', op: 'regex', value: '^hub-' }],
+      where: [{ field: 'path', op: 'regex', value: 'hub-.*' }],
       sort: [{ field: 'backlinks', order: 'desc' }],
     });
     expect(r.rows.map((row) => row.path)).toEqual(['hub-two.md', 'hub-one.md']);
@@ -151,7 +151,7 @@ describe('evaluateQuery — backlinks/outgoing degree (regression: must be count
   it('where backlinks gt 1 excludes the 1-backlink note', () => {
     const r = run({
       where: [
-        { field: 'path', op: 'regex', value: '^hub-' },
+        { field: 'path', op: 'regex', value: 'hub-.*' },
         { field: 'backlinks', op: 'gt', value: 1 },
       ],
     });
@@ -266,12 +266,28 @@ describe('evaluateQuery — where operators by type', () => {
     );
   });
 
-  it('regex: case-insensitive pattern over String(field)', () => {
-    expect(paths(run({ where: [{ field: 'path', op: 'regex', value: '^notes/' }] }))).toEqual([
+  it('regex: case-insensitive full match over String(field)', () => {
+    expect(paths(run({ where: [{ field: 'path', op: 'regex', value: 'notes/.*' }] }))).toEqual([
       'notes/a.md',
       'notes/b.md',
       'notes/c.md',
     ]);
+    expect(paths(run({ where: [{ field: 'status', op: 'regex', value: 'active' }] }))).toEqual([
+      'archive/d.md',
+      'notes/a.md',
+    ]);
+    // Anchored at both ends: a substring of the value is not a match.
+    expect(paths(run({ where: [{ field: 'status', op: 'regex', value: 'activ' }] }))).toEqual([]);
+    // ...and '^'/'$' are rejected rather than silently re-anchoring.
+    expect(() => run({ where: [{ field: 'path', op: 'regex', value: '^notes/' }] })).toThrow(
+      VaultError,
+    );
+  });
+
+  it('regex: a catastrophic-backtracking pattern stays linear-time', () => {
+    const started = performance.now();
+    expect(paths(run({ where: [{ field: 'path', op: 'regex', value: '(a+)+' }] }))).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(50);
   });
 
   it('regex: rejects patterns over 200 characters with INVALID_INPUT', () => {
