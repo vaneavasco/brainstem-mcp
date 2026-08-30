@@ -1,6 +1,11 @@
 # Configuration comes from .env (created by `./brainstem setup`). Compose interpolates ${VAR} from it.
+# Images: CI publishes ghcr.io/vaneavasco/brainstem-mcp{,-tunnel}:sha-<7> for every
+# commit on main (plus vX.Y.Z / latest on tags). `./brainstem up` sets
+# BRAINSTEM_IMAGE_TAG to the checked-out commit's tag and pulls; when nothing
+# prebuilt matches it falls back to `--build`, which tags the local build `dev`.
 services:
   app:
+    image: ${BRAINSTEM_IMAGE:-ghcr.io/vaneavasco/brainstem-mcp}:${BRAINSTEM_IMAGE_TAG:-dev}
     build: .
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     ports:
@@ -37,6 +42,7 @@ services:
     restart: unless-stopped
 
   tunnel:
+    image: ${BRAINSTEM_TUNNEL_IMAGE:-ghcr.io/vaneavasco/brainstem-mcp-tunnel}:${BRAINSTEM_IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: tunnel/Dockerfile

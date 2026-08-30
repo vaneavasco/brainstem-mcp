@@ -21,6 +21,7 @@ import { runUpdate } from './commands/update.ts';
 import { runUrl } from './commands/url.ts';
 import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
+import { resolveImageTag } from './image-tag.ts';
 import { createSystemProbe } from './system.ts';
 import type { VaultPathContext } from './vault-path.ts';
 
@@ -196,13 +197,14 @@ export function buildProgram(
       '--public-url <url>',
       'public https URL for the Cloudflare tunnel (used on first run, with --tunnel-token)',
     )
-    .option('--no-build', 'skip rebuilding the image before starting')
+    .option('--build', 'build the image locally instead of pulling the prebuilt one')
+    .option('--no-build', 'only pull the prebuilt image for this commit; never build')
     .action(
       async (opts: {
         vault?: string;
         tunnelToken?: string;
         publicUrl?: string;
-        build: boolean;
+        build?: boolean;
       }) => {
         const print = (line: string) => console.log(line);
         await runAction(() =>
@@ -242,6 +244,7 @@ export function buildProgram(
                   fetchImpl: globalThis.fetch,
                   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
                   localPort: localPortOf(env),
+                  imageTag: () => resolveImageTag(createSystemProbe().exec, repoDir),
                 },
               );
             },
@@ -297,8 +300,9 @@ export function buildProgram(
   program
     .command('up')
     .description(summaryOf('up'))
-    .option('--no-build', 'skip rebuilding the image before starting')
-    .action(async (opts: { build: boolean }) => {
+    .option('--build', 'build the image locally instead of pulling the prebuilt one')
+    .option('--no-build', 'only pull the prebuilt image for this commit; never build')
+    .action(async (opts: { build?: boolean }) => {
       await runAction(async () => {
         const env = await loadEnvMap(repoDir);
         return runUp(
@@ -310,6 +314,7 @@ export function buildProgram(
             fetchImpl: globalThis.fetch,
             sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
             localPort: localPortOf(env),
+            imageTag: () => resolveImageTag(createSystemProbe().exec, repoDir),
           },
         );
       });

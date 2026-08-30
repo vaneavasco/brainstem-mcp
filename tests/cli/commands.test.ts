@@ -8,13 +8,16 @@ import { runLogs } from '../../src/cli/commands/logs.ts';
 import { runRevokeAll } from '../../src/cli/commands/revoke-all.ts';
 import { maskSecret, runSecretRotate, runSecretShow } from '../../src/cli/commands/secret.ts';
 import { parseComposePs, runStatus } from '../../src/cli/commands/status.ts';
-import { runUp, upSummary } from '../../src/cli/commands/up.ts';
+import { LOCAL_IMAGE_TAG, runUp, type UpDeps, upSummary } from '../../src/cli/commands/up.ts';
 import { runUrl } from '../../src/cli/commands/url.ts';
 import type { ComposeRunner } from '../../src/cli/docker.ts';
 import type { VaultPathContext } from '../../src/cli/vault-path.ts';
 
 class FakeCompose implements ComposeRunner {
   calls: string[][] = [];
+  envs: (Record<string, string> | undefined)[] = [];
+  /** Exit code `docker compose pull` answers with (0 = the registry had the image). */
+  pullCode = 0;
   private readonly psOutput: string;
   constructor(psOutput = '') {
     this.psOutput = psOutput;
@@ -22,12 +25,25 @@ class FakeCompose implements ComposeRunner {
   async available() {
     return true;
   }
-  async run(args: string[]) {
+  async run(args: string[], opts?: { capture?: boolean; env?: Record<string, string> }) {
     this.calls.push(args);
+    this.envs.push(opts?.env);
     if (args[0] === 'ps') return { code: 0, stdout: this.psOutput };
+    if (args.includes('pull')) return { code: this.pullCode, stdout: '' };
     return { code: 0, stdout: '' };
   }
 }
+
+const upDeps = (compose: ComposeRunner, over: Partial<UpDeps> = {}): UpDeps => ({
+  compose,
+  env: new Map([['TUNNEL_MODE', 'quick']]),
+  print() {},
+  fetchImpl: healthOk('https://x.trycloudflare.com'),
+  sleep: async () => {},
+  localPort: 3000,
+  imageTag: async () => 'sha-abc1234',
+  ...over,
+});
 
 const healthOk = (publicUrl: string): typeof fetch =>
   (async () =>
@@ -56,20 +72,18 @@ describe('runUp', () => {
     const lines: string[] = [];
     const code = await runUp(
       { build: true },
-      {
-        compose,
+      upDeps(compose, {
         env: new Map([
           ['TUNNEL_MODE', 'quick'],
           ['PORT', '3000'],
         ]),
         print: (l) => lines.push(l),
-        fetchImpl: healthOk('https://x.trycloudflare.com'),
-        sleep: async () => {},
-        localPort: 3000,
-      },
+      }),
     );
     expect(code).toBe(0);
+    // --build never consults the registry and tags the local build `dev`.
     expect(compose.calls[0]).toEqual(['--profile', 'tunnel', 'up', '-d', '--build']);
+    expect(compose.envs[0]).toEqual({ BRAINSTEM_IMAGE_TAG: LOCAL_IMAGE_TAG });
     expect(lines.join('\n')).toContain('https://x.trycloudflare.com/mcp');
     expect(lines.join('\n')).toContain(
       'claude mcp add --transport http brainstem https://x.trycloudflare.com/mcp',
@@ -101,16 +115,13 @@ describe('runUp', () => {
 
     const code = await runUp(
       {},
-      {
-        compose,
-        env: new Map([['TUNNEL_MODE', 'quick']]),
+      upDeps(compose, {
         print: (l) => lines.push(l),
         fetchImpl,
         sleep: async (ms) => {
           sleeps.push(ms);
         },
-        localPort: 3000,
-      },
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('https://b.trycloudflare.com/mcp');
@@ -123,18 +134,59 @@ describe('runUp', () => {
     const lines: string[] = [];
     const code = await runUp(
       {},
-      {
-        compose,
+      upDeps(compose, {
         env: new Map([['TUNNEL_MODE', 'none']]),
         print: (l) => lines.push(l),
         fetchImpl: healthOk('http://localhost:3000'),
-        sleep: async () => {},
-        localPort: 3000,
-      },
+      }),
     );
     expect(code).toBe(0);
-    expect(compose.calls[0]).toEqual(['up', '-d']);
+    // Default: pull the image CI built for this commit, then start without --build.
+    expect(compose.calls[0]).toEqual(['pull', '--quiet']);
+    expect(compose.envs[0]).toEqual({ BRAINSTEM_IMAGE_TAG: 'sha-abc1234' });
+    expect(compose.calls[1]).toEqual(['up', '-d']);
+    expect(compose.envs[1]).toEqual({ BRAINSTEM_IMAGE_TAG: 'sha-abc1234' });
     expect(lines.join('\n')).not.toMatch(/changes on every restart/);
+  });
+
+  it('falls back to a local build when the registry has no image for this commit', async () => {
+    const compose = new FakeCompose();
+    compose.pullCode = 1;
+    const lines: string[] = [];
+    const code = await runUp({}, upDeps(compose, { print: (l) => lines.push(l) }));
+    expect(code).toBe(0);
+    expect(compose.calls[0]).toEqual(['--profile', 'tunnel', 'pull', '--quiet']);
+    expect(compose.calls[1]).toEqual(['--profile', 'tunnel', 'up', '-d', '--build']);
+    expect(compose.envs[1]).toEqual({ BRAINSTEM_IMAGE_TAG: LOCAL_IMAGE_TAG });
+    expect(lines.join('\n')).toMatch(/no prebuilt image for sha-abc1234/);
+  });
+
+  it('builds locally without asking the registry when the tree is not a clean checkout', async () => {
+    const compose = new FakeCompose();
+    const lines: string[] = [];
+    const code = await runUp(
+      {},
+      upDeps(compose, { imageTag: async () => null, print: (l) => lines.push(l) }),
+    );
+    expect(code).toBe(0);
+    expect(compose.calls.some((c) => c.includes('pull'))).toBe(false);
+    expect(compose.calls[0]).toEqual(['--profile', 'tunnel', 'up', '-d', '--build']);
+    expect(lines.join('\n')).toMatch(/not a clean git checkout/);
+  });
+
+  it('with --no-build refuses to start when nothing prebuilt can be pulled', async () => {
+    const compose = new FakeCompose();
+    compose.pullCode = 1;
+    const lines: string[] = [];
+    const code = await runUp({ build: false }, upDeps(compose, { print: (l) => lines.push(l) }));
+    expect(code).toBe(1);
+    expect(compose.calls.some((c) => c.includes('up'))).toBe(false);
+    expect(lines.join('\n')).toMatch(/run without --no-build/);
+
+    const dirty = new FakeCompose();
+    const code2 = await runUp({ build: false }, upDeps(dirty, { imageTag: async () => null }));
+    expect(code2).toBe(1);
+    expect(dirty.calls).toEqual([]);
   });
 
   it('reports a health timeout with the last log lines', async () => {
@@ -145,14 +197,7 @@ describe('runUp', () => {
     };
     const code = await runUp(
       {},
-      {
-        compose,
-        env: new Map([['TUNNEL_MODE', 'quick']]),
-        print: (l) => lines.push(l),
-        fetchImpl: failing,
-        sleep: async () => {},
-        localPort: 3000,
-      },
+      upDeps(compose, { print: (l) => lines.push(l), fetchImpl: failing }),
     );
     expect(code).toBe(1);
     expect(compose.calls).toContainEqual(['logs', '--tail', '20', 'tunnel', 'app']);
@@ -181,14 +226,11 @@ describe('runUp', () => {
     const lines: string[] = [];
     const code = await runUp(
       {},
-      {
-        compose,
+      upDeps(compose, {
         env: new Map(),
         print: (l) => lines.push(l),
         fetchImpl: healthOk('http://localhost:3000'),
-        sleep: async () => {},
-        localPort: 3000,
-      },
+      }),
     );
     expect(code).toBe(1);
     expect(lines).toContain('Docker is not running or not installed');

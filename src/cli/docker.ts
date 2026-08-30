@@ -1,7 +1,16 @@
 import { spawn } from 'node:child_process';
 
+export interface ComposeRunOptions {
+  capture?: boolean;
+  /**
+   * Extra variables for compose's `${VAR}` interpolation — they take
+   * precedence over `.env`. `up` uses it for `BRAINSTEM_IMAGE_TAG`.
+   */
+  env?: Record<string, string>;
+}
+
 export interface ComposeRunner {
-  run(args: string[], opts?: { capture?: boolean }): Promise<{ code: number; stdout: string }>;
+  run(args: string[], opts?: ComposeRunOptions): Promise<{ code: number; stdout: string }>;
   available(): Promise<boolean>;
 }
 
@@ -18,6 +27,7 @@ export function createComposeRunner(cwd: string): ComposeRunner {
       return new Promise((resolve, reject) => {
         const child = spawn('docker', ['compose', ...args], {
           cwd,
+          env: opts?.env ? { ...process.env, ...opts.env } : process.env,
           stdio: capture ? 'pipe' : 'inherit',
           shell: false,
         });

@@ -8,6 +8,24 @@ export interface UpDeps {
   fetchImpl: typeof fetch;
   sleep(ms: number): Promise<void>;
   localPort: number;
+  /**
+   * The registry tag matching the checked-out commit (`sha-<7>`), or `null`
+   * when no prebuilt image can match what is on disk — see
+   * `src/cli/image-tag.ts`.
+   */
+  imageTag(): Promise<string | null>;
+}
+
+/** Tag compose uses for a locally built image (`compose.yaml` default). */
+export const LOCAL_IMAGE_TAG = 'dev';
+
+/**
+ * `build`: `true` forces a local `--build`; `false` (`--no-build`) pulls the
+ * prebuilt image and fails if there is none; `undefined` pulls when it can and
+ * builds otherwise.
+ */
+export interface UpArgs {
+  build?: boolean;
 }
 
 const HEALTH_TIMEOUT_MS = 120_000;
@@ -35,24 +53,67 @@ export function upSummary(h: HealthInfo, opts: { secretHint: string }): string[]
 }
 
 /**
+ * Decides between the prebuilt image CI published for this commit and a local
+ * build. Pulling is tried first because it turns a multi-minute first start
+ * into seconds and pins the containers to exactly the commit checked out; a
+ * failed pull (offline, private package, a commit CI never saw) falls back to
+ * building unless `--no-build` asked for the pull alone.
+ */
+async function chooseImage(
+  args: UpArgs,
+  deps: UpDeps,
+  profile: string[],
+): Promise<{ tag: string; build: boolean } | null> {
+  if (args.build === true) return { tag: LOCAL_IMAGE_TAG, build: true };
+
+  const tag = await deps.imageTag();
+  if (tag === null) {
+    if (args.build === false) {
+      deps.print(
+        'cannot pick a prebuilt image: not a clean git checkout (local changes, or no git) — run without --no-build to build locally',
+      );
+      return null;
+    }
+    deps.print('not a clean git checkout — building the image locally');
+    return { tag: LOCAL_IMAGE_TAG, build: true };
+  }
+
+  const pull = await deps.compose.run([...profile, 'pull', '--quiet'], {
+    capture: true,
+    env: { BRAINSTEM_IMAGE_TAG: tag },
+  });
+  if (pull.code === 0) return { tag, build: false };
+
+  if (args.build === false) {
+    deps.print(
+      `no prebuilt image for ${tag} could be pulled — run without --no-build to build locally`,
+    );
+    return null;
+  }
+  deps.print(`no prebuilt image for ${tag} — building locally`);
+  return { tag: LOCAL_IMAGE_TAG, build: true };
+}
+
+/**
  * `docker compose up -d` (with `--profile tunnel` unless `TUNNEL_MODE=none`),
  * then waits for `/health` to answer before printing the connector summary.
  * A timeout dumps the last 20 lines of `app`/`tunnel` logs instead.
  */
-export async function runUp(args: { build?: boolean }, deps: UpDeps): Promise<number> {
+export async function runUp(args: UpArgs, deps: UpDeps): Promise<number> {
   if (!(await deps.compose.available())) {
     deps.print('Docker is not running or not installed');
     return 1;
   }
 
   const tunnelMode = deps.env.get('TUNNEL_MODE') ?? 'none';
-  const upArgs = [
-    ...(tunnelMode !== 'none' ? ['--profile', 'tunnel'] : []),
-    'up',
-    '-d',
-    ...(args.build ? ['--build'] : []),
-  ];
-  await deps.compose.run(upArgs);
+  const profile = tunnelMode !== 'none' ? ['--profile', 'tunnel'] : [];
+
+  const image = await chooseImage(args, deps, profile);
+  if (image === null) return 1;
+
+  await deps.compose.run([...profile, 'up', '-d', ...(image.build ? ['--build'] : [])], {
+    env: { BRAINSTEM_IMAGE_TAG: image.tag },
+  });
 
   let health = await waitForHealth(
     `http://localhost:${deps.localPort}/health`,

@@ -29,7 +29,8 @@ describe('runUpdate', () => {
     // The restart re-execs *this* interpreter, not whatever `node` PATH resolves
     // to — `./brainstem` may well have been started by a different install.
     expect(ran[1]?.[0]).toBe(process.execPath);
-    expect(ran[1]?.slice(1)).toEqual(['src/cli/brainstem.ts', 'up', '--build']);
+    // Plain `up`: it pulls the image CI built for the new commit, or builds.
+    expect(ran[1]?.slice(1)).toEqual(['src/cli/brainstem.ts', 'up']);
     // Every git call is anchored to the repo, never to whatever directory the
     // CLI happened to be started from.
     expect(gitCwds).toEqual(['/repo', '/repo', '/repo']);

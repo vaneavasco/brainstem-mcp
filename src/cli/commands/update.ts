@@ -39,7 +39,8 @@ async function shortHead(
 
 /**
  * `./brainstem update`: `git pull --ff-only`, `npm ci --omit=dev`, then
- * restarts in a child `<this node> src/cli/brainstem.ts up --build` so the
+ * restarts in a child `<this node> src/cli/brainstem.ts up` (which pulls the
+ * prebuilt image for the new commit, or builds when there is none) so the
  * freshly installed dependencies — not the ones already loaded in this
  * process — are what actually runs. The child re-execs `process.execPath`
  * rather than a bare `node`, so the update runs under the same interpreter
@@ -63,5 +64,5 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   const installCode = await deps.run('npm', ['ci', '--omit=dev']);
   if (installCode !== 0) return installCode;
 
-  return deps.run(process.execPath, ['src/cli/brainstem.ts', 'up', '--build']);
+  return deps.run(process.execPath, ['src/cli/brainstem.ts', 'up']);
 }
