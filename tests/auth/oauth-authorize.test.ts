@@ -145,7 +145,13 @@ describe('oauth authorize + consent', () => {
     it('sets defensive security headers on the consent page response', async () => {
       const res = await authorize();
       expect(res.status).toBe(200);
+      // form-action must include the client's redirect origin: Chrome applies it to the
+      // redirect that follows the Approve submit (regression found with a real browser).
       expect(res.headers.get('content-security-policy')).toBe(
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' http://localhost:3118",
+      );
+      const errorPage = await authorize({ redirect_uri: 'https://evil.example/cb' });
+      expect(errorPage.headers.get('content-security-policy')).toBe(
         "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
       );
       expect(res.headers.get('x-frame-options')).toBe('DENY');

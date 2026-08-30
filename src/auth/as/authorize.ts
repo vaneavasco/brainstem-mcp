@@ -79,6 +79,19 @@ function noStoreHtml(res: Response): void {
   });
 }
 
+/**
+ * Chrome enforces `form-action` on the redirect that follows a form submission, so the
+ * consent page must list the client's redirect origin (claude.ai, or Claude Code's loopback)
+ * or the 302 after Approve is silently blocked. Seen with a real browser on 2026-08-30.
+ */
+function allowFormRedirect(res: Response, redirectUri: string): void {
+  const origin = new URL(redirectUri).origin;
+  res.set(
+    'Content-Security-Policy',
+    `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${origin}`,
+  );
+}
+
 function redirectError(
   res: Response,
   redirectUri: string,
@@ -244,6 +257,7 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
       'oauth pending authorization created',
     );
 
+    allowFormRedirect(res, redirectUri);
     res.status(200).send(
       renderConsentPage({
         clientName: pending.clientName,
@@ -320,6 +334,7 @@ export function createAuthorizeRouter(config: Config, logger: Logger, auth: Auth
           pendingId: pending.id,
           nonce: pending.nonce,
         };
+        allowFormRedirect(res, pending.redirectUri);
         if (verdict.reason === 'locked') {
           logger.warn(
             { clientName: pending.clientName },
