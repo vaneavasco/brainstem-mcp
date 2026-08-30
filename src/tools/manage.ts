@@ -97,7 +97,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
                 index.rename(entry.path, `${dst}/${entry.path.slice(src.length + 1)}`);
             }
           }
-          // null for a moved folder (or a destination whose content is not text); a real hash
+          // null for a moved folder; a real hash
           // for a moved file.
           const hash = await adapter.hashOf(dst);
           return okJson({ from: src, to: dst, hash }, `Moved ${src} → ${dst}.`);

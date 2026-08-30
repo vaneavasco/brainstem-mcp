@@ -134,7 +134,7 @@ export interface StorageAdapter {
   move(from: string, to: string, opts?: MutateOpts): Promise<void>;
   softDelete(path: string, confirm: boolean, opts?: MutateOpts): Promise<void>;
   search(query: string, opts?: SearchOpts): Promise<Match[]>;
-  /** sha256hex of the file's decoded text, or null when it does not exist or is not text. */
+  /** sha256hex of the file's decoded text, or null when it does not exist or is a directory (non-text files hash their raw bytes). */
   hashOf(path: string): Promise<string | null>;
   /** Unlinks a file outright, bypassing .trash. Internal use only (transaction rollback). */
   hardDelete(path: string): Promise<void>;
