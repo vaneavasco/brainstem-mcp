@@ -2,7 +2,7 @@
 
 > Single-user, self-hosted MCP server that gives Claude (claude.ai web/mobile, Claude Desktop, Claude Code) read/write access to an Obsidian vault. Runs in Docker on the owner's machine, reachable through a Cloudflare tunnel, protected by its own OAuth 2.1 authorization server. Install: `git clone https://github.com/vaneavasco/brainstem-mcp.git && cd brainstem-mcp && ./brainstem start`.
 
-Version 0.2.x (beta). Verified with Claude Code and claude.ai web on Linux; Windows/macOS launchers and the Claude mobile app are implemented but not yet verified by a real run.
+Version 0.3.x (beta). Verified with Claude Code and claude.ai web on Linux; Windows/macOS launchers and the Claude mobile app are implemented but not yet verified by a real run.
 
 ## Docs
 
