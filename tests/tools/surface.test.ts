@@ -27,6 +27,8 @@ const EXPECTED = [
   'vault_tags',
   'vault_outline',
   'vault_transaction',
+  'vault_query',
+  'vault_recent',
 ];
 
 let h: Harness;
@@ -38,7 +40,7 @@ afterAll(async () => {
 });
 
 describe('tool surface parity', () => {
-  it('exposes exactly the 25 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
+  it('exposes exactly the 27 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED, 'brainstem_ping'].sort());
     for (const tool of tools) {
@@ -67,7 +69,9 @@ describe('tool surface parity', () => {
       'vault_links',
       'vault_list',
       'vault_outline',
+      'vault_query',
       'vault_read',
+      'vault_recent',
       'vault_search',
       'vault_search_frontmatter',
       'vault_tags',

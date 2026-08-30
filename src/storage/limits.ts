@@ -11,6 +11,8 @@ export const MAX_MATCH_TEXT_CHARS = 400;
 export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
+export const MAX_QUERY_ROWS = 500;
+export const MAX_RECENT = 200;
 
 export const BINARY_MIME_ALLOWLIST: ReadonlyMap<string, readonly string[]> = new Map([
   ['image/png', ['.png']],

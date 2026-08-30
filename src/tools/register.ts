@@ -6,6 +6,7 @@ import { registerCanvasTools } from './canvas.ts';
 import { registerDailyTools } from './daily.ts';
 import { registerGraphTools } from './graph.ts';
 import { registerManageTools } from './manage.ts';
+import { registerQueryTools } from './query.ts';
 import { registerReadTools } from './read.ts';
 import { registerSearchTools } from './search.ts';
 import { registerTxTools } from './tx.ts';
@@ -45,5 +46,6 @@ export function registerVaultTools(server: McpServer, tc: ToolContext): void {
   registerDailyTools(server, tc);
   registerAnalyticsTools(server, tc);
   registerGraphTools(server, tc);
+  registerQueryTools(server, tc);
   registerTxTools(server, tc);
 }
