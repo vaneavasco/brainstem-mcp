@@ -155,7 +155,7 @@ code {
 }
 .note { background: var(--note-bg); border-color: var(--note-line); color: var(--note-fg); }
 .alert { background: var(--alert-bg); border-color: var(--alert-line); color: var(--alert-fg); }
-.note code, .alert code { background: rgba(127, 127, 127, .18); }
+.note code, .alert code { background: rgba(127, 127, 127, .18); white-space: nowrap; }
 label { display: block; font-weight: 600; font-size: .9375rem; margin-bottom: .375rem; }
 input[type="password"] {
   width: 100%;
