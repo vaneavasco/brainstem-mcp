@@ -69,7 +69,11 @@ function noStoreHtml(res: Response): void {
     'Cache-Control': 'no-store',
     Pragma: 'no-cache',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
-    'Referrer-Policy': 'no-referrer',
+    // `same-origin`, not `no-referrer`: per the Fetch spec a form POST made under
+    // `no-referrer` carries `Origin: null`, which the app-wide Origin validation rejects
+    // (seen with a real browser on the consent form). Same-origin keeps the real origin on
+    // our own POST and still sends no Referer to the client's redirect target.
+    'Referrer-Policy': 'same-origin',
     'X-Frame-Options': 'DENY',
     'X-Content-Type-Options': 'nosniff',
   });

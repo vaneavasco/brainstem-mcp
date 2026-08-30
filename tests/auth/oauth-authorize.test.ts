@@ -149,13 +149,36 @@ describe('oauth authorize + consent', () => {
         "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
       );
       expect(res.headers.get('x-frame-options')).toBe('DENY');
-      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(res.headers.get('referrer-policy')).toBe('same-origin');
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
       expect(res.headers.get('pragma')).toBe('no-cache');
     });
   });
 
   describe('POST /oauth/consent', () => {
+    it('accepts the consent POST exactly as a browser sends it (Origin header of our own page)', async () => {
+      // Regression: with Referrer-Policy no-referrer the browser sent `Origin: null` and the
+      // app-wide Origin validation answered 403 before the consent handler ran.
+      const form = formOf(await (await authorize()).text());
+      const res = await fetch(`${base}/oauth/consent`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          origin: 'https://brainstem.example.com',
+          referer: 'https://brainstem.example.com/oauth/authorize',
+        },
+        body: new URLSearchParams({ ...form, action: 'approve', secret: TEST_OWNER_SECRET }),
+      });
+      expect(res.status).toBe(302);
+      const nullOrigin = await fetch(`${base}/oauth/consent`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'null' },
+        body: new URLSearchParams({ ...form, action: 'approve', secret: TEST_OWNER_SECRET }),
+      });
+      expect(nullOrigin.status).toBe(403); // documents why the page must not use no-referrer
+    });
     it('approve with the right secret redirects with a code, state and iss', async () => {
       const form = formOf(await (await authorize()).text());
       const res = await consent({ ...form, action: 'approve', secret: TEST_OWNER_SECRET });
