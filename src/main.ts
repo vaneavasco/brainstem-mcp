@@ -100,6 +100,7 @@ async function main(): Promise<void> {
     vaultPath: config.storage.vaultPath,
     settings: config.vaultSettings,
     watchPollMs: config.watchPollMs,
+    stateDir,
   });
   logger.info(
     { vaultPath: config.storage.vaultPath, indexed: runtime.index.size() },
@@ -133,6 +134,22 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     logger.warn({ err: error }, 'could not scan state dir for sync-conflict copies');
+  }
+
+  // A transaction journal only survives a crash mid-apply: report it and leave it alone. There
+  // is deliberately no replay — the pre-images are the owner's to restore (see spec 4.6 step 5).
+  try {
+    for (const entry of await fs.readdir(path.join(stateDir, 'tx'), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      logger.warn(
+        { transaction: entry.name, journal: path.join(stateDir, 'tx', entry.name) },
+        'unfinished transaction journal found — the original files are kept there as pre-images; nothing was replayed',
+      );
+    }
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'ENOENT') {
+      logger.warn({ err: error }, 'could not scan the transaction journal folder');
+    }
   }
 
   // The owner's vault-conventions note lives in the reserved state dir; seed

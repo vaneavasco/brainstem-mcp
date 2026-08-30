@@ -8,6 +8,7 @@ import { registerGraphTools } from './graph.ts';
 import { registerManageTools } from './manage.ts';
 import { registerReadTools } from './read.ts';
 import { registerSearchTools } from './search.ts';
+import { registerTxTools } from './tx.ts';
 import { registerWriteTools } from './write.ts';
 
 export interface ToolContext {
@@ -44,4 +45,5 @@ export function registerVaultTools(server: McpServer, tc: ToolContext): void {
   registerDailyTools(server, tc);
   registerAnalyticsTools(server, tc);
   registerGraphTools(server, tc);
+  registerTxTools(server, tc);
 }

@@ -23,9 +23,9 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 [ "$CODE" = "401" ] || { echo "expected 401 for unauthenticated /mcp, got $CODE"; exit 1; }
 
-echo "[3/6] tools/list has 24 vault tools"
+echo "[3/6] tools/list has 25 vault tools"
 COUNT=$("${INSPECTOR[@]}" --method tools/list | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).tools.filter(t=>t.name.startsWith("vault_")).length))')
-[ "$COUNT" = "24" ] || { echo "expected 24 vault tools, got $COUNT"; exit 1; }
+[ "$COUNT" = "25" ] || { echo "expected 25 vault tools, got $COUNT"; exit 1; }
 
 echo "[4/6] vault_write then vault_read"
 "${INSPECTOR[@]}" --method tools/call --tool-name vault_write --tool-arg path=00-inbox/smoke.md --tool-arg content=$'---\ntype: smoke\n---\n# Smoke\n' >/dev/null

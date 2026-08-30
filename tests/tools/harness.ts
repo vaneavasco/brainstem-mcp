@@ -31,6 +31,7 @@ export async function startHarness(overrides?: LocalRuntimeOptions['settings']):
     vaultPath: root,
     ripgrepPath: null,
     settings: overrides,
+    stateDir: path.join(root, '_brainstem'),
   });
   const config = loadConfig(baseEnv());
   const t = await createTestAuth(config, root);
