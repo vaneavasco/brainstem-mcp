@@ -1,6 +1,10 @@
 import { VaultError } from './types.ts';
 
 export const MAX_FILE_BYTES = 1_048_576;
+/** Default cap for `writeBinary` (attachments), overridable via the `MAX_BINARY_BYTES` env var
+ *  (see `src/config.ts`) and threaded through `LocalFSAdapter.create`/`createLocalRuntime`.
+ *  Text writes always stay at `MAX_FILE_BYTES` regardless of this value. */
+export const MAX_BINARY_BYTES = 8 * 1024 * 1024;
 export const MAX_BATCH = 20;
 export const MAX_SEARCH_RESULTS = 50;
 export const MAX_RESULT_CHARS = 120_000;
@@ -24,19 +28,43 @@ export const MAX_SEARCH_PATHS = 200;
  *  matched file's index entry against the same where/tags/pathPrefix query. */
 export const MAX_SEARCH_SCAN = 2000;
 
+// Obsidian's own accepted attachment formats (Files & links → "Supported file formats"), plus
+// the pre-existing png/jpeg/gif/webp/pdf. `.webm` is deliberately listed under both audio/webm
+// and video/webm — extensionAllowedFor looks up by MIME key, so either MIME accepts the same
+// extension without any change to the matching logic.
 export const BINARY_MIME_ALLOWLIST: ReadonlyMap<string, readonly string[]> = new Map([
   ['image/png', ['.png']],
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/gif', ['.gif']],
   ['image/webp', ['.webp']],
+  ['image/avif', ['.avif']],
+  ['image/bmp', ['.bmp']],
+  ['image/svg+xml', ['.svg']],
   ['application/pdf', ['.pdf']],
+  ['audio/mpeg', ['.mp3']],
+  ['audio/mp4', ['.m4a']],
+  ['audio/ogg', ['.ogg']],
+  ['audio/wav', ['.wav']],
+  ['audio/flac', ['.flac']],
+  ['audio/webm', ['.webm']],
+  ['audio/3gpp', ['.3gp']],
+  ['video/mp4', ['.mp4']],
+  ['video/quicktime', ['.mov']],
+  ['video/x-matroska', ['.mkv']],
+  ['video/ogg', ['.ogv']],
+  ['video/webm', ['.webm']],
 ]);
 
-export function assertWithinSize(bytes: number, what: string): void {
-  if (bytes > MAX_FILE_BYTES) {
+export function assertWithinSize(
+  bytes: number,
+  what: string,
+  limit: number = MAX_FILE_BYTES,
+): void {
+  if (bytes > limit) {
+    const mib = (limit / (1024 * 1024)).toFixed(limit % (1024 * 1024) === 0 ? 0 : 1);
     throw new VaultError(
       'TOO_LARGE',
-      `${what} is ${bytes} bytes; the limit is ${MAX_FILE_BYTES} bytes (1 MiB). Split the content or use vault_append/vault_edit.`,
+      `${what} is ${bytes} bytes; the limit is ${limit} bytes (${mib} MiB). Split the content or use vault_append/vault_edit.`,
     );
   }
 }

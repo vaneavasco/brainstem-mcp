@@ -102,6 +102,7 @@ async function main(): Promise<void> {
     settings: config.vaultSettings,
     watchPollMs: config.watchPollMs,
     stateDir,
+    maxBinaryBytes: config.maxBinaryBytes,
   });
   logger.info(
     { vaultPath: config.storage.vaultPath, indexed: runtime.index.size() },

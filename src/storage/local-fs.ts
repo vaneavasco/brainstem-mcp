@@ -18,6 +18,7 @@ import {
   assertWithinSize,
   BINARY_MIME_ALLOWLIST,
   extensionAllowedFor,
+  MAX_BINARY_BYTES,
   MAX_MATCH_TEXT_CHARS,
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
@@ -62,6 +63,8 @@ const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
 export interface LocalFSOptions {
   ripgrepPath?: string | null;
   watchPollMs?: number | null;
+  /** Cap for `writeBinary`. Defaults to `MAX_BINARY_BYTES`; text writes are unaffected. */
+  maxBinaryBytes?: number;
 }
 
 async function detectRipgrep(): Promise<string | null> {
@@ -106,23 +109,38 @@ export class LocalFSAdapter implements StorageAdapter {
     '.canvas',
     '.json',
     '.csv',
+    // Obsidian Bases. Read/write/search/list as plain text only — the query syntax changed
+    // incompatibly twice in 2025, so this server never parses or evaluates it.
+    '.base',
   ]);
 
   readonly root: string;
   private readonly rg: string | null;
   private readonly watchPollMs: number | null;
+  private readonly maxBinaryBytes: number;
 
-  private constructor(root: string, rg: string | null, watchPollMs: number | null) {
+  private constructor(
+    root: string,
+    rg: string | null,
+    watchPollMs: number | null,
+    maxBinaryBytes: number,
+  ) {
     this.root = root;
     this.rg = rg;
     this.watchPollMs = watchPollMs;
+    this.maxBinaryBytes = maxBinaryBytes;
   }
 
   static async create(rootDir: string, opts: LocalFSOptions = {}): Promise<LocalFSAdapter> {
     await fs.mkdir(rootDir, { recursive: true });
     const root = await fs.realpath(rootDir);
     const rg = opts.ripgrepPath === undefined ? await detectRipgrep() : opts.ripgrepPath;
-    return new LocalFSAdapter(root, rg, opts.watchPollMs ?? null);
+    return new LocalFSAdapter(
+      root,
+      rg,
+      opts.watchPollMs ?? null,
+      opts.maxBinaryBytes ?? MAX_BINARY_BYTES,
+    );
   }
 
   capabilities(): Caps {
@@ -323,7 +341,7 @@ export class LocalFSAdapter implements StorageAdapter {
         `File extension of ${p} does not match media type ${mime}.`,
       );
     }
-    assertWithinSize(bytes.byteLength, 'Binary content');
+    assertWithinSize(bytes.byteLength, 'Binary content', this.maxBinaryBytes);
     if (opts.expectedHash !== undefined) {
       assertExpectedHash(p, await this.hashOf(p), opts.expectedHash);
     }

@@ -132,6 +132,28 @@ describe('v2 variables', () => {
       /CIMD_ALLOWED_HOSTS/,
     );
   });
+
+  it('defaults MAX_BINARY_BYTES to 8 MiB when unset or empty', () => {
+    expect(loadConfig(base).maxBinaryBytes).toBe(8 * 1024 * 1024);
+    expect(loadConfig(baseEnv({ MAX_BINARY_BYTES: '' })).maxBinaryBytes).toBe(8 * 1024 * 1024);
+  });
+
+  it('parses a custom MAX_BINARY_BYTES', () => {
+    expect(loadConfig(baseEnv({ MAX_BINARY_BYTES: '1048576' })).maxBinaryBytes).toBe(1_048_576);
+  });
+
+  it('rejects a non-positive or non-numeric MAX_BINARY_BYTES', () => {
+    for (const bad of ['0', '-5', 'abc']) {
+      let err: unknown;
+      try {
+        loadConfig(baseEnv({ MAX_BINARY_BYTES: bad }));
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as ConfigError).invalid).toEqual(['MAX_BINARY_BYTES']);
+    }
+  });
 });
 
 describe('storage and vault settings', () => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_BINARY_BYTES } from './storage/limits.ts';
 import { normalizeVaultPath } from './storage/path-policy.ts';
 import { resolveDailyNotePath } from './vault/daily-notes.ts';
 
@@ -29,6 +30,8 @@ export interface Config {
   tunnelMode: TunnelMode;
   storage: StorageConfig;
   vaultSettings: VaultSettingsConfig;
+  /** Cap for vault_write_binary (attachments); text writes stay at MAX_FILE_BYTES. */
+  maxBinaryBytes: number;
 }
 
 export const OWNER_SECRET_MIN_BYTES = 32;
@@ -79,6 +82,7 @@ const EnvSchema = z.object({
   DAILY_NOTES_TEMPLATE: z.string().optional(),
   VAULT_TIMEZONE: z.string().min(1).default('UTC'),
   REQUIRED_FRONTMATTER: z.string().default(''),
+  MAX_BINARY_BYTES: z.coerce.number().int().min(1).optional(),
 });
 
 const REQUIRED = ['PUBLIC_URL', 'OWNER_SECRET'] as const;
@@ -215,5 +219,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     tunnelMode: d.TUNNEL_MODE,
     storage,
     vaultSettings,
+    maxBinaryBytes: d.MAX_BINARY_BYTES ?? MAX_BINARY_BYTES,
   };
 }

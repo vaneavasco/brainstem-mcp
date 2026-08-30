@@ -60,8 +60,8 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
   server.registerTool(
     'vault_write_binary',
     {
-      title: 'Write image or PDF',
-      description: `Store a binary attachment from base64. Allowed media types: ${[...BINARY_MIME_ALLOWLIST.keys()].join(', ')}. Max ${MAX_FILE_BYTES} bytes decoded. The file extension must match the media type.`,
+      title: 'Write attachment',
+      description: `Store a binary attachment (image, audio, video or PDF) from base64. Allowed media types: ${[...BINARY_MIME_ALLOWLIST.keys()].join(', ')}. Max ${tc.runtime.maxBinaryBytes} bytes decoded. The file extension must match the media type.`,
       inputSchema: z.object({
         path: PathArg,
         base64: z.string(),

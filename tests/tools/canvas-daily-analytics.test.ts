@@ -57,6 +57,83 @@ describe('canvas tools', () => {
     });
     expect(text(badEdge)).toMatch(/nope/);
   });
+
+  it('updates a node, rejects a type mismatch, and fails NOT_FOUND on an unknown id', async () => {
+    await h.call('vault_canvas_add_node', {
+      path: 'boards/u.canvas',
+      node: { id: 'a', type: 'text', text: 'Idea A', x: 0, y: 0, width: 200, height: 100 },
+    });
+    const updated = await h.call('vault_canvas_update_node', {
+      path: 'boards/u.canvas',
+      id: 'a',
+      patch: { x: 999, text: 'Idea A revised' },
+    });
+    expect(updated.structuredContent).toMatchObject({
+      path: 'boards/u.canvas',
+      node: { id: 'a', x: 999, text: 'Idea A revised' },
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    await h.call('vault_canvas_add_node', {
+      path: 'boards/u.canvas',
+      node: { id: 'b', type: 'file', file: '01-projects/plan.md', x: 0, y: 0, width: 1, height: 1 },
+    });
+    const mismatch = await h.call('vault_canvas_update_node', {
+      path: 'boards/u.canvas',
+      id: 'b',
+      patch: { text: 'nope' },
+    });
+    expect(text(mismatch)).toMatch(/INVALID_INPUT/);
+    const missing = await h.call('vault_canvas_update_node', {
+      path: 'boards/u.canvas',
+      id: 'zzz',
+      patch: { x: 1 },
+    });
+    expect(text(missing)).toMatch(/NOT_FOUND/);
+    const conflict = await h.call('vault_canvas_update_node', {
+      path: 'boards/u.canvas',
+      id: 'a',
+      patch: { x: 1 },
+      expectedHash: 'a'.repeat(64),
+    });
+    expect(text(conflict)).toMatch(/CONFLICT/);
+  });
+
+  it('removes nodes and edges, cascading, and reports unknown ids without failing', async () => {
+    const path_ = 'boards/r.canvas';
+    await h.call('vault_canvas_add_node', {
+      path: path_,
+      node: { id: 'a', type: 'text', text: 'A', x: 0, y: 0, width: 1, height: 1 },
+    });
+    await h.call('vault_canvas_add_node', {
+      path: path_,
+      node: { id: 'b', type: 'text', text: 'B', x: 1, y: 1, width: 1, height: 1 },
+    });
+    await h.call('vault_canvas_add_edge', {
+      path: path_,
+      edge: { id: 'e1', fromNode: 'a', toNode: 'b' },
+    });
+    const removed = await h.call('vault_canvas_remove', {
+      path: path_,
+      nodeIds: ['a', 'zzz'],
+    });
+    expect(removed.structuredContent).toMatchObject({
+      path: path_,
+      removedNodes: ['a'],
+      removedEdges: ['e1'],
+      missing: ['zzz'],
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    const read = await h.call('vault_canvas_read', { path: path_ });
+    expect((read.structuredContent as { nodes: unknown[] }).nodes).toHaveLength(1);
+    const noArgs = await h.call('vault_canvas_remove', { path: path_ });
+    expect(text(noArgs)).toMatch(/INVALID_INPUT/);
+    const conflict = await h.call('vault_canvas_remove', {
+      path: path_,
+      nodeIds: ['b'],
+      expectedHash: 'a'.repeat(64),
+    });
+    expect(text(conflict)).toMatch(/CONFLICT/);
+  });
 });
 
 describe('daily note tools', () => {

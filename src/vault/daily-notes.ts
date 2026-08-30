@@ -95,6 +95,10 @@ export function resolveDailyNotePath(settings: DailyNoteSettings, date: Date): s
   return normalizeVaultPath(folder === '' ? `${name}.md` : `${folder}/${name}.md`);
 }
 
+/** Default `{{time}}` format when a template uses the bare placeholder (Obsidian core Templates
+ *  default; matches HH:mm, 24-hour). */
+export const DEFAULT_TIME_FORMAT = 'HH:mm';
+
 export function renderDailyTemplate(
   template: string,
   date: Date,
@@ -105,7 +109,11 @@ export function renderDailyTemplate(
     .replace(/\{\{\s*date:([^}]+?)\s*\}\}/g, (_m, fmt: string) =>
       formatInVaultZone(date, fmt, settings.timezone),
     )
+    .replace(/\{\{\s*time:([^}]+?)\s*\}\}/g, (_m, fmt: string) =>
+      formatInVaultZone(date, fmt, settings.timezone),
+    )
     .replace(/\{\{\s*date\s*\}\}/g, title)
+    .replace(/\{\{\s*time\s*\}\}/g, formatInVaultZone(date, DEFAULT_TIME_FORMAT, settings.timezone))
     .replace(/\{\{\s*title\s*\}\}/g, title);
 }
 

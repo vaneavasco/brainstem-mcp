@@ -27,6 +27,7 @@ services:
       DAILY_NOTES_FORMAT: ${DAILY_NOTES_FORMAT:-yyyy-MM-dd}
       DAILY_NOTES_TEMPLATE: ${DAILY_NOTES_TEMPLATE:-}
       REQUIRED_FRONTMATTER: ${REQUIRED_FRONTMATTER:-}
+      MAX_BINARY_BYTES: ${MAX_BINARY_BYTES:-}
       # STATE_DIR is deliberately NOT passed through: under Docker the auth state
       # always lives in the bind-mounted vault (/vault/_brainstem). It exists for
       # tests and `npm run dev` only.

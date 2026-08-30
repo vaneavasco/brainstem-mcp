@@ -119,9 +119,9 @@ describe('vault_write_binary', () => {
     expect(ok.isError).toBeFalsy();
     expect(ok.structuredContent).toMatchObject({ path: 'img/a.png', bytes: 4 });
     const bad = await h.call('vault_write_binary', {
-      path: 'a.svg',
+      path: 'a.exe',
       base64: png,
-      mimeType: 'image/svg+xml',
+      mimeType: 'application/x-msdownload',
     });
     expect(bad.isError).toBe(true);
     const notB64 = await h.call('vault_write_binary', {

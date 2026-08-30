@@ -15,21 +15,68 @@ const NodeBase = z.object({
   color: z.string().optional(),
 });
 
+const TextNodeSchema = NodeBase.extend({ type: z.literal('text'), text: z.string() }).loose();
+const FileNodeSchema = NodeBase.extend({
+  type: z.literal('file'),
+  file: z.string().min(1),
+  subpath: z.string().optional(),
+}).loose();
+const LinkNodeSchema = NodeBase.extend({ type: z.literal('link'), url: z.url() }).loose();
+const GroupNodeSchema = NodeBase.extend({
+  type: z.literal('group'),
+  label: z.string().optional(),
+  background: z.string().optional(),
+  backgroundStyle: z.enum(['cover', 'ratio', 'repeat']).optional(),
+}).loose();
+
 export const CanvasNodeInputSchema = z.discriminatedUnion('type', [
-  NodeBase.extend({ type: z.literal('text'), text: z.string() }).loose(),
-  NodeBase.extend({
-    type: z.literal('file'),
-    file: z.string().min(1),
+  TextNodeSchema,
+  FileNodeSchema,
+  LinkNodeSchema,
+  GroupNodeSchema,
+]);
+
+/** Fields specific to one node type — shared by `updateNode`'s type check and re-validation. */
+const NODE_TYPE_SCHEMAS = {
+  text: TextNodeSchema,
+  file: FileNodeSchema,
+  link: LinkNodeSchema,
+  group: GroupNodeSchema,
+} as const;
+
+const TYPE_SPECIFIC_FIELDS: Record<keyof typeof NODE_TYPE_SCHEMAS, readonly string[]> = {
+  text: ['text'],
+  file: ['file', 'subpath'],
+  link: ['url'],
+  group: ['label', 'background', 'backgroundStyle'],
+};
+
+/** Every field that belongs to *some* node type, used to tell "wrong type for this node"
+ *  (rejected) apart from an arbitrary custom property (passed through, per JSON Canvas's own
+ *  extensibility — see parseCanvas's round-trip test). */
+const ALL_TYPE_SPECIFIC_FIELDS = new Set(Object.values(TYPE_SPECIFIC_FIELDS).flat());
+
+/** Common to every node type; always patchable regardless of the node's type. */
+const COMMON_NODE_FIELDS = ['x', 'y', 'width', 'height', 'color'];
+
+export const CanvasNodePatchSchema = z
+  .object({
+    x: z.number().optional(),
+    y: z.number().optional(),
+    width: z.number().positive().optional(),
+    height: z.number().positive().optional(),
+    color: z.string().optional(),
+    text: z.string().optional(),
+    file: z.string().min(1).optional(),
     subpath: z.string().optional(),
-  }).loose(),
-  NodeBase.extend({ type: z.literal('link'), url: z.url() }).loose(),
-  NodeBase.extend({
-    type: z.literal('group'),
+    url: z.url().optional(),
     label: z.string().optional(),
     background: z.string().optional(),
     backgroundStyle: z.enum(['cover', 'ratio', 'repeat']).optional(),
-  }).loose(),
-]);
+  })
+  .loose();
+
+export type CanvasNodePatch = z.infer<typeof CanvasNodePatchSchema>;
 
 export const CanvasEdgeInputSchema = z
   .object({
@@ -153,4 +200,98 @@ export function addEdge(
   }
   const edge = { ...data, id } as CanvasEdge;
   return { canvas: { ...canvas, edges: [...canvas.edges, edge] }, edge };
+}
+
+/**
+ * Partially updates one node by id. `patch` may carry any of the common geometry/color fields
+ * (always allowed) plus any type-specific field (`text`, `file`/`subpath`, `url`, or
+ * `label`/`background`/`backgroundStyle`) — but only the ones that belong to the node's *existing*
+ * type; patching e.g. `text` on a `file` node is rejected rather than silently changing what kind
+ * of node it is. `type` and `id` in `patch` are ignored (a node cannot be reassigned to a
+ * different type or id via update). An arbitrary custom key that isn't part of any known node
+ * type's field set is passed through untouched, mirroring parseCanvas's round-trip of unknown
+ * JSON Canvas properties.
+ */
+export function updateNode(
+  canvas: Canvas,
+  id: string,
+  patch: CanvasNodePatch,
+): { canvas: Canvas; node: CanvasNode } {
+  const node = canvas.nodes.find((n) => n.id === id);
+  if (node === undefined) {
+    const existing = canvas.nodes.map((n) => n.id).join(', ');
+    throw new VaultError(
+      'NOT_FOUND',
+      existing === ''
+        ? `No node with id ${id} in this canvas. This canvas has no nodes.`
+        : `No node with id ${id} in this canvas. Existing ids: ${existing}.`,
+    );
+  }
+  const { type: _type, id: _id, ...rest } = patch as Record<string, unknown>;
+  const allowed = new Set([...COMMON_NODE_FIELDS, ...TYPE_SPECIFIC_FIELDS[node.type]]);
+  for (const key of Object.keys(rest)) {
+    if (ALL_TYPE_SPECIFIC_FIELDS.has(key) && !allowed.has(key)) {
+      throw new VaultError(
+        'INVALID_INPUT',
+        `"${key}" is not a valid field for a ${node.type} node.`,
+      );
+    }
+  }
+  const candidate = {
+    ...node,
+    ...rest,
+    ...(node.type === 'file' && typeof rest.file === 'string'
+      ? { file: normalizeVaultPath(rest.file) }
+      : {}),
+    type: node.type,
+    id: node.id,
+  };
+  const parsed = NODE_TYPE_SCHEMAS[node.type].safeParse(candidate);
+  if (!parsed.success) {
+    const first = parsed.error.issues[0];
+    throw new VaultError(
+      'INVALID_INPUT',
+      `Invalid canvas node patch: ${first?.path.join('.')} ${first?.message}.`,
+    );
+  }
+  const updated = { ...parsed.data, id: node.id } as CanvasNode;
+  const nodes = canvas.nodes.map((n) => (n.id === id ? updated : n));
+  return { canvas: { ...canvas, nodes }, node: updated };
+}
+
+/**
+ * Removes the given nodes and edges. Removing a node also removes every edge attached to it
+ * (`fromNode` or `toNode`), whether or not that edge id was also listed. Unknown node/edge ids are
+ * reported in `missing` rather than throwing — a caller can pass ids best-effort (e.g. "remove
+ * this node and any edge that happens to reference it") without pre-checking existence.
+ */
+export function removeNodesAndEdges(
+  canvas: Canvas,
+  nodeIds: string[],
+  edgeIds: string[],
+): { canvas: Canvas; removedNodes: string[]; removedEdges: string[]; missing: string[] } {
+  const nodeIdSet = new Set(nodeIds);
+  const edgeIdSet = new Set(edgeIds);
+  const existingNodeIds = new Set(canvas.nodes.map((n) => n.id));
+  const existingEdgeIds = new Set(canvas.edges.map((e) => e.id));
+  const missing = [
+    ...nodeIds.filter((id) => !existingNodeIds.has(id)),
+    ...edgeIds.filter((id) => !existingEdgeIds.has(id)),
+  ];
+
+  const removedNodes: string[] = [];
+  const nodes = canvas.nodes.filter((n) => {
+    if (!nodeIdSet.has(n.id)) return true;
+    removedNodes.push(n.id);
+    return false;
+  });
+
+  const removedEdges: string[] = [];
+  const edges = canvas.edges.filter((e) => {
+    if (!edgeIdSet.has(e.id) && !nodeIdSet.has(e.fromNode) && !nodeIdSet.has(e.toNode)) return true;
+    removedEdges.push(e.id);
+    return false;
+  });
+
+  return { canvas: { ...canvas, nodes, edges }, removedNodes, removedEdges, missing };
 }

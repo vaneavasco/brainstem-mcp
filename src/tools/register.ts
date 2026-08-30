@@ -9,6 +9,7 @@ import { registerManageTools } from './manage.ts';
 import { registerQueryTools } from './query.ts';
 import { registerReadTools } from './read.ts';
 import { registerSearchTools } from './search.ts';
+import { registerTemplateTools } from './template.ts';
 import { registerTxTools } from './tx.ts';
 import { registerWriteTools } from './write.ts';
 
@@ -48,4 +49,5 @@ export function registerVaultTools(server: McpServer, tc: ToolContext): void {
   registerGraphTools(server, tc);
   registerQueryTools(server, tc);
   registerTxTools(server, tc);
+  registerTemplateTools(server, tc);
 }

@@ -18,6 +18,8 @@ const EXPECTED = [
   'vault_canvas_read',
   'vault_canvas_add_node',
   'vault_canvas_add_edge',
+  'vault_canvas_update_node',
+  'vault_canvas_remove',
   'vault_daily_note_path',
   'vault_daily_note_read',
   'vault_daily_note_append',
@@ -29,6 +31,7 @@ const EXPECTED = [
   'vault_transaction',
   'vault_query',
   'vault_recent',
+  'vault_create_from_template',
 ];
 
 let h: Harness;
@@ -40,7 +43,7 @@ afterAll(async () => {
 });
 
 describe('tool surface parity', () => {
-  it('exposes exactly the 27 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
+  it('exposes exactly the 30 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED, 'brainstem_ping'].sort());
     for (const tool of tools) {

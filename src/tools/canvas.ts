@@ -8,8 +8,11 @@ import {
   type Canvas,
   CanvasEdgeInputSchema,
   CanvasNodeInputSchema,
+  CanvasNodePatchSchema,
   parseCanvas,
+  removeNodesAndEdges,
   serializeCanvas,
+  updateNode,
 } from '../vault/canvas.ts';
 import { OVERWRITE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg, locked, type ToolContext } from './register.ts';
@@ -114,6 +117,82 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
           await adapter.write(p, serializeCanvas(canvas), { expectedHash });
           const hash = (await adapter.read(p)).hash;
           return okJson({ path: p, edge: added, hash }, `Added edge ${added.id} to ${p}.`);
+        });
+      }),
+  );
+
+  server.registerTool(
+    'vault_canvas_update_node',
+    {
+      title: 'Update canvas node',
+      description:
+        'Partially update one node of a .canvas file (position, size, color, or a type-specific field like text/file/url/label). Only fields belonging to the node\'s existing type may be patched — e.g. patching "text" on a file node fails with INVALID_INPUT. Unknown id fails with NOT_FOUND.',
+      inputSchema: z.object({
+        path: z.string(),
+        id: z.string(),
+        patch: CanvasNodePatchSchema,
+        expectedHash: ExpectedHashArg,
+      }),
+      outputSchema: z.object({
+        path: z.string(),
+        node: z.record(z.string(), z.unknown()),
+        hash: z.string(),
+      }),
+      annotations: OVERWRITE,
+    },
+    ({ path, id, patch, expectedHash }) =>
+      guarded(tc.log, async () => {
+        const p = requireCanvasPath(path);
+        return locked(tc, [p], async () => {
+          const current = parseCanvas((await adapter.read(p)).content);
+          const { canvas, node } = updateNode(current, id, patch);
+          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          const hash = (await adapter.read(p)).hash;
+          return okJson({ path: p, node, hash }, `Updated node ${id} in ${p}.`);
+        });
+      }),
+  );
+
+  server.registerTool(
+    'vault_canvas_remove',
+    {
+      title: 'Remove canvas nodes/edges',
+      description:
+        'Remove nodes and/or edges from a .canvas file. Removing a node also removes every edge attached to it. Pass at least one of nodeIds or edgeIds. Unknown ids are reported in "missing", not fatal.',
+      inputSchema: z.object({
+        path: z.string(),
+        nodeIds: z.array(z.string()).optional(),
+        edgeIds: z.array(z.string()).optional(),
+        expectedHash: ExpectedHashArg,
+      }),
+      outputSchema: z.object({
+        path: z.string(),
+        removedNodes: z.array(z.string()),
+        removedEdges: z.array(z.string()),
+        missing: z.array(z.string()),
+        hash: z.string(),
+      }),
+      annotations: OVERWRITE,
+    },
+    ({ path, nodeIds, edgeIds, expectedHash }) =>
+      guarded(tc.log, async () => {
+        if ((nodeIds?.length ?? 0) === 0 && (edgeIds?.length ?? 0) === 0) {
+          throw new VaultError('INVALID_INPUT', 'At least one of nodeIds or edgeIds is required.');
+        }
+        const p = requireCanvasPath(path);
+        return locked(tc, [p], async () => {
+          const current = parseCanvas((await adapter.read(p)).content);
+          const { canvas, removedNodes, removedEdges, missing } = removeNodesAndEdges(
+            current,
+            nodeIds ?? [],
+            edgeIds ?? [],
+          );
+          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          const hash = (await adapter.read(p)).hash;
+          return okJson(
+            { path: p, removedNodes, removedEdges, missing, hash },
+            `Removed ${removedNodes.length} node(s) and ${removedEdges.length} edge(s) from ${p}.`,
+          );
         });
       }),
   );

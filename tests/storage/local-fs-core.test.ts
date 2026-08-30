@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
 import {
+  MAX_BINARY_BYTES,
   MAX_FILE_BYTES,
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
@@ -180,9 +181,26 @@ describe('LocalFSAdapter core', () => {
     expect(await code(vault.writeBinary('a.exe', png, 'application/x-msdownload'))).toBe(
       'INVALID_INPUT',
     );
+    // Binary attachments are capped at MAX_BINARY_BYTES (8 MiB by default), not MAX_FILE_BYTES —
+    // a size well past the old 1 MiB text cap must still be accepted.
+    await vault.writeBinary('ok.png', new Uint8Array(MAX_FILE_BYTES + 1), 'image/png');
     expect(
-      await code(vault.writeBinary('big.png', new Uint8Array(MAX_FILE_BYTES + 1), 'image/png')),
+      await code(vault.writeBinary('big.png', new Uint8Array(MAX_BINARY_BYTES + 1), 'image/png')),
     ).toBe('TOO_LARGE');
+  });
+
+  it('accepts an svg (image/svg+xml) attachment', async () => {
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    await vault.writeBinary('img/a.svg', svg, 'image/svg+xml');
+    expect(await fs.readFile(path.join(root, 'img/a.svg'))).toEqual(Buffer.from(svg));
+  });
+
+  it('honours a custom maxBinaryBytes passed to LocalFSAdapter.create', async () => {
+    const capped = await LocalFSAdapter.create(root, { ripgrepPath: null, maxBinaryBytes: 10 });
+    await capped.writeBinary('ok.png', new Uint8Array(10), 'image/png');
+    expect(await code(capped.writeBinary('big.png', new Uint8Array(11), 'image/png'))).toBe(
+      'TOO_LARGE',
+    );
   });
 
   it('edits with dry-run (no write) and for real (write), returning a diff', async () => {
@@ -402,6 +420,18 @@ describe('LocalFSAdapter core', () => {
         'INVALID_INPUT',
       );
     });
+  });
+});
+
+describe('.base files (Obsidian Bases — read/write/search as plain text, never evaluated)', () => {
+  it('round-trips through write/read and is found by search, like any other text file', async () => {
+    const yaml = 'views:\n  - type: table\n    name: All\nfilters: []\n';
+    await vault.write('boards/all.base', yaml);
+    expect((await vault.read('boards/all.base')).content).toBe(yaml);
+    const listed = await vault.list('', { depth: Number.POSITIVE_INFINITY, includeFiles: true });
+    expect(listed.map((e) => e.path)).toContain('boards/all.base');
+    const hits = await vault.search('filters');
+    expect(hits.map((m) => m.path)).toContain('boards/all.base');
   });
 });
 
