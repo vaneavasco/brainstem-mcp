@@ -13,6 +13,12 @@ import { type Harness, startHarness, text } from './harness.ts';
  *   B) a daily note created with no DAILY_NOTES_TEMPLATE configured gets default frontmatter
  *      (type: daily, date: ...) instead of being an empty file analytics flags as missing it.
  *   C) vault_frontmatter_update (single-file) exists alongside vault_batch_frontmatter_update.
+ *
+ * Extended for Phase 4 (docs/superpowers/specs/2026-08-30-phase-4-vault-graph-and-safety-design.md
+ * §8) with the vault-graph and safe-concurrency flow: vault_outline → vault_read{section} →
+ * vault_edit with a matching expectedHash → the same (now stale) hash producing CONFLICT →
+ * vault_transaction (two ops, one unit) → vault_move rewriting a linking note's wikilink →
+ * vault_query / vault_tags / vault_recent over the result.
  */
 let h: Harness;
 
@@ -201,6 +207,116 @@ describe('acceptance scenario (claude.ai run, end to end)', () => {
     });
     const findings = await h.call('vault_analytics_findings', { category: 'frontmatter_missing' });
     expect(findings.structuredContent).toMatchObject({ category: 'frontmatter_missing', total: 0 });
+
+    // --- Phase 4: graph, safe concurrent writes, transactions, link-updating moves, query ---
+
+    // vault_write two notes: note-d (headings/tags, for outline+section+edit) and note-e
+    // (links to note-d by bare basename, for the backlink/move-rewrite check)
+    const noteDPath = 'acceptance/graph/note-d.md';
+    const noteDContent =
+      '---\ntype: test\ntags:\n  - alpha\n  - beta\n---\n\n# Note D\n\n## Intro\n\nIntro text.\n\n## Details\n\nDetails text line.\n';
+    const writeD = await h.call('vault_write', { path: noteDPath, content: noteDContent });
+    const writeDHash = (writeD.structuredContent as { hash: string }).hash;
+
+    const noteEPath = 'acceptance/graph/note-e.md';
+    const noteEContent = '---\ntype: test\n---\n\n# Note E\n\nSee [[note-d]] for background.\n';
+    await h.call('vault_write', { path: noteEPath, content: noteEContent });
+
+    // vault_outline on note-d — headings tree, tags, link/backlink counts, hash from the index
+    const outline = await h.call('vault_outline', { path: noteDPath });
+    const outlineBody = outline.structuredContent as {
+      hash: string;
+      tags: string[];
+      headings: { text: string; children: { text: string }[] }[];
+      linkCount: number;
+      backlinkCount: number;
+    };
+    expect([...outlineBody.tags].sort()).toEqual(['alpha', 'beta']);
+    expect(outlineBody.headings[0]).toMatchObject({ text: 'Note D' });
+    expect(outlineBody.headings[0]?.children.map((c) => c.text)).toEqual(['Intro', 'Details']);
+    expect(outlineBody.linkCount).toBe(0);
+    expect(outlineBody.backlinkCount).toBe(1);
+    expect(outlineBody.hash).toBe(writeDHash);
+
+    // vault_read with "section" — just the "Details" heading's text
+    const sectionRead = await h.call('vault_read', { path: noteDPath, section: 'Details' });
+    expect(text(sectionRead)).toContain('Details text line.');
+    expect(text(sectionRead)).not.toContain('Intro text.');
+
+    // vault_edit with a matching expectedHash — succeeds, returns a fresh hash
+    const editWithHash = await h.call('vault_edit', {
+      path: noteDPath,
+      patches: [{ find: 'Details text line.', replace: 'Details text updated.' }],
+      expectedHash: outlineBody.hash,
+    });
+    expect(editWithHash.isError).toBeFalsy();
+    const noteDHashAfterEdit = (editWithHash.structuredContent as { hash: string }).hash;
+    expect(noteDHashAfterEdit).not.toBe(outlineBody.hash);
+
+    // The same (now stale) hash again — CONFLICT, carrying the current hash
+    const staleEdit = await h.call('vault_edit', {
+      path: noteDPath,
+      patches: [{ find: 'Note D', replace: 'Note D!' }],
+      expectedHash: outlineBody.hash,
+    });
+    expect(staleEdit.isError).toBe(true);
+    expect(text(staleEdit)).toMatch(/^CONFLICT: /);
+    expect(staleEdit.structuredContent).toEqual({
+      code: 'CONFLICT',
+      path: noteDPath,
+      currentHash: noteDHashAfterEdit,
+    });
+
+    // vault_transaction — two ops (append + frontmatter_update on different files) as one unit
+    const tx = await h.call('vault_transaction', {
+      ops: [
+        { op: 'append', path: noteDPath, content: 'Appended via transaction.' },
+        { op: 'frontmatter_update', path: noteEPath, set: { reviewed: true } },
+      ],
+    });
+    expect(tx.isError).toBeFalsy();
+    expect(tx.structuredContent).toMatchObject({ applied: true, rolledBack: false });
+    expect(await fs.readFile(path.join(h.root, noteDPath), 'utf8')).toContain(
+      'Appended via transaction.',
+    );
+    const noteEAfterTx = await h.call('vault_read', { path: noteEPath });
+    expect(noteEAfterTx.structuredContent).toMatchObject({ frontmatter: { reviewed: true } });
+
+    // vault_move note-d to a new path — the bare-basename wikilink in note-e must be rewritten
+    const movedDPath = 'acceptance/graph/moved-note-d.md';
+    const moveD = await h.call('vault_move', { from: noteDPath, to: movedDPath });
+    expect(moveD.isError).toBeFalsy();
+    expect(moveD.structuredContent).toMatchObject({
+      linksUpdated: [{ path: noteEPath, count: 1 }],
+      failed: [],
+    });
+    const noteERaw = await fs.readFile(path.join(h.root, noteEPath), 'utf8');
+    expect(noteERaw).not.toContain('[[note-d]]');
+    expect(noteERaw).toContain('[[moved-note-d]]');
+
+    // vault_query — structured filter (tag + pathPrefix) over the in-memory index
+    const query = await h.call('vault_query', {
+      pathPrefix: 'acceptance/graph',
+      tags: { any: ['alpha'] },
+    });
+    const queryPaths = (query.structuredContent as { rows: { path: string }[] }).rows.map(
+      (r) => r.path,
+    );
+    expect(queryPaths).toEqual([movedDPath]);
+
+    // vault_tags — "alpha" now covers note-a and the moved note-d
+    const tags = await h.call('vault_tags', { tag: 'alpha' });
+    const tagPaths = (tags.structuredContent as { notes: { path: string }[] }).notes.map(
+      (n) => n.path,
+    );
+    expect(tagPaths).toEqual(expect.arrayContaining(['acceptance/note-a.md', movedDPath]));
+
+    // vault_recent — both graph notes show up under their folder
+    const recent = await h.call('vault_recent', { pathPrefix: 'acceptance/graph', limit: 10 });
+    const recentPaths = (recent.structuredContent as { rows: { path: string }[] }).rows.map(
+      (r) => r.path,
+    );
+    expect(recentPaths).toEqual(expect.arrayContaining([movedDPath, noteEPath]));
 
     // vault_delete note-a confirm=true
     const del = await h.call('vault_delete', { path: 'acceptance/note-a.md', confirm: true });

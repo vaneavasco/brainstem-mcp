@@ -4,6 +4,59 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Vault graph tools: `vault_links` (outgoing links, backlinks, embeds, unlinked
+  mentions), `vault_tags` (tag list with counts, or the notes carrying one,
+  nested-tag aware), `vault_outline` (headings, block ids, word/link/backlink
+  counts). `vault_analytics_summary` gains `orphan_notes`, `ambiguous_links`
+  and a `hubs` block; `broken_wikilinks` now comes from the graph.
+- Safe concurrent writes: `expectedHash` on `vault_write`, `vault_edit`,
+  `vault_append`, `vault_frontmatter_update`, `vault_batch_frontmatter_update`
+  and single-file `vault_move`/`vault_delete` — a stale hash fails with a new
+  `CONFLICT` error carrying the current hash instead of overwriting silently.
+  All mutating calls for a path are serialized through a keyed write lock.
+- `vault_transaction` — up to 20 `write`/`edit`/`append`/`frontmatter_update`/
+  `move`/`delete` ops applied as one unit, with a pre-flight check, a journal
+  under `_brainstem/tx/` for rollback, and `dryRun` support.
+- `vault_query` — Bases-style structured queries (`where`, `tags`,
+  `pathPrefix`, `select`, `sort`, `groupBy`, `limit`) over the in-memory index,
+  no disk reads. `vault_recent` — notes by modification time.
+- Search upgrade: `vault_search` gains `regex` (ripgrep-only), `tags`, `where`
+  and `glob` filters, and now returns matches grouped per file.
+- Section-level read/append: `vault_read { section }` returns one heading's
+  text; `vault_append { heading, position }` writes inside a section instead
+  of always at the end of the file.
+- Canvas completion: `vault_canvas_update_node` and `vault_canvas_remove`;
+  canvas writes accept `expectedHash`.
+- `.base` files join the text file types (read/write/search/list as
+  YAML — no query evaluation); the binary attachment allowlist now covers
+  Obsidian's full accepted set (avif/bmp/svg images; mp3/m4a/ogg/wav/flac/webm/
+  3gp audio; mp4/mov/mkv/ogv/webm video), with a new `MAX_BINARY_BYTES` env
+  var (default 8 MiB) capping attachments separately from text writes.
+- `vault_create_from_template` — renders `{{title}}`/`{{date}}`/`{{time}}`/
+  `{{var}}` placeholders (plus `{{date:FMT}}`/`{{time:FMT}}`) into a new note,
+  with `uniquePrefix` for Obsidian's Unique Note filename style.
+- 30 vault tools total (up from 21). `DEFAULT_INSTRUCTIONS` rewritten for the
+  larger surface: find via search/query/tags/links, read an outline and a
+  section, edit with `expectedHash`, batch multi-note changes through
+  `vault_transaction`.
+
+### Changed
+
+- `vault_move` now rewrites wikilinks, Markdown links and canvas file nodes
+  that point at the moved note or folder by default (`updateLinks: false`
+  restores the old behaviour); a conflict on one linking note is reported in
+  `failed[]` without aborting the others.
+- Write tools (`vault_write`, `vault_edit`, `vault_append`,
+  `vault_frontmatter_update`) and reads (`vault_read`, `vault_batch_read`,
+  `vault_outline`) return a `hash` so a subsequent edit can pass
+  `expectedHash` at no extra cost.
+- `vault_search` output adds `files[]` (matches grouped per file, preferred);
+  the flat `matches[]` array is kept for compatibility.
+
 ## [0.2.0] — 2026-08-30
 
 ### Added
@@ -54,5 +107,6 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[Unreleased]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vaneavasco/brainstem-mcp/releases/tag/v0.1.0

@@ -7,8 +7,8 @@ Guide for coding agents (Cursor, Copilot, Codex, Claude Code via `CLAUDE.md`, �
 A **single-user, self-hosted MCP server** that gives Claude read/write access to the owner's Obsidian vault. Node 24 + Express 5 + the official MCP TypeScript SDK 2.0, packaged as two Docker images (app, Cloudflare tunnel) and a TypeScript CLI (`./brainstem …`). It is also its own **OAuth 2.1 authorization server** (owner secret + consent page, PKCE, Client ID Metadata Documents, refresh rotation). Everything the server persists lives as hashed JSON under `<vault>/_brainstem/`.
 
 Binding documents, in order of authority:
-1. `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md` — the design spec.
-2. `docs/adr/` — decisions (0005 = single-user re-scope; Heroku/Postgres/multi-tenant are **dropped**, not pending).
+1. `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md` (core) and `docs/superpowers/specs/2026-08-30-phase-4-vault-graph-and-safety-design.md` (vault graph, safe concurrent writes) — the design specs.
+2. `docs/adr/` — decisions (0005 = single-user re-scope; 0006 = vault graph + optimistic concurrency; Heroku/Postgres/multi-tenant are **dropped**, not pending).
 3. `docs/implementation-plan.md` + `docs/plans/` — phase plans; `docs/reviews/` — adversarial reviews with the open "fix-later" lists.
 4. `README.md` — user-facing behaviour; `SECURITY.md`, `CHANGELOG.md`.
 
@@ -22,9 +22,10 @@ src/auth/rs/          resource server: bearer token verifier
 src/auth/store/       FileTokenStore (JSON, atomic writes, mtime reload)
 src/auth/mount.ts     rate limiters, bearer gate, router mounting
 src/mcp/factory.ts    McpServer per request; instructions; brainstem_ping
-src/tools/            the 21 vault_* tools (read/write/search/manage/daily/canvas/analytics)
-src/storage/          LocalFSAdapter, path policy (reserved `_brainstem/`), frontmatter, limits
-src/vault/            runtime, frontmatter index, daily notes, canvas, connection note, instructions
+src/tools/            the 30 vault_* tools (read/write/search/manage/daily/canvas/analytics/graph/query/tx/template)
+src/storage/          LocalFSAdapter, path policy (reserved `_brainstem/`), frontmatter, limits, write-gate, transaction
+src/vault/            runtime, frontmatter index, note-parse, graph, link-rewrite, query, sections, templates,
+                      daily notes, canvas, connection note, instructions
 src/tunnel/           cloudflared supervisor (quick + named modes), public-url file
 src/cli/              commander CLI; one file per command in commands/, deps injected
 tests/                mirrors src/; tests/tools/harness.ts boots a real server + MCP client
@@ -64,6 +65,8 @@ CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, `npm audit --omit=d
 - `/mcp` order is fixed: unauthenticated limiter → bearer shape gate → main limiter → handler.
 - Consent page: `Referrer-Policy: same-origin` (a `no-referrer` policy makes the form POST arrive with `Origin: null`) and a per-request CSP `form-action` that includes the client's redirect origin (Chrome enforces `form-action` on the post-submit redirect). Both were found by real-browser testing; keep them.
 - `PUBLIC_URL_FILE` is honoured only in `TUNNEL_MODE=quick`.
+- Optimistic concurrency: mutating tools accept `expectedHash`; a mismatch throws `VaultError('CONFLICT', …)` with the current hash rather than overwriting silently. All mutating calls for a path run inside `WriteGate.withLock` (`src/storage/write-gate.ts`), sorted-path locking so multi-path ops can't deadlock.
+- `vault_transaction`'s journal lives under `_brainstem/tx/<txId>/` (reserved, invisible to every tool). Pre-image files are write-once (`COPYFILE_EXCL` — never overwritten); `manifest.json`'s `state` (`applying` → `applied`/`rolled-back`) only ever flips via a fresh tmp+rename, never an in-place edit, so a crash mid-write is never mistaken for a committed or reverted transaction. The journal is removed only after that state flip succeeds; a leftover one is a signal for the owner, not something to auto-replay.
 
 ## Out of scope (decided, not forgotten)
 

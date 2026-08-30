@@ -139,9 +139,9 @@ Rules:
 - **Quota (model changed 2026-05-01 to quota units):** `files.get` 5, `files.update` 50, `files.list` 100 units; 325k units/min/user. Truncated exponential backoff with jitter on 403/429 (`min(2^n + rand, 32s)`); surface a clean MCP tool error, never a stack trace.
 - **Analytics tools** on Drive: compute over the frontmatter index + batched body reads (≤20/batch), cache result per tenant for 10 min; never scan the full vault on every call.
 
-## 5. Tool surface (parity with reference repo — its 20 tools, plus `vault_frontmatter_update` added 2026-08-30 ⇒ 21)
+## 5. Tool surface (parity with reference repo — its 20 tools, plus `vault_frontmatter_update` added 2026-08-30 ⇒ 21, plus 9 more from Phase 4 ⇒ 30)
 
-> Now 21 tools: the phase-3 acceptance follow-up (2026-08-30) added `vault_frontmatter_update`, a single-note sibling of `vault_batch_frontmatter_update`.
+> Now 30 tools: the phase-3 acceptance follow-up (2026-08-30) added `vault_frontmatter_update`, a single-note sibling of `vault_batch_frontmatter_update` (21 total). Phase 4 (`docs/plans/2026-08-30-phase-4-vault-graph-and-safety.md`) added the vault graph and safe-concurrency surface: `vault_links`, `vault_tags`, `vault_outline`, `vault_query`, `vault_recent`, `vault_transaction`, `vault_canvas_update_node`, `vault_canvas_remove`, `vault_create_from_template` (30 total).
 
 Port name-for-name from https://github.com/jimprosser/obsidian-web-mcp:
 

@@ -4,6 +4,8 @@
 
 A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claude mobile, Claude Desktop, Claude Code — read/write access to your own Obsidian vault. It runs entirely in Docker on your machine; a Cloudflare tunnel makes it reachable from those Claude surfaces without opening any ports yourself.
 
+Over 30 tools cover the vault the way Obsidian sees it: reading and writing notes, sections, frontmatter and attachments; the link/tag graph (backlinks, orphans, hubs); structured queries and recency; safe concurrent edits and multi-note transactions; canvases; templates; daily notes. See "What Claude can do" below.
+
 ## Status
 
 **v0.2.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
@@ -105,6 +107,32 @@ Without a tunnel token, `setup` configures a quick tunnel: a random `*.trycloudf
 ## Teach Claude your vault's conventions
 
 On first start the server seeds `<vault>/_brainstem/instructions.md`. Open it in Obsidian and write, in plain markdown, how Claude should work in *your* vault — where things live, which frontmatter keys you use, what it must never touch. The text is sent to Claude on every new connection (as the MCP server's `instructions`), on top of the built-in guidance; frontmatter and `<!-- HTML comments -->` in that note are not sent. Edits apply to the next connection, no restart needed; it is capped at 8,000 characters.
+
+## What Claude can do
+
+### Safe concurrent edits
+
+Every read (`vault_read`, `vault_batch_read`, `vault_outline`) returns a content `hash`. Pass it back as `expectedHash` on a write (`vault_write`, `vault_edit`, `vault_append`, `vault_frontmatter_update`, or moving/deleting a single file): if the note changed since — another Claude session, or you editing it in Obsidian — the call fails with `CONFLICT` and the current hash instead of silently overwriting. To change several notes as one unit, `vault_transaction` (up to 20 ops) applies every op or rolls all of them back, using a journal under `_brainstem/tx/` that is removed once the transaction settles.
+
+### Renames keep links working
+
+`vault_move` rewrites every wikilink, Markdown link and canvas file node elsewhere in the vault that points at the moved note or folder, mirroring Obsidian's "Automatically update internal links". Links whose target is ambiguous are reported, never guessed; pass `updateLinks: false` to restore a plain move with no rewriting.
+
+### Query your notes
+
+`vault_query` runs Bases-style structured filters (`where`, `tags`, `pathPrefix`, `sort`, `groupBy`) over the in-memory index, with no disk reads. `vault_recent` lists notes by modification time. `vault_tags` lists every tag with counts, or every note carrying one (nested tags included). `vault_links` returns a note's outgoing links, backlinks and embeds.
+
+### Sections
+
+`vault_read { section: "Heading > Sub-heading" }` returns just that heading's text instead of the whole note; `vault_append { heading, position }` writes inside a section instead of at the end of the file.
+
+### Attachments and file types
+
+`.base` and `.canvas` files are read and written as plain text (YAML/JSON), so Claude can edit their structure directly; `.canvas` also has dedicated tools (`vault_canvas_add_node`, `vault_canvas_update_node`, `vault_canvas_remove`, and more) for editing nodes and edges without hand-rolling JSON. Binary attachments cover Obsidian's full accepted set — images (png/jpeg/gif/webp/avif/bmp/svg), audio (mp3/m4a/ogg/wav/flac/webm/3gp), video (mp4/mov/mkv/ogv/webm) and PDF — capped by `MAX_BINARY_BYTES` in `.env` (default 8 MiB; text writes stay capped at 1 MiB).
+
+### Templates
+
+`vault_create_from_template` renders a template note into a new file, substituting `{{title}}`, `{{date}}`, `{{time}}` (and `{{date:FMT}}`/`{{time:FMT}}` with Moment-style tokens), plus any `{{var}}` placeholders from `vars`. `uniquePrefix: true` prepends a timestamp to the filename, like Obsidian's core Unique Note plugin.
 
 ## Vault sync notes
 
