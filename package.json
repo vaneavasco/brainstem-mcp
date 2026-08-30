@@ -14,7 +14,6 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test:watch": "vitest",
-    "heroku-postbuild": "npm run build",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f app",
@@ -34,7 +33,7 @@
     "url": "git+https://github.com/vaneavasco/brainstem-mcp.git"
   },
   "keywords": [],
-  "author": "",
+  "author": "vaneavasco",
   "license": "MIT",
   "type": "module",
   "bugs": {

@@ -1,6 +1,6 @@
 # ADR 0002 — Native TypeScript in dev, tsc build in prod
 
-Date: 2026-08-28 · Status: accepted
+Date: 2026-08-28 · Status: accepted (Heroku references superseded by ADR 0005 — the `dist/` build now feeds the Docker image; `Procfile`/`heroku-postbuild` were removed 2026-08-30)
 
 ## Context
 Node 24 strips types natively for erasable syntax. Heroku runs `heroku-postbuild`.

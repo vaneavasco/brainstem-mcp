@@ -58,7 +58,7 @@ export function createApp(
 ): AppBundle {
   const handler = createMcpHandler((ctx) => createVaultServer(ctx, { resolveRuntime, logger }), {
     legacy: config.legacyMode,
-    keepAliveMs: 15_000, // Heroku closes idle streams after 55 s
+    keepAliveMs: 15_000, // keeps SSE streams alive through proxies that drop idle connections
     onerror: (error) => logger.warn({ err: error }, 'mcp handler error'),
   });
 
@@ -69,7 +69,7 @@ export function createApp(
     allowedOrigins: allowed,
     jsonLimit: '2mb', // 1 MB note + base64/JSON overhead
   });
-  app.set('trust proxy', 1); // Heroku router: only for req.secure, never for URL building
+  app.set('trust proxy', 1); // cloudflared sits in front: only for req.secure, never for URL building
   app.disable('x-powered-by');
 
   mountAuth(app, config, logger, auth);

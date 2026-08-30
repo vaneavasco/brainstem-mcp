@@ -31,7 +31,7 @@ afterEach(async () => {
 });
 
 describe('startServer', () => {
-  it('listens with Heroku-compatible keep-alive settings and closes cleanly', async () => {
+  it('listens with proxy-friendly keep-alive settings and closes cleanly', async () => {
     const config = loadConfig(baseEnv());
     const running = await startServer(config, createLogger('fatal'), async () => runtime, auth, 0);
     try {

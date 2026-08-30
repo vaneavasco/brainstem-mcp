@@ -35,7 +35,7 @@
 
 - [ ] **Step 1: Initialize package.json**
 
-Run from repo root `/home/vanea/Code/brainstem-mcp`:
+Run from the repo root:
 
 ```bash
 npm init -y >/dev/null

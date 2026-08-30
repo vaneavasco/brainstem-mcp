@@ -70,7 +70,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   {
     name: 'update',
     group: 'Maintenance',
-    summary: 'Pull the latest release, reinstall dependencies and restart',
+    summary: 'Pull the latest version from GitHub, reinstall dependencies and restart',
     example: './brainstem update',
   },
   {

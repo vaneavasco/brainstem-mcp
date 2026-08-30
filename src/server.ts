@@ -22,7 +22,7 @@ export async function startServer(
   const { app, handler } = createApp(config, logger, resolveRuntime, auth, opts.extras);
   const httpServer = http.createServer(app);
 
-  // Heroku router keeps idle connections for 90 s; a shorter dyno-side timeout causes H13/H18.
+  // Reverse proxies (cloudflared) keep idle connections for ~90 s; a shorter server-side timeout drops them mid-request.
   httpServer.keepAliveTimeout = 95_000;
   httpServer.headersTimeout = 100_000;
   // Long-lived SSE responses (subscriptions/listen) must not be cut by Node's 5-minute default.

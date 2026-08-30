@@ -4,6 +4,14 @@
 
 A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claude mobile, Claude Desktop, Claude Code — read/write access to your own Obsidian vault. It runs entirely in Docker on your machine; a Cloudflare tunnel makes it reachable from those Claude surfaces without opening any ports yourself.
 
+## Status
+
+**v0.1.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
+
+Verified end-to-end: Linux host · Claude Code · claude.ai web (all tools, via a live quick tunnel) · Docker smoke test in CI.
+Implemented but not yet verified by a real run: Claude mobile app · `cloudflare` (token) tunnel mode · Windows and macOS launchers · reconnect after a tunnel restart.
+Issues and pull requests are welcome — see `CHANGELOG.md` for what shipped and `SECURITY.md` for reporting vulnerabilities.
+
 ## Requirements
 
 - Docker Desktop (Windows/macOS) or Docker Engine + Compose v2 (Linux)
@@ -68,7 +76,7 @@ The owner secret lives in `.env`. Show it any time with:
 
 | Command | What it does | Example |
 |---|---|---|
-| `./brainstem update` | Pull the latest release, reinstall dependencies and restart | `./brainstem update` |
+| `./brainstem update` | Pull the latest version from GitHub, reinstall dependencies and restart | `./brainstem update` |
 | `./brainstem doctor` | Check prerequisites and configuration; explain how to fix any issues | `./brainstem doctor` |
 | `./brainstem revoke-all` | Revoke all OAuth tokens — every connected client must reconnect | `./brainstem revoke-all` |
 
@@ -127,6 +135,7 @@ npm run typecheck && npm run lint
 npm run dev                        # run the server directly, without Docker
 npm run brainstem -- <command>     # run the CLI without the launcher's checks
 npm run docker:smoke               # end-to-end smoke test against the Docker image
+npm run mcp:call -- --list         # headless OAuth + tool calls against a running instance
 ```
 
 The launcher reinstalls dependencies only when `package-lock.json` is newer than
@@ -138,3 +147,7 @@ altogether (the launcher tests do this, so a stale lockfile can never rewrite
 `node_modules` mid-suite).
 
 See `docs/` for the spec, ADRs and implementation plans.
+
+## License
+
+[MIT](LICENSE)
