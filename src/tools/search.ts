@@ -7,11 +7,12 @@ import {
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
   MAX_SEARCH_RESULTS,
+  MAX_SEARCH_SCAN,
 } from '../storage/limits.ts';
 import { normalizeVaultPath } from '../storage/path-policy.ts';
-import type { Match, SearchOpts } from '../storage/types.ts';
+import type { Match, SearchOpts, StorageAdapter } from '../storage/types.ts';
 import { VaultError } from '../storage/types.ts';
-import type { FrontmatterIndex } from '../vault/frontmatter-index.ts';
+import type { FrontmatterIndex, IndexEntry } from '../vault/frontmatter-index.ts';
 import type { VaultGraph } from '../vault/graph.ts';
 import type { Cond, Query } from '../vault/query.ts';
 import { evaluateQuery } from '../vault/query.ts';
@@ -54,6 +55,35 @@ interface CandidateOpts {
   glob?: string;
 }
 
+/** The `where`/`tags`/`pathPrefix` portion of `CandidateOpts` as an `evaluateQuery` `Query`
+ *  (glob is applied separately — evaluateQuery doesn't know about it). Shared by candidate-list
+ *  computation and by the single-entry re-check used when the candidate list itself was
+ *  truncated (see `passesFilters` below). */
+function filterQuery(opts: CandidateOpts, limit: number): Query {
+  return {
+    ...(opts.where ? { where: opts.where } : {}),
+    ...(opts.tags ? { tags: opts.tags } : {}),
+    ...(opts.pathPrefix !== undefined ? { pathPrefix: opts.pathPrefix } : {}),
+    limit,
+  };
+}
+
+function matchesGlob(p: string, glob: string, pathPrefix?: string): boolean {
+  const base = normalizeVaultPath(pathPrefix ?? '');
+  const matcher = picomatch(glob, { dot: false });
+  return matcher(base === '' ? p : p.slice(base.length + 1));
+}
+
+interface Candidates {
+  /** Candidate paths from evaluateQuery (bounded by MAX_QUERY_ROWS), already glob-filtered. */
+  paths: string[];
+  /** True when evaluateQuery's own `total` exceeded MAX_QUERY_ROWS — `paths` may then be an
+   *  incomplete slice of the true candidate set (evaluateQuery always clamps `rows` to
+   *  MAX_QUERY_ROWS regardless of the `limit` requested), so it cannot be trusted as exhaustive
+   *  for either the ≤200/chunked path-list strategies or the "total" reported to the caller. */
+  incomplete: boolean;
+}
+
 /**
  * Resolves `tags`/`where`/`glob` into a concrete list of candidate paths to search, by filtering
  * the in-memory index the same way `vault_query` does (§4.7) rather than re-implementing
@@ -64,25 +94,92 @@ function computeCandidates(
   index: FrontmatterIndex,
   graph: VaultGraph,
   opts: CandidateOpts,
-): string[] {
-  const query: Query = {
-    ...(opts.where ? { where: opts.where } : {}),
-    ...(opts.tags ? { tags: opts.tags } : {}),
-    ...(opts.pathPrefix !== undefined ? { pathPrefix: opts.pathPrefix } : {}),
-    // evaluateQuery clamps to MAX_QUERY_ROWS regardless of what's requested (its own safety net),
-    // so this is the largest candidate set it can hand back in one call. Above that, vault_search
-    // falls back to searching everything and post-filtering matches by path (see below) — a
-    // pragmatic bound shared with vault_query's own row cap rather than a second, unbounded scan.
-    limit: MAX_QUERY_ROWS,
-  };
-  const { rows } = evaluateQuery(index.all(), graph, query);
+): Candidates {
+  const { rows, total } = evaluateQuery(index.all(), graph, filterQuery(opts, MAX_QUERY_ROWS));
   let paths = rows.map((r) => r.path);
-  if (opts.glob) {
-    const base = normalizeVaultPath(opts.pathPrefix ?? '');
-    const matcher = picomatch(opts.glob, { dot: false });
-    paths = paths.filter((p) => matcher(base === '' ? p : p.slice(base.length + 1)));
+  const glob = opts.glob;
+  if (glob) paths = paths.filter((p) => matchesGlob(p, glob, opts.pathPrefix));
+  return { paths, incomplete: total > MAX_QUERY_ROWS };
+}
+
+/** Whether a single index entry passes the `where`/`tags`/`pathPrefix` filter, re-checked one
+ *  entry at a time (via evaluateQuery on a 1-element input) so evaluateQuery's own row cap —
+ *  the exact thing `computeCandidates` above cannot exceed — never applies here: a one-entry
+ *  input either fully matches (`total === 1`) or doesn't (`total === 0`), never truncated. */
+function passesFilters(entry: IndexEntry, graph: VaultGraph, opts: CandidateOpts): boolean {
+  return evaluateQuery([entry], graph, filterQuery(opts, 1)).total === 1;
+}
+
+/**
+ * Searches an already-known-good candidate path list (≤MAX_QUERY_ROWS, from `computeCandidates`)
+ * in bounded chunks of at most MAX_SEARCH_PATHS paths per adapter call, stopping as soon as
+ * `max` matches have been collected. Chunking (rather than one unscoped whole-vault call, or one
+ * oversized `paths` call) is required because both the adapter's ripgrep and JS-fallback
+ * backends apply `limit` while scanning — an unscoped call would burn the whole limit on
+ * whichever files sort first, dropping every candidate match in a later file entirely; an
+ * oversized `paths` call would exceed the adapter's own MAX_SEARCH_PATHS cap.
+ */
+async function searchInChunks(
+  adapter: StorageAdapter,
+  query: string,
+  baseOpts: SearchOpts,
+  candidatePaths: string[],
+  max: number,
+): Promise<{ matches: Match[]; truncated: boolean }> {
+  const matches: Match[] = [];
+  let truncated = false;
+  for (let i = 0; i < candidatePaths.length; i += MAX_SEARCH_PATHS) {
+    const remaining = max - matches.length;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    const chunk = candidatePaths.slice(i, i + MAX_SEARCH_PATHS);
+    const chunkMatches = await adapter.search(query, {
+      ...baseOpts,
+      limit: remaining,
+      paths: chunk,
+    });
+    matches.push(...chunkMatches);
+    // This chunk alone used up its whole budget: more matches may exist in it (past `limit`) or
+    // in a later, unprocessed chunk — either way, the result is not exhaustive.
+    if (chunkMatches.length >= remaining) {
+      truncated = true;
+      break;
+    }
   }
-  return paths;
+  return { matches, truncated };
+}
+
+/**
+ * Used only when `computeCandidates` reported `incomplete: true` — its path list cannot be
+ * trusted as exhaustive, so instead of searching a (possibly partial) candidate set, this scans
+ * the whole vault for the text query (bounded by MAX_SEARCH_SCAN raw matches) and keeps only the
+ * matches whose file passes the where/tags/pathPrefix/glob filter, re-checked per file via
+ * `passesFilters` (immune to the row cap that made the candidate list untrustworthy here).
+ */
+async function searchScanAndFilter(
+  adapter: StorageAdapter,
+  index: FrontmatterIndex,
+  graph: VaultGraph,
+  query: string,
+  baseOpts: SearchOpts,
+  candidateOpts: CandidateOpts,
+  max: number,
+): Promise<{ matches: Match[]; truncated: boolean }> {
+  const scanned = await adapter.search(query, { ...baseOpts, limit: MAX_SEARCH_SCAN });
+  const passing = new Set<string>();
+  for (const p of new Set(scanned.map((m) => m.path))) {
+    const entry = index.get(p);
+    if (!entry) continue; // not a markdown note the index tracks (tags/where can never apply)
+    if (!passesFilters(entry, graph, candidateOpts)) continue;
+    if (candidateOpts.glob && !matchesGlob(p, candidateOpts.glob, candidateOpts.pathPrefix))
+      continue;
+    passing.add(p);
+  }
+  const filtered = scanned.filter((m) => passing.has(m.path));
+  const truncated = scanned.length >= MAX_SEARCH_SCAN || filtered.length > max;
+  return { matches: filtered.slice(0, max), truncated };
 }
 
 function groupByFile(
@@ -161,19 +258,43 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
 
         const hasFilter = tags !== undefined || where !== undefined || glob !== undefined;
         let matches: Match[];
-        if (hasFilter) {
-          const candidates = computeCandidates(index, graph, { tags, where, pathPrefix, glob });
-          if (candidates.length === 0) {
-            matches = [];
-          } else if (candidates.length <= MAX_SEARCH_PATHS) {
-            matches = await adapter.search(query, { ...baseOpts, paths: candidates });
-          } else {
-            const all = await adapter.search(query, baseOpts);
-            const candidateSet = new Set(candidates);
-            matches = all.filter((m) => candidateSet.has(m.path));
-          }
-        } else {
+        let truncated: boolean;
+        if (!hasFilter) {
           matches = await adapter.search(query, baseOpts);
+          truncated = matches.length >= max;
+        } else {
+          const candidateOpts: CandidateOpts = { tags, where, pathPrefix, glob };
+          const candidates = computeCandidates(index, graph, candidateOpts);
+          if (candidates.incomplete) {
+            // evaluateQuery's own row cap means `candidates.paths` cannot be trusted as
+            // exhaustive here — fall back to a bounded whole-vault scan, filtered per file.
+            ({ matches, truncated } = await searchScanAndFilter(
+              adapter,
+              index,
+              graph,
+              query,
+              baseOpts,
+              candidateOpts,
+              max,
+            ));
+          } else if (candidates.paths.length === 0) {
+            matches = [];
+            truncated = false;
+          } else if (candidates.paths.length <= MAX_SEARCH_PATHS) {
+            matches = await adapter.search(query, { ...baseOpts, paths: candidates.paths });
+            truncated = matches.length >= max;
+          } else {
+            // 201..MAX_QUERY_ROWS candidates: chunk the search instead of one unscoped call, so
+            // real candidate matches sorting after the limit in an unscoped scan are never
+            // silently dropped (see searchInChunks's doc comment).
+            ({ matches, truncated } = await searchInChunks(
+              adapter,
+              query,
+              baseOpts,
+              candidates.paths,
+              max,
+            ));
+          }
         }
 
         return okJson({
@@ -182,7 +303,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           files: groupByFile(matches),
           matches,
           total: matches.length,
-          truncated: matches.length >= max,
+          truncated,
         });
       }),
   );

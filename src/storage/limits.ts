@@ -18,6 +18,11 @@ export const MAX_SEARCH_PATTERN_CHARS = 200;
 /** Above this many pre-filtered candidate paths, vault_search scans everything and post-filters
  *  matches by path instead of handing ripgrep/the JS fallback an explicit file list. */
 export const MAX_SEARCH_PATHS = 200;
+/** Internal scan cap when vault_search's own candidate list (from evaluateQuery) was itself
+ *  truncated (more than MAX_QUERY_ROWS true matches) and so cannot be trusted as exhaustive:
+ *  the whole vault is scanned up to this many raw text matches, then filtered by re-testing each
+ *  matched file's index entry against the same where/tags/pathPrefix query. */
+export const MAX_SEARCH_SCAN = 2000;
 
 export const BINARY_MIME_ALLOWLIST: ReadonlyMap<string, readonly string[]> = new Map([
   ['image/png', ['.png']],

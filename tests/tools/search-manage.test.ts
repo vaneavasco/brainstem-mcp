@@ -118,6 +118,56 @@ describe('vault_search', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/UNSUPPORTED/);
   });
+
+  // Regression: candidate filtering used to run one unscoped, alphabetically-ordered
+  // adapter.search() call and filter its (limit-capped) output by candidate path afterwards —
+  // so if enough non-candidate files sorted before any candidate file, the limit was exhausted
+  // before a single candidate was ever scanned, silently returning zero results with
+  // truncated:false. Both branches below (chunked ≤MAX_QUERY_ROWS candidates, and the
+  // full-scan fallback when the candidate list itself is truncated) must never do that.
+  describe('candidate filtering never drops real matches', () => {
+    async function writeTagged(paths: string[], tag: string): Promise<void> {
+      for (let i = 0; i < paths.length; i += 50) {
+        const batch = paths.slice(i, i + 50);
+        await Promise.all(
+          batch.map(async (p) => {
+            await h.runtime.adapter.write(p, `---\ntags: [${tag}]\n---\nneedle here\n`);
+            await h.runtime.index.refreshPath(h.runtime.adapter, p);
+          }),
+        );
+      }
+    }
+
+    it('chunks a 201..500-candidate search instead of exhausting the limit on non-candidate files first', async () => {
+      const untagged = Array.from(
+        { length: 60 },
+        (_, i) => `a-untagged-${String(i).padStart(3, '0')}.md`,
+      );
+      const tagged = Array.from(
+        { length: 201 },
+        (_, i) => `z-tagged-${String(i).padStart(3, '0')}.md`,
+      );
+      await writeTagged(untagged, 'other');
+      await writeTagged(tagged, 'x');
+
+      const r = await h.call('vault_search', { query: 'needle', tags: { any: ['x'] } });
+      const sc = r.structuredContent as { matches: { path: string }[]; truncated: boolean };
+      expect(sc.matches.length).toBeGreaterThan(0);
+      expect(sc.matches.every((m) => m.path.startsWith('z-tagged-'))).toBe(true);
+      expect(sc.truncated).toBe(true);
+    }, 30_000);
+
+    it('still finds matches via the full-scan fallback when the candidate set exceeds MAX_QUERY_ROWS', async () => {
+      const tagged = Array.from({ length: 520 }, (_, i) => `big-${String(i).padStart(4, '0')}.md`);
+      await writeTagged(tagged, 'y');
+
+      const r = await h.call('vault_search', { query: 'needle', tags: { any: ['y'] } });
+      const sc = r.structuredContent as { matches: { path: string }[]; truncated: boolean };
+      expect(sc.matches.length).toBeGreaterThan(0);
+      expect(sc.matches.every((m) => m.path.startsWith('big-'))).toBe(true);
+      expect(sc.truncated).toBe(true);
+    }, 30_000);
+  });
 });
 
 describe.skipIf(!hasRipgrep())('vault_search regex (real ripgrep)', () => {

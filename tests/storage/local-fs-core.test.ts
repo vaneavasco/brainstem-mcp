@@ -445,6 +445,25 @@ describe('search: regex and paths options (JS fallback, always runs)', () => {
     const many = Array.from({ length: MAX_SEARCH_PATHS + 1 }, (_, i) => `n${i}.md`);
     expect(await code(vault.search('x', { paths: many }))).toBe('INVALID_INPUT');
   });
+
+  it('drops reserved and dot-segment entries from an explicit paths list, even with an allowed extension', async () => {
+    await fs.mkdir(path.join(root, '_brainstem', 'tx'), { recursive: true });
+    await fs.writeFile(path.join(root, '_brainstem', 'tx', 'leaked.md'), 'needle secret\n');
+    await fs.mkdir(path.join(root, '.obsidian'), { recursive: true });
+    // .json is an allowed TEXT_EXTENSIONS entry, so only the dot-segment check saves this one.
+    await fs.writeFile(path.join(root, '.obsidian', 'app.json'), '{"needle":true}');
+    await vault.write('ok.md', 'needle here\n');
+    const r = await vault.search('needle', {
+      paths: ['_brainstem/tx/leaked.md', '.obsidian/app.json', 'ok.md'],
+    });
+    expect(r.map((m) => m.path)).toEqual(['ok.md']);
+  });
+
+  it('returns no matches (not an error) when every entry in paths is reserved/dot, without scanning the rest of the vault', async () => {
+    await vault.write('untouched.md', 'needle should not appear\n');
+    const r = await vault.search('needle', { paths: ['_brainstem/x.md', '.hidden/y.md'] });
+    expect(r).toEqual([]);
+  });
 });
 
 describe('search: ripgrep argv construction (mocked spawn, no real rg binary needed)', () => {
@@ -567,5 +586,22 @@ describe.skipIf(!hasRipgrep())('search: regex (real ripgrep binary)', () => {
     await rgVault.write('y2.md', 'foo123\n');
     const r = await rgVault.search('foo\\d+', { regex: true, paths: ['y1.md'] });
     expect(r.map((m) => m.path)).toEqual(['y1.md']);
+  });
+
+  // Regression: ripgrep does NOT apply --glob exclusions to files named explicitly on the
+  // command line (confirmed against a real binary) — so this must be enforced by the adapter's
+  // own pre-filter in search(), not by the --glob args handed to ripgrep. Same case as the
+  // JS-fallback test above ("drops reserved and dot-segment entries...").
+  it('drops reserved and dot-segment entries from an explicit paths list even when passed to ripgrep', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await fs.mkdir(path.join(root, '_brainstem', 'tx'), { recursive: true });
+    await fs.writeFile(path.join(root, '_brainstem', 'tx', 'leaked.md'), 'needle secret\n');
+    await fs.mkdir(path.join(root, '.obsidian'), { recursive: true });
+    await fs.writeFile(path.join(root, '.obsidian', 'app.json'), '{"needle":true}');
+    await rgVault.write('ok2.md', 'needle here\n');
+    const r = await rgVault.search('needle', {
+      paths: ['_brainstem/tx/leaked.md', '.obsidian/app.json', 'ok2.md'],
+    });
+    expect(r.map((m) => m.path)).toEqual(['ok2.md']);
   });
 });

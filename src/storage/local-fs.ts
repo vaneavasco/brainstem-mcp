@@ -22,10 +22,12 @@ import {
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
   MAX_SEARCH_RESULTS,
+  MAX_SEARCH_SCAN,
 } from './limits.ts';
 import {
   baseName,
   isMarkdownPath,
+  isReservedPath,
   normalizedOrRaw,
   normalizeVaultPath,
   parentDir,
@@ -87,6 +89,13 @@ function isEnoent(error: unknown): boolean {
 /** Windows a search match's line text so one very long line cannot blow the result-size cap. */
 function windowMatchText(text: string): string {
   return text.length > MAX_MATCH_TEXT_CHARS ? `${text.slice(0, MAX_MATCH_TEXT_CHARS)}…` : text;
+}
+
+/** True when any path segment starts with '.' — mirrors the dot-entry skip in list()'s walk, so
+ *  an explicit `search()` `paths` entry is held to exactly the same "never visible" rule as a
+ *  path list() would ever produce. */
+function hasDotSegment(p: string): boolean {
+  return p.split('/').some((segment) => segment.startsWith('.'));
 }
 
 export class LocalFSAdapter implements StorageAdapter {
@@ -554,9 +563,21 @@ export class LocalFSAdapter implements StorageAdapter {
         `paths must have at most ${MAX_SEARCH_PATHS} entries (got ${opts.paths.length}).`,
       );
     }
-    if (opts.paths?.length === 0) return [];
+    // ripgrep does NOT apply --glob filters to files named explicitly on the command line (only
+    // to files it discovers itself while walking a directory), and the JS fallback's extension
+    // check alone would let a reserved/dot path with an allowed extension through (e.g.
+    // `_brainstem/state.json`, which is valid `.json`). So an explicit `paths` list is filtered
+    // here, once, before either backend ever sees it — using exactly the predicate list()'s own
+    // directory walk uses — rather than relying on ripgrep's globs or the extension check alone.
+    const paths = opts.paths?.filter((p) => !isReservedPath(p) && !hasDotSegment(p));
+    if (paths?.length === 0) return [];
 
-    const limit = Math.max(1, Math.min(opts.limit ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS));
+    // The ceiling is MAX_SEARCH_SCAN, not MAX_SEARCH_RESULTS: the tool layer's public `limit`
+    // input is already capped at MAX_SEARCH_RESULTS by its own Zod schema, but vault_search's
+    // full-vault-scan fallback (when a tags/where candidate list is itself too large to trust)
+    // legitimately asks the adapter for up to MAX_SEARCH_SCAN raw matches to filter afterwards —
+    // this must not be silently re-clamped back down to 50 here.
+    const limit = Math.max(1, Math.min(opts.limit ?? MAX_SEARCH_RESULTS, MAX_SEARCH_SCAN));
     const prefix = normalizeVaultPath(opts.pathPrefix ?? '');
     const caseSensitive = opts.caseSensitive ?? false;
 
@@ -568,8 +589,8 @@ export class LocalFSAdapter implements StorageAdapter {
       throw new VaultError('INVALID_INPUT', `${prefix} is a file, not a folder.`);
 
     const matches = this.rg
-      ? await this.searchRipgrep(query, prefix, limit, caseSensitive, regex, opts.paths)
-      : await this.searchJs(query, prefix, limit, caseSensitive, opts.paths);
+      ? await this.searchRipgrep(query, prefix, limit, caseSensitive, regex, paths)
+      : await this.searchJs(query, prefix, limit, caseSensitive, paths);
     return matches.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
   }
 
@@ -629,14 +650,20 @@ export class LocalFSAdapter implements StorageAdapter {
       ...(regex ? [] : ['--fixed-strings']),
       // Per-extension include globs only make sense while ripgrep is walking a directory itself.
       // An explicit `paths` list is already the exact candidate set (drawn from the index), so
-      // the includes are dropped for it — but the exclusion globs just below (dot-paths,
-      // `_brainstem`) always stay, as defense in depth even against an explicit file list.
+      // the includes are dropped for it.
       ...(paths === undefined
         ? [...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`])
         : []),
       // ripgrep applies "last matching glob wins", so these excludes must come after any
       // extension includes above — otherwise an unanchored include like `*.md` would re-include
       // everything under an excluded directory that happens to have an allowed extension.
+      // NOTE: these globs only take effect when ripgrep is walking `prefix` itself
+      // (paths === undefined) — ripgrep does NOT apply --glob filters to files named explicitly
+      // on the command line, so when `paths` is given, these three are a no-op for it. The real
+      // guarantee that no dot-path or `_brainstem` entry is ever searched via `paths` comes from
+      // the pre-filter in search() above (isReservedPath/hasDotSegment), not from these globs.
+      // They're left in either way since they're harmless (and still needed for the
+      // paths === undefined, directory-walk case).
       '--glob',
       '!.*',
       '--glob',
@@ -644,7 +671,8 @@ export class LocalFSAdapter implements StorageAdapter {
       // A leading '/' anchors this glob to `cwd` (set below to the vault root) rather than to
       // wherever the server process happens to be running, and rather than matching the
       // `_brainstem` basename at any depth — so a legitimate nested look-alike such as
-      // `notes/_brainstem/x.md` is still searchable.
+      // `notes/_brainstem/x.md` is still searchable. (Only matters for the directory-walk case —
+      // see the NOTE above for the `paths` case.)
       '--glob',
       `!/${RESERVED_DIR}/**`,
       ...(regex ? ['-e', query] : []),
