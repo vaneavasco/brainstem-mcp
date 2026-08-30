@@ -11,6 +11,7 @@ import {
   renderInstructionsTemplate,
   writeInstructionsTemplateIfMissing,
 } from '../../src/vault/instructions.ts';
+import { startHarness } from '../tools/harness.ts';
 
 let dir: string;
 beforeEach(async () => {
@@ -28,6 +29,19 @@ describe('DEFAULT_INSTRUCTIONS', () => {
       expect(DEFAULT_INSTRUCTIONS).toContain(needle);
     }
     expect(DEFAULT_INSTRUCTIONS.length).toBeLessThan(2_000);
+  });
+
+  it('only names tools that are actually registered', async () => {
+    const h = await startHarness();
+    try {
+      const { tools } = await h.client.listTools();
+      const registered = new Set(tools.map((t) => t.name));
+      const mentioned = [...new Set(DEFAULT_INSTRUCTIONS.match(/vault_[a-z_]+/g) ?? [])];
+      expect(mentioned.length).toBeGreaterThan(5);
+      for (const name of mentioned) expect(registered, name).toContain(name);
+    } finally {
+      await h.close();
+    }
   });
 });
 

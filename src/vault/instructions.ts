@@ -11,7 +11,7 @@ export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access t
 - Find before you read: vault_search / vault_search_frontmatter / vault_list, then vault_read the few notes that matter. vault_batch_read for several at once.
 - Edit surgically: prefer vault_edit (exact text replacement) or vault_append over rewriting a whole note with vault_write; vault_frontmatter_update changes metadata without touching the body.
 - Notes usually start with YAML frontmatter; keep existing keys and add \`type\`, \`status\`, \`tags\` where the vault already uses them. Link notes with [[wikilinks]].
-- Daily notes: vault_daily_today / vault_daily_append for journal-style entries; the owner's folder and date format are already configured.
+- Daily notes: vault_daily_note_read / vault_daily_note_append (vault_daily_note_path for the file name) for journal-style entries; the owner's folder and date format are already configured.
 - Deleting requires confirm=true and only moves the note to .trash/ — say so when you do it.
 - _brainstem/ is the server's own folder and is invisible to every tool; never try to write there.
 - Owner instructions below, if any, describe how this particular vault is organised — follow them over general habits.`;
