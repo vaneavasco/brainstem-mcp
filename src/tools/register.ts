@@ -3,6 +3,7 @@ import type { VaultRuntime } from '../vault/runtime.ts';
 import { registerAnalyticsTools } from './analytics.ts';
 import { registerCanvasTools } from './canvas.ts';
 import { registerDailyTools } from './daily.ts';
+import { registerGraphTools } from './graph.ts';
 import { registerManageTools } from './manage.ts';
 import { registerReadTools } from './read.ts';
 import { registerSearchTools } from './search.ts';
@@ -25,4 +26,5 @@ export function registerVaultTools(server: McpServer, tc: ToolContext): void {
   registerCanvasTools(server, tc);
   registerDailyTools(server, tc);
   registerAnalyticsTools(server, tc);
+  registerGraphTools(server, tc);
 }

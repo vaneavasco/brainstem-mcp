@@ -23,6 +23,9 @@ const EXPECTED = [
   'vault_daily_note_append',
   'vault_analytics_summary',
   'vault_analytics_findings',
+  'vault_links',
+  'vault_tags',
+  'vault_outline',
 ];
 
 let h: Harness;
@@ -34,7 +37,7 @@ afterAll(async () => {
 });
 
 describe('tool surface parity', () => {
-  it('exposes exactly the 21 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
+  it('exposes exactly the 24 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED, 'brainstem_ping'].sort());
     for (const tool of tools) {
@@ -60,10 +63,13 @@ describe('tool surface parity', () => {
       'vault_canvas_read',
       'vault_daily_note_path',
       'vault_daily_note_read',
+      'vault_links',
       'vault_list',
+      'vault_outline',
       'vault_read',
       'vault_search',
       'vault_search_frontmatter',
+      'vault_tags',
     ]);
   });
 
