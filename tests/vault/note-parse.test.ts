@@ -34,6 +34,27 @@ describe('maskNonContent', () => {
     expect(out).not.toContain('[[a]]');
     expect(out).not.toContain('[[c]]');
   });
+  it('masks an unterminated %% comment to end of text', () => {
+    const out = maskNonContent('a [[k]] %% [[x]] #t\n[[y]]');
+    expect(out).toContain('[[k]]');
+    expect(out).not.toContain('[[x]]');
+    expect(out).not.toContain('#t');
+    expect(out).not.toContain('[[y]]');
+  });
+});
+
+describe('CRLF handling', () => {
+  it('extracts headings and block ids from CRLF-terminated files, keeping correct line numbers', () => {
+    const content = '# Title\r\ntext ^abc\r\n';
+    const { headings, blockIds } = parseNote(content, {}, content);
+    expect(headings).toEqual([{ level: 1, text: 'Title', line: 1 }]);
+    expect(blockIds).toEqual([{ id: 'abc', line: 2 }]);
+  });
+  it('keeps link line numbers correct under CRLF', () => {
+    const content = '# Title\r\n[[A]]\r\ntext [[B]]\r\n';
+    const { links } = parseNote(content, {}, content);
+    expect(links.map((l) => l.line)).toEqual([2, 3]);
+  });
 });
 
 describe('parseNote links', () => {
@@ -78,6 +99,23 @@ describe('parseNote links', () => {
     const { links } = parse('[[keep]]\n```\n[[no1]]\n```\n`[[no2]]` %%[[no3]]%%');
     expect(links.map((l) => l.target)).toEqual(['keep']);
   });
+
+  it('trims whitespace inside <angle-bracket> markdown targets', () => {
+    const { links } = parse('[a](< My Note.md >)');
+    expect(links).toEqual([
+      expect.objectContaining({ kind: 'md', target: 'My Note.md', alias: 'a' }),
+    ]);
+  });
+
+  it('skips a same-page anchor written as <#frag>', () => {
+    const { links } = parse('[a](< #frag>)');
+    expect(links).toEqual([]);
+  });
+
+  it('skips whitespace-only wikilink targets with no anchor, but keeps same-note anchors', () => {
+    const { links } = parse('[[ ]] [[   ]] [[#Heading]]');
+    expect(links.map((l) => [l.target, l.heading])).toEqual([['', 'Heading']]);
+  });
 });
 
 describe('parseNote tags', () => {
@@ -105,6 +143,9 @@ describe('parseNote tags', () => {
     expect(frontmatterTags({ tags: '#a, b  c' })).toEqual(['a', 'b', 'c']);
     expect(frontmatterTags({ tag: 'legacy' })).toEqual([]);
     expect(frontmatterTags({ tags: [1, 'x', null] })).toEqual(['x']);
+  });
+  it('frontmatterTags strips trailing slashes and drops values that become empty', () => {
+    expect(frontmatterTags({ tags: ['project/', '2024/', '///'] })).toEqual(['project']);
   });
 });
 

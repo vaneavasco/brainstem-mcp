@@ -29,7 +29,7 @@ export interface ParsedNote {
 
 const FENCE = /^(`{3,}|~{3,})/;
 const INLINE_CODE = /`[^`\n]*`/g;
-const COMMENT = /%%[\s\S]*?%%/g;
+const COMMENT = /%%[\s\S]*?%%|%%[\s\S]*$/g;
 const WIKI = /(!?)\[\[([^[\]\n]+?)\]\]/g;
 // [text](target) or [text](<target with spaces>); embeds have a leading '!'
 const MD = /(!?)\[([^\]\n]*)\]\((?:<([^>\n]+)>|([^()\s]+))\)/g;
@@ -80,7 +80,9 @@ export function frontmatterTags(frontmatter: Record<string, unknown>): string[] 
   if (typeof raw === 'string') values.push(...raw.split(/[,\s]+/));
   else if (Array.isArray(raw))
     values.push(...raw.filter((t): t is string => typeof t === 'string'));
-  return values.map((t) => t.trim().replace(/^#/, '')).filter((t) => t !== '' && /[^\d/]/.test(t));
+  return values
+    .map((t) => t.trim().replace(/^#/, '').replace(/\/+$/, ''))
+    .filter((t) => t !== '' && /[^\d/]/.test(t));
 }
 
 function splitWikiInner(
@@ -111,6 +113,7 @@ export function parseNote(
     const start = bodyStart + (m.index ?? 0);
     const end = start + m[0].length;
     const parts = splitWikiInner(m[2] ?? '');
+    if (parts.target === '' && !parts.heading && !parts.block) continue;
     links.push({
       raw: content.slice(start, end),
       ...parts,
@@ -122,7 +125,7 @@ export function parseNote(
     });
   }
   for (const m of maskedBody.matchAll(MD)) {
-    const rawTarget = m[3] ?? m[4] ?? '';
+    const rawTarget = (m[3] ?? m[4] ?? '').trim();
     if (rawTarget === '' || SCHEME.test(rawTarget) || rawTarget.startsWith('#')) continue;
     const start = bodyStart + (m.index ?? 0);
     const end = start + m[0].length;
@@ -168,7 +171,8 @@ export function parseNote(
   const blockIds: BlockId[] = [];
   const maskedLines = maskedBody.split('\n');
   const firstBodyLine = lineAt(content, bodyStart);
-  maskedLines.forEach((line, i) => {
+  maskedLines.forEach((rawLine, i) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     const h = HEADING.exec(line);
     if (h)
       headings.push({
