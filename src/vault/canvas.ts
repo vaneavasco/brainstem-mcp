@@ -109,6 +109,26 @@ export function addNode(
   return { canvas: { ...canvas, nodes: [...canvas.nodes, node] }, node };
 }
 
+/**
+ * Rewrites every `file`-type node whose `file` matches a key in `mapping` (compared
+ * case-insensitively, as Obsidian resolves vault paths) to the mapped new path. Used by
+ * `vault_move` to keep `.canvas` boards in sync with a note/asset rename.
+ */
+export function rewriteFileNodes(
+  canvas: Canvas,
+  mapping: Map<string, string>,
+): { canvas: Canvas; count: number } {
+  let count = 0;
+  const nodes = canvas.nodes.map((node) => {
+    if (node.type !== 'file') return node;
+    const newFile = mapping.get(node.file.toLowerCase());
+    if (newFile === undefined) return node;
+    count += 1;
+    return { ...node, file: newFile };
+  });
+  return count > 0 ? { canvas: { ...canvas, nodes }, count } : { canvas, count };
+}
+
 export function addEdge(
   canvas: Canvas,
   input: CanvasEdgeInput,

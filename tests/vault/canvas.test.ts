@@ -5,6 +5,7 @@ import {
   addNode,
   newCanvasId,
   parseCanvas,
+  rewriteFileNodes,
   serializeCanvas,
 } from '../../src/vault/canvas.ts';
 
@@ -90,6 +91,83 @@ describe('addNode', () => {
 
   it('newCanvasId is unique-ish', () => {
     expect(new Set(Array.from({ length: 100 }, newCanvasId)).size).toBe(100);
+  });
+});
+
+describe('rewriteFileNodes', () => {
+  it('rewrites file nodes matching the mapping case-insensitively and counts them', () => {
+    let canvas = parseCanvas('');
+    canvas = addNode(canvas, {
+      id: 'f1',
+      type: 'file',
+      file: 'notes/b.md',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }).canvas;
+    canvas = addNode(canvas, {
+      id: 't1',
+      type: 'text',
+      text: 'hi',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }).canvas;
+    const mapping = new Map([['notes/b.md', 'archive/notes/b.md']]);
+    const { canvas: rewritten, count } = rewriteFileNodes(canvas, mapping);
+    expect(count).toBe(1);
+    const fileNode = rewritten.nodes.find((n) => n.id === 'f1');
+    expect(fileNode).toMatchObject({ file: 'archive/notes/b.md' });
+    // Untouched node is left alone (same reference-equal object).
+    expect(rewritten.nodes.find((n) => n.id === 't1')).toBe(
+      canvas.nodes.find((n) => n.id === 't1'),
+    );
+  });
+
+  it('matches case-insensitively and leaves unrelated file nodes untouched', () => {
+    let canvas = parseCanvas('');
+    canvas = addNode(canvas, {
+      id: 'f1',
+      type: 'file',
+      file: 'Notes/B.MD',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }).canvas;
+    canvas = addNode(canvas, {
+      id: 'f2',
+      type: 'file',
+      file: 'other.md',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }).canvas;
+    const mapping = new Map([['notes/b.md', 'archive/notes/b.md']]);
+    const { canvas: rewritten, count } = rewriteFileNodes(canvas, mapping);
+    expect(count).toBe(1);
+    expect(rewritten.nodes.find((n) => n.id === 'f1')).toMatchObject({
+      file: 'archive/notes/b.md',
+    });
+    expect(rewritten.nodes.find((n) => n.id === 'f2')).toMatchObject({ file: 'other.md' });
+  });
+
+  it('returns the same canvas object and count 0 when nothing matches', () => {
+    const canvas = addNode(parseCanvas(''), {
+      id: 'f1',
+      type: 'file',
+      file: 'other.md',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }).canvas;
+    const result = rewriteFileNodes(canvas, new Map([['notes/b.md', 'archive/notes/b.md']]));
+    expect(result.count).toBe(0);
+    expect(result.canvas).toBe(canvas);
   });
 });
 
