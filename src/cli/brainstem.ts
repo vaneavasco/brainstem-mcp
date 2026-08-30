@@ -198,7 +198,7 @@ export function buildProgram(
       'public https URL for the Cloudflare tunnel (used on first run, with --tunnel-token)',
     )
     .option('--build', 'build the image locally instead of pulling the prebuilt one')
-    .option('--no-build', 'only pull the prebuilt image for this commit; never build')
+    .option('--no-build', 'never build: pull the prebuilt image, or reuse the last local build')
     .action(
       async (opts: {
         vault?: string;
@@ -301,7 +301,7 @@ export function buildProgram(
     .command('up')
     .description(summaryOf('up'))
     .option('--build', 'build the image locally instead of pulling the prebuilt one')
-    .option('--no-build', 'only pull the prebuilt image for this commit; never build')
+    .option('--no-build', 'never build: pull the prebuilt image, or reuse the last local build')
     .action(async (opts: { build?: boolean }) => {
       await runAction(async () => {
         const env = await loadEnvMap(repoDir);

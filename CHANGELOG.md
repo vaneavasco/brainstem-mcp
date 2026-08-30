@@ -21,6 +21,10 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Changed
 
+- `./brainstem up` / `start` default to pulling the prebuilt image instead of
+  building. `--no-build` keeps its meaning (never build) but now tries the
+  registry first and only then reuses the last local build; new `--build`
+  forces a local build.
 - `./brainstem update` restarts with a plain `up`, so it runs the prebuilt image
   of the commit it just pulled instead of forcing a local rebuild.
 

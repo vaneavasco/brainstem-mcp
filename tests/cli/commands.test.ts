@@ -174,19 +174,20 @@ describe('runUp', () => {
     expect(lines.join('\n')).toMatch(/not a clean git checkout/);
   });
 
-  it('with --no-build refuses to start when nothing prebuilt can be pulled', async () => {
+  it('with --no-build never builds: it reuses the last local image when nothing can be pulled', async () => {
     const compose = new FakeCompose();
     compose.pullCode = 1;
     const lines: string[] = [];
     const code = await runUp({ build: false }, upDeps(compose, { print: (l) => lines.push(l) }));
-    expect(code).toBe(1);
-    expect(compose.calls.some((c) => c.includes('up'))).toBe(false);
-    expect(lines.join('\n')).toMatch(/run without --no-build/);
+    expect(code).toBe(0);
+    expect(compose.calls[1]).toEqual(['--profile', 'tunnel', 'up', '-d', '--no-build']);
+    expect(compose.envs[1]).toEqual({ BRAINSTEM_IMAGE_TAG: LOCAL_IMAGE_TAG });
+    expect(lines.join('\n')).toMatch(/reusing the existing local image/);
 
     const dirty = new FakeCompose();
     const code2 = await runUp({ build: false }, upDeps(dirty, { imageTag: async () => null }));
-    expect(code2).toBe(1);
-    expect(dirty.calls).toEqual([]);
+    expect(code2).toBe(0);
+    expect(dirty.calls[0]).toEqual(['--profile', 'tunnel', 'up', '-d', '--no-build']);
   });
 
   it('reports a health timeout with the last log lines', async () => {

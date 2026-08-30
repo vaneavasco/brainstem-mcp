@@ -123,9 +123,11 @@ export function createInstructionsProvider(
 
 function compose(owner: string): string {
   if (owner === '') return DEFAULT_INSTRUCTIONS;
+  // Code points, not UTF-16 units: a cut inside a surrogate pair would send a lone surrogate.
+  const chars = Array.from(owner);
   const body =
-    owner.length > MAX_OWNER_INSTRUCTIONS_CHARS
-      ? `${owner.slice(0, MAX_OWNER_INSTRUCTIONS_CHARS)}\n\n[owner instructions truncated at ${MAX_OWNER_INSTRUCTIONS_CHARS} characters]`
+    chars.length > MAX_OWNER_INSTRUCTIONS_CHARS
+      ? `${chars.slice(0, MAX_OWNER_INSTRUCTIONS_CHARS).join('')}\n\n[owner instructions truncated at ${MAX_OWNER_INSTRUCTIONS_CHARS} characters]`
       : owner;
   return `${DEFAULT_INSTRUCTIONS}\n\n${OWNER_INSTRUCTIONS_HEADING}\n${body}`;
 }

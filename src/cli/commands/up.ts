@@ -20,9 +20,9 @@ export interface UpDeps {
 export const LOCAL_IMAGE_TAG = 'dev';
 
 /**
- * `build`: `true` forces a local `--build`; `false` (`--no-build`) pulls the
- * prebuilt image and fails if there is none; `undefined` pulls when it can and
- * builds otherwise.
+ * `build`: `true` forces a local `--build`; `false` (`--no-build`) never
+ * builds — it pulls the prebuilt image, or reuses the existing local one (the
+ * flag's original meaning); `undefined` pulls when it can and builds otherwise.
  */
 export interface UpArgs {
   build?: boolean;
@@ -55,43 +55,35 @@ export function upSummary(h: HealthInfo, opts: { secretHint: string }): string[]
 /**
  * Decides between the prebuilt image CI published for this commit and a local
  * build. Pulling is tried first because it turns a multi-minute first start
- * into seconds and pins the containers to exactly the commit checked out; a
- * failed pull (offline, private package, a commit CI never saw) falls back to
- * building unless `--no-build` asked for the pull alone.
+ * into seconds and pins the containers to exactly the commit checked out. When
+ * nothing can be pulled (offline, private package, a commit CI never saw, a
+ * dirty tree) the default builds; `--no-build` instead reuses the image of the
+ * last local build (compose's own `--no-build` fails if there is none).
  */
 async function chooseImage(
   args: UpArgs,
   deps: UpDeps,
   profile: string[],
-): Promise<{ tag: string; build: boolean } | null> {
-  if (args.build === true) return { tag: LOCAL_IMAGE_TAG, build: true };
+): Promise<{ tag: string; flag: '--build' | '--no-build' | null }> {
+  if (args.build === true) return { tag: LOCAL_IMAGE_TAG, flag: '--build' };
+  const local = (why: string): { tag: string; flag: '--build' | '--no-build' } => {
+    if (args.build === false) {
+      deps.print(`${why} — reusing the existing local image`);
+      return { tag: LOCAL_IMAGE_TAG, flag: '--no-build' };
+    }
+    deps.print(`${why} — building the image locally`);
+    return { tag: LOCAL_IMAGE_TAG, flag: '--build' };
+  };
 
   const tag = await deps.imageTag();
-  if (tag === null) {
-    if (args.build === false) {
-      deps.print(
-        'cannot pick a prebuilt image: not a clean git checkout (local changes, or no git) — run without --no-build to build locally',
-      );
-      return null;
-    }
-    deps.print('not a clean git checkout — building the image locally');
-    return { tag: LOCAL_IMAGE_TAG, build: true };
-  }
+  if (tag === null) return local('not a clean git checkout');
 
   const pull = await deps.compose.run([...profile, 'pull', '--quiet'], {
     capture: true,
     env: { BRAINSTEM_IMAGE_TAG: tag },
   });
-  if (pull.code === 0) return { tag, build: false };
-
-  if (args.build === false) {
-    deps.print(
-      `no prebuilt image for ${tag} could be pulled — run without --no-build to build locally`,
-    );
-    return null;
-  }
-  deps.print(`no prebuilt image for ${tag} — building locally`);
-  return { tag: LOCAL_IMAGE_TAG, build: true };
+  if (pull.code === 0) return { tag, flag: null };
+  return local(`no prebuilt image for ${tag}`);
 }
 
 /**
@@ -109,9 +101,7 @@ export async function runUp(args: UpArgs, deps: UpDeps): Promise<number> {
   const profile = tunnelMode !== 'none' ? ['--profile', 'tunnel'] : [];
 
   const image = await chooseImage(args, deps, profile);
-  if (image === null) return 1;
-
-  await deps.compose.run([...profile, 'up', '-d', ...(image.build ? ['--build'] : [])], {
+  await deps.compose.run([...profile, 'up', '-d', ...(image.flag ? [image.flag] : [])], {
     env: { BRAINSTEM_IMAGE_TAG: image.tag },
   });
 

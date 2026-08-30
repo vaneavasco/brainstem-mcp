@@ -154,7 +154,7 @@ devDependencies survive. Set `BRAINSTEM_SKIP_INSTALL=1` to skip the install step
 altogether (the launcher tests do this, so a stale lockfile can never rewrite
 `node_modules` mid-suite).
 
-**Images.** `./brainstem up` resolves the checked-out commit to the tag CI published (`sha-<7>`), runs `docker compose pull`, and starts without building; a dirty working tree or a failed pull falls back to `docker compose up --build`, which tags the local build `dev`. `--build` skips the registry, `--no-build` refuses to build. CI (`publish-images` in `.github/workflows/ci.yml`) pushes `ghcr.io/vaneavasco/brainstem-mcp` and `…/brainstem-mcp-tunnel` for every commit on `main` and every `v*` tag (multi-arch: amd64 + arm64).
+**Images.** `./brainstem up` resolves the checked-out commit to the tag CI published (`sha-<7>`), runs `docker compose pull`, and starts without building; a dirty working tree or a failed pull falls back to `docker compose up --build`, which tags the local build `dev`. `--build` skips the registry; `--no-build` never builds (pulls, else reuses the last local build). CI (`publish-images` in `.github/workflows/ci.yml`) pushes `ghcr.io/vaneavasco/brainstem-mcp` and `…/brainstem-mcp-tunnel` for every commit on `main` and every `v*` tag (multi-arch: amd64 + arm64).
 
 See `docs/` for the spec, ADRs and implementation plans.
 
