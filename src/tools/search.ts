@@ -65,7 +65,7 @@ interface CandidateOpts {
 /** The `where`/`tags`/`pathPrefix` portion of `CandidateOpts` as an `evaluateQuery` `Query`
  *  (glob is applied separately — evaluateQuery doesn't know about it). Shared by candidate-list
  *  computation and by the single-entry re-check used when the candidate list itself was
- *  truncated (see `passesFilters` below). */
+ *  truncated (see `filterPassingPaths` below). */
 function filterQuery(opts: CandidateOpts, limit: number): Query {
   return {
     ...(opts.where ? { where: opts.where } : {}),
@@ -174,8 +174,8 @@ async function searchInChunks(
  * Used only when `computeCandidates` reported `incomplete: true` — its path list cannot be
  * trusted as exhaustive, so instead of searching a (possibly partial) candidate set, this scans
  * the whole vault for the text query (bounded by MAX_SEARCH_SCAN raw matches) and keeps only the
- * matches whose file passes the where/tags/pathPrefix/glob filter, re-checked per file via
- * `passesFilters` (immune to the row cap that made the candidate list untrustworthy here).
+ * matches whose file passes the where/tags/pathPrefix/glob filter, re-checked in chunks via
+ * `filterPassingPaths` (immune to the row cap that made the candidate list untrustworthy here).
  */
 async function searchScanAndFilter(
   adapter: StorageAdapter,
@@ -191,9 +191,8 @@ async function searchScanAndFilter(
     .map((p) => index.get(p))
     // a path the index does not track is not a markdown note (tags/where can never apply)
     .filter((e): e is IndexEntry => e !== undefined);
-  const filtered = filterPassingPaths(scannedEntries, graph, candidateOpts);
   const passing = new Set<string>();
-  for (const p of filtered) {
+  for (const p of filterPassingPaths(scannedEntries, graph, candidateOpts)) {
     if (candidateOpts.glob && !matchesGlob(p, candidateOpts.glob, candidateOpts.pathPrefix))
       continue;
     passing.add(p);
