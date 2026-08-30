@@ -19,6 +19,8 @@ import {
   BINARY_MIME_ALLOWLIST,
   extensionAllowedFor,
   MAX_MATCH_TEXT_CHARS,
+  MAX_SEARCH_PATHS,
+  MAX_SEARCH_PATTERN_CHARS,
   MAX_SEARCH_RESULTS,
 } from './limits.ts';
 import {
@@ -529,6 +531,31 @@ export class LocalFSAdapter implements StorageAdapter {
     if (typeof query !== 'string' || query.trim() === '') {
       throw new VaultError('INVALID_INPUT', 'Search query must not be empty.');
     }
+    const regex = opts.regex === true;
+    // The pattern-length cap and the ripgrep-availability check are both about `regex: true`
+    // specifically — a literal query is never capped here and works with or without ripgrep.
+    // The length check runs first so a malformed pattern is reported as such (INVALID_INPUT)
+    // even when ripgrep is also unavailable, rather than being masked by UNSUPPORTED.
+    if (regex && query.length > MAX_SEARCH_PATTERN_CHARS) {
+      throw new VaultError(
+        'INVALID_INPUT',
+        `regex pattern exceeds ${MAX_SEARCH_PATTERN_CHARS} characters (got ${query.length}).`,
+      );
+    }
+    if (regex && !this.rg) {
+      throw new VaultError(
+        'UNSUPPORTED',
+        'regex search needs ripgrep (the Docker image has it); use a literal query here',
+      );
+    }
+    if (opts.paths !== undefined && opts.paths.length > MAX_SEARCH_PATHS) {
+      throw new VaultError(
+        'INVALID_INPUT',
+        `paths must have at most ${MAX_SEARCH_PATHS} entries (got ${opts.paths.length}).`,
+      );
+    }
+    if (opts.paths?.length === 0) return [];
+
     const limit = Math.max(1, Math.min(opts.limit ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS));
     const prefix = normalizeVaultPath(opts.pathPrefix ?? '');
     const caseSensitive = opts.caseSensitive ?? false;
@@ -541,8 +568,8 @@ export class LocalFSAdapter implements StorageAdapter {
       throw new VaultError('INVALID_INPUT', `${prefix} is a file, not a folder.`);
 
     const matches = this.rg
-      ? await this.searchRipgrep(query, prefix, limit, caseSensitive)
-      : await this.searchJs(query, prefix, limit, caseSensitive);
+      ? await this.searchRipgrep(query, prefix, limit, caseSensitive, regex, opts.paths)
+      : await this.searchJs(query, prefix, limit, caseSensitive, opts.paths);
     return matches.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
   }
 
@@ -551,15 +578,20 @@ export class LocalFSAdapter implements StorageAdapter {
     prefix: string,
     limit: number,
     caseSensitive: boolean,
+    paths?: string[],
   ): Promise<Match[]> {
-    const files = await this.list(prefix, { depth: Number.POSITIVE_INFINITY, includeDirs: false });
+    const candidates = paths
+      ? paths
+      : (await this.list(prefix, { depth: Number.POSITIVE_INFINITY, includeDirs: false })).map(
+          (e) => e.path,
+        );
     const needle = caseSensitive ? query : query.toLowerCase();
     const out: Match[] = [];
-    for (const file of files) {
-      if (!LocalFSAdapter.TEXT_EXTENSIONS.has(path.extname(file.path).toLowerCase())) continue;
+    for (const candidate of candidates) {
+      if (!LocalFSAdapter.TEXT_EXTENSIONS.has(path.extname(candidate).toLowerCase())) continue;
       let text: string;
       try {
-        text = strictUtf8.decode(await fs.readFile(this.abs(file.path)));
+        text = strictUtf8.decode(await fs.readFile(this.abs(candidate)));
       } catch {
         continue;
       }
@@ -568,7 +600,7 @@ export class LocalFSAdapter implements StorageAdapter {
         const line = lines[i] ?? '';
         const haystack = caseSensitive ? line : line.toLowerCase();
         if (haystack.includes(needle))
-          out.push({ path: file.path, line: i + 1, text: windowMatchText(line.trimEnd()) });
+          out.push({ path: candidate, line: i + 1, text: windowMatchText(line.trimEnd()) });
       }
       if (out.length >= limit) break;
     }
@@ -580,18 +612,29 @@ export class LocalFSAdapter implements StorageAdapter {
     prefix: string,
     limit: number,
     caseSensitive: boolean,
+    regex: boolean,
+    paths?: string[],
   ): Promise<Match[]> {
     if (!this.rg) return [];
     const args = [
       '--json',
-      '--fixed-strings',
       '--no-messages',
       '--no-ignore',
       caseSensitive ? '--case-sensitive' : '--ignore-case',
       '--max-count',
       String(limit),
-      ...[...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`]),
-      // ripgrep applies "last matching glob wins", so these excludes must come after the
+      // Regex mode drops -F/--fixed-strings so ripgrep's (RE2-derived, linear-time) regex engine
+      // applies; --pcre2 is never enabled (Global Constraint — no backtracking engine on
+      // user-supplied patterns). Literal mode is byte-for-byte the existing behaviour.
+      ...(regex ? [] : ['--fixed-strings']),
+      // Per-extension include globs only make sense while ripgrep is walking a directory itself.
+      // An explicit `paths` list is already the exact candidate set (drawn from the index), so
+      // the includes are dropped for it — but the exclusion globs just below (dot-paths,
+      // `_brainstem`) always stay, as defense in depth even against an explicit file list.
+      ...(paths === undefined
+        ? [...LocalFSAdapter.TEXT_EXTENSIONS].flatMap((ext) => ['--glob', `*${ext}`])
+        : []),
+      // ripgrep applies "last matching glob wins", so these excludes must come after any
       // extension includes above — otherwise an unanchored include like `*.md` would re-include
       // everything under an excluded directory that happens to have an allowed extension.
       '--glob',
@@ -604,9 +647,15 @@ export class LocalFSAdapter implements StorageAdapter {
       // `notes/_brainstem/x.md` is still searchable.
       '--glob',
       `!/${RESERVED_DIR}/**`,
+      ...(regex ? ['-e', query] : []),
       '--',
-      query,
-      this.abs(prefix),
+      // Literal mode keeps the query as the bare positional pattern (unchanged from before);
+      // regex mode already carried it via -e above, so only the search target(s) follow --.
+      // `paths` are resolved to absolute paths (like the single-prefix case below) so ripgrep's
+      // JSON output always reports absolute paths, which this.rel() can convert back correctly
+      // regardless of how ripgrep echoes a given path argument.
+      ...(regex ? [] : [query]),
+      ...(paths ? paths.map((p) => this.abs(p)) : [this.abs(prefix)]),
     ];
     const rg = this.rg;
     const out: Match[] = [];

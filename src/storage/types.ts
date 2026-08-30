@@ -95,6 +95,12 @@ export interface SearchOpts {
   limit?: number;
   caseSensitive?: boolean;
   pathPrefix?: string;
+  /** Treat the query as a ripgrep regular expression instead of a literal substring. Requires
+   *  ripgrep — throws UNSUPPORTED without it. Pattern length is capped. */
+  regex?: boolean;
+  /** Restrict the search to exactly these vault-relative paths (≤200), skipping the directory
+   *  walk. Callers (the vault_search tool) pass already-normalized index paths. */
+  paths?: string[];
 }
 
 export interface Match {

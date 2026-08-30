@@ -1,7 +1,17 @@
+import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Harness, startHarness, text } from './harness.ts';
+
+function hasRipgrep(): boolean {
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void;
@@ -44,6 +54,84 @@ describe('vault_search', () => {
     expect((scoped.structuredContent as { matches: unknown[] }).matches).toHaveLength(1);
     const empty = await h.call('vault_search', { query: '  ' });
     expect(empty.isError).toBe(true);
+  });
+
+  it('reports total and truncated alongside the matches', async () => {
+    const r = await h.call('vault_search', { query: 'milk' });
+    expect(r.structuredContent).toMatchObject({ total: 2, truncated: false });
+    const limited = await h.call('vault_search', { query: 'milk', limit: 1 });
+    expect(limited.structuredContent).toMatchObject({ total: 1, truncated: true });
+  });
+
+  it('groups matches per file under "files" while keeping the flat "matches" array', async () => {
+    await h.call('vault_write', { path: 'multi.md', content: 'milk one\nmilk two\n' });
+    const r = await h.call('vault_search', { query: 'milk' });
+    const sc = r.structuredContent as {
+      files: { path: string; matches: { line: number; text: string }[] }[];
+      matches: { path: string; line: number }[];
+    };
+    const multi = sc.files.find((f) => f.path === 'multi.md');
+    expect(multi?.matches.map((m) => m.line)).toEqual([1, 2]);
+    expect(sc.matches.filter((m) => m.path === 'multi.md').map((m) => m.line)).toEqual([1, 2]);
+    expect(sc.files.map((f) => f.path)).toEqual([
+      '00-inbox/todo.md',
+      '02-areas/health.md',
+      'multi.md',
+    ]);
+  });
+
+  it('narrows candidates by tags before searching text', async () => {
+    await h.call('vault_write', {
+      path: '03-tagged/a.md',
+      content: '---\ntags: [proj]\n---\nmilk in the fridge\n',
+    });
+    await h.call('vault_write', {
+      path: '03-tagged/b.md',
+      content: '---\ntags: [other]\n---\nmilk on the shelf\n',
+    });
+    const r = await h.call('vault_search', { query: 'milk', tags: { any: ['proj'] } });
+    const sc = r.structuredContent as { matches: { path: string }[] };
+    expect(sc.matches.map((m) => m.path)).toEqual(['03-tagged/a.md']);
+  });
+
+  it('narrows candidates by a where condition before searching text', async () => {
+    const r = await h.call('vault_search', {
+      query: 'milk',
+      where: [{ field: 'status', op: 'eq', value: 'open' }],
+    });
+    // '00-inbox/todo.md' has status:open and contains "milk"; '02-areas/health.md' has no
+    // frontmatter at all, so the where condition excludes it even though it also matches "milk".
+    const sc = r.structuredContent as { matches: { path: string }[] };
+    expect(sc.matches.map((m) => m.path)).toEqual(['00-inbox/todo.md']);
+  });
+
+  it('narrows candidates by glob before searching text', async () => {
+    await h.call('vault_write', { path: 'note.txt', content: 'milk in a plain text file\n' });
+    const r = await h.call('vault_search', { query: 'milk', glob: '**/*.md' });
+    const sc = r.structuredContent as { matches: { path: string }[] };
+    expect(sc.matches.map((m) => m.path)).not.toContain('note.txt');
+    expect(sc.matches.map((m) => m.path)).toContain('00-inbox/todo.md');
+  });
+
+  it('rejects regex:true without ripgrep with UNSUPPORTED (this harness runs the JS fallback)', async () => {
+    const r = await h.call('vault_search', { query: 'mi.k', regex: true });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/UNSUPPORTED/);
+  });
+});
+
+describe.skipIf(!hasRipgrep())('vault_search regex (real ripgrep)', () => {
+  it('runs a regex query end-to-end through the tool', async () => {
+    const rgHarness = await startHarness(undefined, 'rg');
+    try {
+      await rgHarness.call('vault_write', { path: 'r.md', content: 'a cat and a dog\n' });
+      const r = await rgHarness.call('vault_search', { query: 'cat|dog', regex: true });
+      expect(r.structuredContent).toMatchObject({ regex: true, truncated: false });
+      const sc = r.structuredContent as { matches: { path: string }[] };
+      expect(sc.matches.map((m) => m.path)).toEqual(['r.md']);
+    } finally {
+      await rgHarness.close();
+    }
   });
 });
 

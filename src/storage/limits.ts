@@ -13,6 +13,11 @@ export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;
 export const MAX_RECENT = 200;
+/** Regex search patterns run only through ripgrep; capped like the query engine's regex op. */
+export const MAX_SEARCH_PATTERN_CHARS = 200;
+/** Above this many pre-filtered candidate paths, vault_search scans everything and post-filters
+ *  matches by path instead of handing ripgrep/the JS fallback an explicit file list. */
+export const MAX_SEARCH_PATHS = 200;
 
 export const BINARY_MIME_ALLOWLIST: ReadonlyMap<string, readonly string[]> = new Map([
   ['image/png', ['.png']],

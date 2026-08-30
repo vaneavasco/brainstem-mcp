@@ -1,13 +1,63 @@
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PassThrough } from 'node:stream';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
-import { MAX_FILE_BYTES } from '../../src/storage/limits.ts';
+import {
+  MAX_FILE_BYTES,
+  MAX_SEARCH_PATHS,
+  MAX_SEARCH_PATTERN_CHARS,
+} from '../../src/storage/limits.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
-import { TRASH_DIR } from '../../src/storage/path-policy.ts';
+import { RESERVED_DIR, TRASH_DIR } from '../../src/storage/path-policy.ts';
+import type { SearchOpts } from '../../src/storage/types.ts';
 import { VaultError } from '../../src/storage/types.ts';
+
+// Real `spawn` stays the default implementation (so the real-ripgrep-binary suite below is
+// unaffected); individual tests override it for exactly one call via `mockImplementationOnce`
+// to capture ripgrep's argv without ever spawning a real process.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+const spawnMock = vi.mocked(spawn);
+
+function hasRipgrep(): boolean {
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A fake ChildProcess good enough for LocalFSAdapter's ripgrep code path: readline reads
+ *  `stdout` to EOF, then `close` fires with the given exit code (1 == "ripgrep found nothing",
+ *  same as a real `rg` run with no matches). Never spawns a real process. */
+function fakeRgChild(exitCode = 1): EventEmitter & {
+  stdout: PassThrough;
+  stderr: PassThrough;
+  kill: () => void;
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => void;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = vi.fn();
+  queueMicrotask(() => {
+    child.stdout.end();
+    child.stderr.end();
+    child.emit('close', exitCode);
+  });
+  return child;
+}
 
 let root: string;
 let outside: string;
@@ -20,6 +70,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Clears call history only — the base implementation (real `spawn`) set up by vi.mock above
+  // is preserved so the real-ripgrep-binary suite keeps spawning an actual process.
+  spawnMock.mockClear();
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(outside, { recursive: true, force: true });
 });
@@ -349,5 +402,170 @@ describe('LocalFSAdapter core', () => {
         'INVALID_INPUT',
       );
     });
+  });
+});
+
+describe('search: regex and paths options (JS fallback, always runs)', () => {
+  it('regex:true without ripgrep throws UNSUPPORTED', async () => {
+    await vault.write('a.md', 'foo bar\n');
+    expect(await code(vault.search('fo+', { regex: true }))).toBe('UNSUPPORTED');
+  });
+
+  it('rejects an over-length regex pattern before ever checking ripgrep availability', async () => {
+    const longPattern = 'a'.repeat(MAX_SEARCH_PATTERN_CHARS + 1);
+    expect(await code(vault.search(longPattern, { regex: true }))).toBe('INVALID_INPUT');
+  });
+
+  it('does not cap a literal query at the regex pattern length', async () => {
+    const longQuery = 'x'.repeat(MAX_SEARCH_PATTERN_CHARS + 1);
+    await expect(vault.search(longQuery)).resolves.toEqual([]);
+  });
+
+  it('restricts the search to exactly the given paths, ignoring every other file', async () => {
+    await vault.write('a.md', 'needle here\n');
+    await vault.write('b.md', 'needle here too\n');
+    await vault.write('c.md', 'needle again\n');
+    const r = await vault.search('needle', { paths: ['a.md', 'c.md'] });
+    expect(r.map((m) => m.path).sort()).toEqual(['a.md', 'c.md']);
+  });
+
+  it('returns no matches for an empty paths array, without scanning the rest of the vault', async () => {
+    await vault.write('a.md', 'needle\n');
+    const r = await vault.search('needle', { paths: [] });
+    expect(r).toEqual([]);
+  });
+
+  it('skips a candidate path that no longer exists, without failing the whole search', async () => {
+    await vault.write('a.md', 'needle\n');
+    const r = await vault.search('needle', { paths: ['a.md', 'missing.md'] });
+    expect(r.map((m) => m.path)).toEqual(['a.md']);
+  });
+
+  it(`rejects more than ${MAX_SEARCH_PATHS} candidate paths`, async () => {
+    const many = Array.from({ length: MAX_SEARCH_PATHS + 1 }, (_, i) => `n${i}.md`);
+    expect(await code(vault.search('x', { paths: many }))).toBe('INVALID_INPUT');
+  });
+});
+
+describe('search: ripgrep argv construction (mocked spawn, no real rg binary needed)', () => {
+  async function capturedArgs(query: string, opts: SearchOpts): Promise<string[]> {
+    const rgVault = await LocalFSAdapter.create(root, { ripgrepPath: 'rg' });
+    let args: string[] = [];
+    spawnMock.mockImplementationOnce(((...spawnArgs: unknown[]) => {
+      args = spawnArgs[1] as string[];
+      return fakeRgChild() as unknown as ReturnType<typeof spawn>;
+    }) as typeof spawn);
+    await rgVault.search(query, opts);
+    return args;
+  }
+
+  it('literal search (default): keeps --fixed-strings, includes per-extension globs, positional query then target dir', async () => {
+    const args = await capturedArgs('needle', {});
+    expect(args).toContain('--fixed-strings');
+    expect(args).not.toContain('-e');
+    expect(args).not.toContain('--pcre2');
+    expect(args).toContain('*.md');
+    const dashdash = args.indexOf('--');
+    expect(args.slice(dashdash + 1)).toEqual(['needle', vault.root]);
+  });
+
+  it('regex:true: drops --fixed-strings, passes -e <pattern>, never adds --pcre2', async () => {
+    const args = await capturedArgs('foo|bar', { regex: true });
+    expect(args).not.toContain('--fixed-strings');
+    expect(args).not.toContain('--pcre2');
+    expect(args).toContain('-e');
+    expect(args[args.indexOf('-e') + 1]).toBe('foo|bar');
+    expect(args).toContain('*.md'); // still walks the target directory, restricted to text files
+    const dashdash = args.indexOf('--');
+    expect(args.slice(dashdash + 1)).toEqual([vault.root]); // -e already carries the pattern
+  });
+
+  it('paths: passed as positional file arguments after --, per-extension include globs dropped, exclusions kept', async () => {
+    const args = await capturedArgs('needle', { paths: ['a.md', 'b/c.md'] });
+    expect(args).toContain('--fixed-strings');
+    expect(args).not.toContain('*.md');
+    expect(args).toContain('!.*');
+    expect(args).toContain('!**/.*/**');
+    expect(args).toContain(`!/${RESERVED_DIR}/**`);
+    const dashdash = args.indexOf('--');
+    expect(args.slice(dashdash + 1)).toEqual([
+      'needle',
+      path.join(vault.root, 'a.md'),
+      path.join(vault.root, 'b/c.md'),
+    ]);
+  });
+
+  it('regex + paths together: -e pattern, no --fixed-strings, no include globs, files after --', async () => {
+    const args = await capturedArgs('fo+', { regex: true, paths: ['a.md'] });
+    expect(args).not.toContain('--fixed-strings');
+    expect(args).not.toContain('*.md');
+    expect(args).not.toContain('--pcre2');
+    expect(args[args.indexOf('-e') + 1]).toBe('fo+');
+    const dashdash = args.indexOf('--');
+    expect(args.slice(dashdash + 1)).toEqual([path.join(vault.root, 'a.md')]);
+  });
+
+  it('always excludes dot-paths and the reserved _brainstem folder, in every mode', async () => {
+    for (const opts of [
+      {},
+      { regex: true },
+      { paths: ['a.md'] },
+      { regex: true, paths: ['a.md'] },
+    ]) {
+      const args = await capturedArgs('x', opts);
+      expect(args).toContain('!.*');
+      expect(args).toContain('!**/.*/**');
+      expect(args).toContain(`!/${RESERVED_DIR}/**`);
+      expect(args).not.toContain('--pcre2');
+    }
+  });
+});
+
+describe.skipIf(!hasRipgrep())('search: regex (real ripgrep binary)', () => {
+  it('supports alternation, is case-insensitive by default', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('pets.md', 'I have a cat\nI have a Dog\nI have a bird\n');
+    const alt = await rgVault.search('cat|dog', { regex: true });
+    expect(alt.map((m) => m.line).sort()).toEqual([1, 2]);
+  });
+
+  it('supports anchors', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('pets.md', 'I have a cat\nbird has a cat\n');
+    const anchored = await rgVault.search('^I have a cat$', { regex: true });
+    expect(anchored.map((m) => m.line)).toEqual([1]);
+  });
+
+  it('is case-sensitive only when explicitly requested', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('case.md', 'Cat\ncat\n');
+    const r = await rgVault.search('^cat$', { regex: true, caseSensitive: true });
+    expect(r.map((m) => m.line)).toEqual([2]);
+  });
+
+  it('treats "." as any-character only in regex mode, not in literal mode', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('dotted.md', 'a.c\nabc\n');
+    const literal = await rgVault.search('a.c');
+    expect(literal.map((m) => m.line)).toEqual([1]);
+    const regexed = await rgVault.search('a.c', { regex: true });
+    expect(regexed.map((m) => m.line).sort()).toEqual([1, 2]);
+  });
+
+  it('restricts to the given paths, ignoring files outside the set', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('x1.md', 'needle\n');
+    await rgVault.write('x2.md', 'needle\n');
+    await rgVault.write('x3.md', 'needle\n');
+    const r = await rgVault.search('needle', { paths: ['x1.md', 'x3.md'] });
+    expect(r.map((m) => m.path).sort()).toEqual(['x1.md', 'x3.md']);
+  });
+
+  it('regex + paths together', async () => {
+    const rgVault = await LocalFSAdapter.create(root);
+    await rgVault.write('y1.md', 'foo123\n');
+    await rgVault.write('y2.md', 'foo123\n');
+    const r = await rgVault.search('foo\\d+', { regex: true, paths: ['y1.md'] });
+    expect(r.map((m) => m.path)).toEqual(['y1.md']);
   });
 });

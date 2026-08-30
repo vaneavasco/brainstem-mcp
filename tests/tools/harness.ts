@@ -25,11 +25,14 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function startHarness(overrides?: LocalRuntimeOptions['settings']): Promise<Harness> {
+export async function startHarness(
+  overrides?: LocalRuntimeOptions['settings'],
+  ripgrepPath: string | null = null,
+): Promise<Harness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-tools-'));
   const runtime = await createLocalRuntime({
     vaultPath: root,
-    ripgrepPath: null,
+    ripgrepPath,
     settings: overrides,
     stateDir: path.join(root, '_brainstem'),
   });
