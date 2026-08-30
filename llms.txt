@@ -1,0 +1,24 @@
+# brainstem-mcp
+
+> Single-user, self-hosted MCP server that gives Claude (claude.ai web/mobile, Claude Desktop, Claude Code) read/write access to an Obsidian vault. Runs in Docker on the owner's machine, reachable through a Cloudflare tunnel, protected by its own OAuth 2.1 authorization server. Install: `git clone https://github.com/vaneavasco/brainstem-mcp.git && cd brainstem-mcp && ./brainstem start`.
+
+Version 0.1.x (beta). Verified with Claude Code and claude.ai web on Linux; Windows/macOS launchers and the Claude mobile app are implemented but not yet verified by a real run.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/README.md): install, connect Claude, every CLI command, stable vs quick tunnel, sync notes, security model, troubleshooting
+- [CHANGELOG](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/CHANGELOG.md): what shipped in each version
+- [SECURITY](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/SECURITY.md): how to report a vulnerability, scope
+- [AGENTS.md](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/AGENTS.md): guide for coding agents and contributors — layout, commands, conventions, security invariants
+- [Design spec](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md): the binding architecture (owner secret, state in the vault, tunnel modes, CLI)
+- [ADR 0005](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/adr/0005-single-user-state-in-vault-tunnel-modes.md): why single-user, why JSON state in `_brainstem/`, why two tunnel modes
+
+## Configuration
+
+- [.env.example](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/.env.example): every environment variable with its default
+- [compose.yaml](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/compose.yaml): the two services (app, tunnel) and the prebuilt image names
+
+## Optional
+
+- [Auth consistency review](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/reviews/2026-08-28-auth-consistency-review.md): how the design maps to the MCP 2026-07-28 authorization spec and Claude's connector requirements
+- [Implementation plan](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/implementation-plan.md): phases, tool list, deferred scope

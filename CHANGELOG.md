@@ -4,6 +4,26 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Owner-editable instructions for Claude: `<vault>/_brainstem/instructions.md`
+  (seeded at first start) is sent as the MCP server's `instructions` on every
+  connection, on top of a fuller built-in guide to the vault tools.
+- Prebuilt images on GHCR (`ghcr.io/vaneavasco/brainstem-mcp`,
+  `…/brainstem-mcp-tunnel`; amd64 + arm64) for every commit on `main` and every
+  release tag. `./brainstem up` pulls the image for the checked-out commit and
+  only builds locally when nothing matches (`--build` forces a build,
+  `--no-build` refuses one).
+- `AGENTS.md` (+ `CLAUDE.md` importing it) for coding agents working on the
+  repo, and `llms.txt` pointing LLMs at the right documents.
+
+### Changed
+
+- `./brainstem update` restarts with a plain `up`, so it runs the prebuilt image
+  of the commit it just pulled instead of forcing a local rebuild.
+
 ## [0.1.0] — 2026-08-30
 
 First public release. Beta: verified end-to-end on Linux with Claude Code and
@@ -30,4 +50,5 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[Unreleased]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/vaneavasco/brainstem-mcp/releases/tag/v0.1.0

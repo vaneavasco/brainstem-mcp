@@ -32,6 +32,8 @@ On Windows, replace `./brainstem` with `.\brainstem` in every command below.
 
 `start` checks your prerequisites and tells you exactly what to install if something is missing. On first run it asks for your Obsidian vault folder and whether you have a Cloudflare tunnel token (see *Stable URL* below — say no to get a quick tunnel instead). Then it starts the stack and prints your connector URL.
 
+Containers come from prebuilt images (`ghcr.io/vaneavasco/brainstem-mcp`, built by CI for the exact commit you checked out), so a first start takes seconds; if no image matches — offline, or local edits — it builds locally instead. `./brainstem start --build` forces a local build.
+
 ## Connect Claude
 
 **claude.ai (web or mobile):** Settings → Connectors → *Add custom connector* → paste `<your URL>/mcp` → Connect → type the owner secret → Approve.
@@ -130,6 +132,8 @@ The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the 
 
 ## For developers
 
+Working on the code with an AI coding agent? `AGENTS.md` is the project guide it reads (Cursor, Copilot, Codex, …); `CLAUDE.md` imports it for Claude Code.
+
 The launcher (`./brainstem`, `brainstem.cmd`) is a thin wrapper: it checks Node/Docker, installs dependencies, then delegates to the TypeScript CLI.
 
 ```bash
@@ -149,6 +153,8 @@ mark of a developer checkout — in which case it runs a plain `npm ci` so your
 devDependencies survive. Set `BRAINSTEM_SKIP_INSTALL=1` to skip the install step
 altogether (the launcher tests do this, so a stale lockfile can never rewrite
 `node_modules` mid-suite).
+
+**Images.** `./brainstem up` resolves the checked-out commit to the tag CI published (`sha-<7>`), runs `docker compose pull`, and starts without building; a dirty working tree or a failed pull falls back to `docker compose up --build`, which tags the local build `dev`. `--build` skips the registry, `--no-build` refuses to build. CI (`publish-images` in `.github/workflows/ci.yml`) pushes `ghcr.io/vaneavasco/brainstem-mcp` and `…/brainstem-mcp-tunnel` for every commit on `main` and every `v*` tag (multi-arch: amd64 + arm64).
 
 See `docs/` for the spec, ADRs and implementation plans.
 
