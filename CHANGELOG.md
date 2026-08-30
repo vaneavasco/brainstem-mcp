@@ -60,8 +60,11 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   runs on a built-in linear-time matcher over a reduced syntax (literals, `.`,
   `[classes]`, `* + ? {m,n}`, `|`, `(...)`) instead of a JavaScript `RegExp`:
   patterns are a FULL match against the value (`^`/`$`, backreferences,
-  lookarounds and named groups are rejected with `INVALID_INPUT`), so no
-  pattern can hang the server. Regex `vault_search` over file *contents* still
+  lookarounds and named groups are rejected with `INVALID_INPUT`). Matching is
+  linear in the value's length with hard caps on pattern size and complexity —
+  the catastrophic-backtracking class that could previously hang the server
+  now completes in milliseconds; a worst-case crafted pattern costs seconds
+  over a large vault, never unbounded time. Regex `vault_search` over file *contents* still
   goes through ripgrep and is unchanged.
 - Every error result now carries `structuredContent` with its `code` (and any
   details, e.g. a `CONFLICT`'s `currentHash`), not just `CONFLICT`.

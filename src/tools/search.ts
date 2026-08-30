@@ -109,12 +109,24 @@ function computeCandidates(
   return { paths, incomplete: total > MAX_QUERY_ROWS };
 }
 
-/** Whether a single index entry passes the `where`/`tags`/`pathPrefix` filter, re-checked one
- *  entry at a time (via evaluateQuery on a 1-element input) so evaluateQuery's own row cap —
- *  the exact thing `computeCandidates` above cannot exceed — never applies here: a one-entry
- *  input either fully matches (`total === 1`) or doesn't (`total === 0`), never truncated. */
-function passesFilters(entry: IndexEntry, graph: VaultGraph, opts: CandidateOpts): boolean {
-  return evaluateQuery([entry], graph, filterQuery(opts, 1)).total === 1;
+/**
+ * Which of `entries` pass the `where`/`tags`/`pathPrefix` filter. Evaluated in chunks of at most
+ * MAX_QUERY_ROWS entries so evaluateQuery's own row cap — the exact thing `computeCandidates`
+ * above cannot exceed — never truncates a chunk (`rows` covers every match in it), while the
+ * `where` pattern is compiled once per chunk instead of once per file.
+ */
+function filterPassingPaths(
+  entries: IndexEntry[],
+  graph: VaultGraph,
+  opts: CandidateOpts,
+): Set<string> {
+  const passing = new Set<string>();
+  for (let i = 0; i < entries.length; i += MAX_QUERY_ROWS) {
+    const chunk = entries.slice(i, i + MAX_QUERY_ROWS);
+    const { rows } = evaluateQuery(chunk, graph, filterQuery(opts, MAX_QUERY_ROWS));
+    for (const row of rows) passing.add(row.path);
+  }
+  return passing;
 }
 
 /**
@@ -175,11 +187,13 @@ async function searchScanAndFilter(
   max: number,
 ): Promise<{ matches: Match[]; truncated: boolean }> {
   const scanned = await adapter.search(query, { ...baseOpts, limit: MAX_SEARCH_SCAN });
+  const scannedEntries = [...new Set(scanned.map((m) => m.path))]
+    .map((p) => index.get(p))
+    // a path the index does not track is not a markdown note (tags/where can never apply)
+    .filter((e): e is IndexEntry => e !== undefined);
+  const filtered = filterPassingPaths(scannedEntries, graph, candidateOpts);
   const passing = new Set<string>();
-  for (const p of new Set(scanned.map((m) => m.path))) {
-    const entry = index.get(p);
-    if (!entry) continue; // not a markdown note the index tracks (tags/where can never apply)
-    if (!passesFilters(entry, graph, candidateOpts)) continue;
+  for (const p of filtered) {
     if (candidateOpts.glob && !matchesGlob(p, candidateOpts.glob, candidateOpts.pathPrefix))
       continue;
     passing.add(p);
