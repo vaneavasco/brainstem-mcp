@@ -2,12 +2,19 @@ import { type McpRequestContext, McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod';
 import type { Logger } from '../logger.ts';
 import { registerVaultTools } from '../tools/register.ts';
+import { DEFAULT_INSTRUCTIONS } from '../vault/instructions.ts';
 import type { RuntimeResolver } from '../vault/runtime.ts';
 import { SERVER_INFO } from '../version.ts';
 
 export interface FactoryDeps {
   resolveRuntime: RuntimeResolver;
   logger: Logger;
+  /**
+   * The `instructions` sent in the initialize result — defaults plus the
+   * owner's `_brainstem/instructions.md` (see `src/vault/instructions.ts`).
+   * Optional so tests and tools that don't care get the defaults.
+   */
+  instructions?: () => Promise<string>;
 }
 
 const PingOutput = z.object({
@@ -23,8 +30,7 @@ export async function createVaultServer(
   deps: FactoryDeps,
 ): Promise<McpServer> {
   const server = new McpServer(SERVER_INFO, {
-    instructions:
-      "brainstem-mcp gives you read/write access to the user's personal markdown vault. Paths are vault-relative. Prefer vault_edit/vault_append over rewriting whole notes. Deleting requires confirm=true and only moves files to .trash/.",
+    instructions: deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS,
     cacheHints: {
       'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
     },

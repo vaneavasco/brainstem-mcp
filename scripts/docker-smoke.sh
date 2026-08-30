@@ -37,5 +37,6 @@ echo "[5/6] vault_search finds the note"
 echo "[6/6] file landed in $VAULT, connection note was written"
 test -f "$VAULT/00-inbox/smoke.md"
 test -f "$VAULT/_brainstem/connection.md"
+test -f "$VAULT/_brainstem/instructions.md"
 
 echo "docker smoke OK"

@@ -33,7 +33,9 @@ beforeAll(async () => {
   runtime = await createLocalRuntime({ vaultPath: vaultRoot, ripgrepPath: null });
   auth = await createTestAuth(config, vaultRoot);
   token = await auth.issueAccessToken();
-  const { app } = createApp(config, logger, async () => runtime, auth.auth);
+  const { app } = createApp(config, logger, async () => runtime, auth.auth, {
+    instructions: async () => 'TEST INSTRUCTIONS: projects live in 10-projects/',
+  });
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -158,6 +160,9 @@ describe('/mcp with a 2025-era (legacy) client', () => {
       }),
     );
     try {
+      // The initialize result carries whatever the provider returned for this
+      // connection — the owner's vault conventions reach the model this way.
+      expect(client.getInstructions()).toBe('TEST INSTRUCTIONS: projects live in 10-projects/');
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toContain('brainstem_ping');
       const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });

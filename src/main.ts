@@ -10,6 +10,10 @@ import { createLogger } from './logger.ts';
 import { startServer } from './server.ts';
 import { waitForPublicUrl, watchPublicUrl } from './tunnel/public-url-file.ts';
 import { writeConnectionNote, writeInstanceFile } from './vault/connection-note.ts';
+import {
+  createInstructionsProvider,
+  writeInstructionsTemplateIfMissing,
+} from './vault/instructions.ts';
 import { createLocalRuntime } from './vault/runtime.ts';
 
 const PUBLIC_URL_WAIT_TIMEOUT_MS = 120_000;
@@ -131,6 +135,20 @@ async function main(): Promise<void> {
     logger.warn({ err: error }, 'could not scan state dir for sync-conflict copies');
   }
 
+  // The owner's vault-conventions note lives in the reserved state dir; seed
+  // it once so it is discoverable in Obsidian next to connection.md.
+  try {
+    if (await writeInstructionsTemplateIfMissing(stateDir)) {
+      logger.info(
+        { file: path.join(stateDir, 'instructions.md') },
+        'seeded owner instructions template',
+      );
+    }
+  } catch (error) {
+    logger.warn({ err: error }, 'could not seed the owner instructions template');
+  }
+  const instructions = createInstructionsProvider(stateDir);
+
   const auth = createAuth(config, logger, store);
   const running = await startServer(
     config,
@@ -138,7 +156,7 @@ async function main(): Promise<void> {
     createOwnerResolver(runtime),
     auth,
     config.port,
-    { extras: { notes: () => runtime.index.size() } },
+    { extras: { notes: () => runtime.index.size(), instructions: () => instructions.get() } },
   );
 
   await writeConnectionNote(stateDir, {

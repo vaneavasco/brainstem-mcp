@@ -47,6 +47,8 @@ function errorShape(type: string | undefined): { code: number; message: string }
 
 export interface AppExtras {
   notes?: () => number;
+  /** Per-connection MCP `instructions`; see `FactoryDeps.instructions`. */
+  instructions?: () => Promise<string>;
 }
 
 export function createApp(
@@ -56,11 +58,14 @@ export function createApp(
   auth: AuthDeps,
   extras: AppExtras = {},
 ): AppBundle {
-  const handler = createMcpHandler((ctx) => createVaultServer(ctx, { resolveRuntime, logger }), {
-    legacy: config.legacyMode,
-    keepAliveMs: 15_000, // keeps SSE streams alive through proxies that drop idle connections
-    onerror: (error) => logger.warn({ err: error }, 'mcp handler error'),
-  });
+  const handler = createMcpHandler(
+    (ctx) => createVaultServer(ctx, { resolveRuntime, logger, instructions: extras.instructions }),
+    {
+      legacy: config.legacyMode,
+      keepAliveMs: 15_000, // keeps SSE streams alive through proxies that drop idle connections
+      onerror: (error) => logger.warn({ err: error }, 'mcp handler error'),
+    },
+  );
 
   const allowed = [config.publicUrl.hostname, ...LOCAL_HOSTNAMES];
   const app = createMcpExpressApp({
