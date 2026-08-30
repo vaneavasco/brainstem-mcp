@@ -4,11 +4,26 @@ import { BINARY_MIME_ALLOWLIST, MAX_BATCH, MAX_FILE_BYTES } from '../storage/lim
 import { normalizedOrRaw, normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { assertExpectedHash } from '../storage/write-gate.ts';
+import { findSection, insertIntoSection, listHeadingPaths } from '../vault/sections.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
 import { ExpectedHashArg, locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 const PathArg = z.string().describe('Vault-relative path, e.g. "00-inbox/idea.md".');
+
+const MAX_HEADING_LIST = 50;
+
+/** NOT_FOUND message for an unresolved heading path, listing what headings actually exist
+ *  (capped so a huge note cannot blow out the error message). */
+function headingNotFoundMessage(content: string, headingPath: string): string {
+  const paths = listHeadingPaths(content);
+  if (paths.length === 0) {
+    return `No heading "${headingPath}" found; this note has no headings.`;
+  }
+  const shown = paths.slice(0, MAX_HEADING_LIST).join(', ');
+  const more = paths.length > MAX_HEADING_LIST ? ` (+${paths.length - MAX_HEADING_LIST} more)` : '';
+  return `No heading "${headingPath}" found. Headings in this note: ${shown}${more}.`;
+}
 
 function decodeBase64Strict(input: string): Uint8Array {
   const cleaned = input.replace(/\s+/g, '');
@@ -138,19 +153,42 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Append to note',
       description:
-        'Append text to the end of a file (a newline is inserted before the appended text if the file does not already end with one, and after it so the file always ends with a newline). Creates the file when missing. Cheaper than vault_write for adding to existing notes.',
+        'Append text to the end of a file (a newline is inserted before the appended text if the file does not already end with one, and after it so the file always ends with a newline). Creates the file when missing. Cheaper than vault_write for adding to existing notes. With "heading" (a heading path like "Heading" or "H1 > H2"), inserts inside that section instead — at its end (default) or its start ("position").',
       inputSchema: z.object({
         path: PathArg,
         content: z.string().min(1),
+        heading: z
+          .string()
+          .optional()
+          .describe('Insert inside this section (by heading path) instead of at end of file.'),
+        position: z
+          .enum(['start', 'end'])
+          .optional()
+          .describe('Where inside the section to insert, when "heading" is given. Default "end".'),
         expectedHash: ExpectedHashArg,
       }),
       outputSchema: z.object({ path: z.string(), bytes: z.number(), hash: z.string() }),
       annotations: APPEND_ONLY,
     },
-    ({ path, content, expectedHash }) =>
+    ({ path, content, heading, position, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
         return locked(tc, [p], async () => {
+          if (heading !== undefined) {
+            const note = await adapter.read(p);
+            const range = findSection(note.content, heading);
+            if (!range) {
+              throw new VaultError('NOT_FOUND', headingNotFoundMessage(note.content, heading));
+            }
+            const updated = insertIntoSection(note.content, range, content, position ?? 'end');
+            await adapter.write(p, updated, { expectedHash });
+            const after = await adapter.read(p);
+            await touch(tc, after.path);
+            return okJson(
+              { path: after.path, bytes: after.meta.size, hash: after.hash },
+              `Inserted into "${heading}" in ${after.path} (now ${after.meta.size} bytes).`,
+            );
+          }
           await adapter.append(p, content, { expectedHash });
           const note = await adapter.read(p);
           await touch(tc, note.path);
