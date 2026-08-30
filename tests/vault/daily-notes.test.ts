@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { VaultError } from '../../src/storage/types.ts';
 import {
   DEFAULT_DAILY_NOTE_SETTINGS,
+  DEFAULT_DAILY_TEMPLATE,
   formatInVaultZone,
   parseDateArg,
   renderDailyTemplate,
@@ -92,6 +93,16 @@ describe('renderDailyTemplate', () => {
     expect(() =>
       renderDailyTemplate('{{date:???bogus}}', lateUtc, DEFAULT_DAILY_NOTE_SETTINGS),
     ).toThrow(VaultError);
+  });
+});
+
+describe('DEFAULT_DAILY_TEMPLATE', () => {
+  it('renders frontmatter with type: daily and a date, plus a title heading', () => {
+    const out = renderDailyTemplate(DEFAULT_DAILY_TEMPLATE, lateUtc, DEFAULT_DAILY_NOTE_SETTINGS);
+    expect(out).toBe('---\ntype: daily\ndate: 2026-08-28\n---\n\n# 2026-08-28\n');
+    expect(out).toMatch(/^---\n/);
+    expect(out).toContain('type: daily');
+    expect(out).toContain('date: 2026-08-28');
   });
 });
 

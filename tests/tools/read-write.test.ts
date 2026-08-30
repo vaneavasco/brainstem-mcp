@@ -130,6 +130,38 @@ describe('vault_write_binary', () => {
   });
 });
 
+describe('vault_frontmatter_update', () => {
+  it('sets and unsets frontmatter keys on a single note without touching the body', async () => {
+    await h.call('vault_write', {
+      path: 'single.md',
+      content: '---\nstatus: draft\ntemp: yes\n---\nbody\n',
+    });
+    const r = await h.call('vault_frontmatter_update', {
+      path: 'single.md',
+      set: { status: 'done' },
+      unset: ['temp'],
+    });
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({
+      path: 'single.md',
+      frontmatter: { status: 'done' },
+    });
+    const read = await h.call('vault_read', { path: 'single.md' });
+    expect(read.structuredContent).toMatchObject({ frontmatter: { status: 'done' } });
+    expect(text(read)).toContain('body\n');
+    expect(h.runtime.index.get('single.md')?.frontmatter).toEqual({ status: 'done' });
+  });
+
+  it('reports a failure for a non-markdown or missing file', async () => {
+    const missing = await h.call('vault_frontmatter_update', {
+      path: 'nope.md',
+      set: { a: 1 },
+    });
+    expect(missing.isError).toBe(true);
+    expect(text(missing)).toMatch(/does not exist/);
+  });
+});
+
 describe('vault_edit / vault_append / vault_batch_frontmatter_update', () => {
   it('previews with dryRun, applies patches, appends and updates frontmatter', async () => {
     await h.call('vault_write', { path: 'e.md', content: '---\nstatus: draft\n---\nalpha\n' });
@@ -148,7 +180,7 @@ describe('vault_edit / vault_append / vault_batch_frontmatter_update', () => {
     expect(real.structuredContent).toMatchObject({ applied: 1, dryRun: false });
     await h.call('vault_append', { path: 'e.md', content: 'gamma' });
     expect(text(await h.call('vault_read', { path: 'e.md' }))).toBe(
-      '---\nstatus: draft\n---\nbeta\ngamma',
+      '---\nstatus: draft\n---\nbeta\ngamma\n',
     );
     const fm = await h.call('vault_batch_frontmatter_update', {
       updates: [{ path: 'e.md', set: { status: 'done' } }],

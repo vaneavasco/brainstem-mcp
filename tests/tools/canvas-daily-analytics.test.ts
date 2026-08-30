@@ -75,7 +75,7 @@ describe('daily note tools', () => {
     });
     expect(a.structuredContent).toEqual({ path: 'journal/2026-08-29.md', created: true });
     const r = await h.call('vault_daily_note_read', { date: '2026-08-29' });
-    expect(text(r)).toBe('# 2026-08-29\n\n## Log\n- did a thing');
+    expect(text(r)).toBe('# 2026-08-29\n\n## Log\n- did a thing\n');
     const a2 = await h.call('vault_daily_note_append', {
       date: '2026-08-29',
       content: '- another',
@@ -85,6 +85,33 @@ describe('daily note tools', () => {
     expect((today.structuredContent as { date: string }).date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const bad = await h.call('vault_daily_note_path', { date: 'tomorrow' });
     expect(text(bad)).toMatch(/INVALID_INPUT/);
+  });
+
+  it('creates the daily note with default frontmatter when no template is configured', async () => {
+    const fresh = await startHarness({ requiredFrontmatter: ['type'] });
+    try {
+      const a = await fresh.call('vault_daily_note_append', {
+        date: '2026-08-29',
+        content: '- did a thing',
+      });
+      expect(a.structuredContent).toMatchObject({ created: true });
+      const r = await fresh.call('vault_daily_note_read', { date: '2026-08-29' });
+      expect(r.structuredContent).toMatchObject({
+        frontmatter: { type: 'daily', date: '2026-08-29' },
+      });
+      expect(text(r)).toBe(
+        '---\ntype: daily\ndate: 2026-08-29\n---\n\n# 2026-08-29\n- did a thing\n',
+      );
+      const s = await fresh.call('vault_analytics_summary', {});
+      expect(s.structuredContent).toMatchObject({
+        categories: {
+          frontmatter_missing: { count: 0 },
+          required_frontmatter_missing: { count: 0 },
+        },
+      });
+    } finally {
+      await fresh.close();
+    }
   });
 });
 

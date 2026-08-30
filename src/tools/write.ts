@@ -105,7 +105,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Append to note',
       description:
-        'Append text to the end of a file (a newline is inserted if the file does not end with one). Creates the file when missing. Cheaper than vault_write for adding to existing notes.',
+        'Append text to the end of a file (a newline is inserted before the appended text if the file does not already end with one, and after it so the file always ends with a newline). Creates the file when missing. Cheaper than vault_write for adding to existing notes.',
       inputSchema: z.object({ path: PathArg, content: z.string().min(1) }),
       outputSchema: z.object({ path: z.string(), bytes: z.number() }),
       annotations: APPEND_ONLY,
@@ -123,10 +123,49 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
   );
 
   server.registerTool(
+    'vault_frontmatter_update',
+    {
+      title: 'Update frontmatter on a note',
+      description:
+        'Set or remove YAML frontmatter keys on a single markdown file without touching its body.',
+      inputSchema: z.object({
+        path: PathArg,
+        set: z.record(z.string(), z.unknown()).optional(),
+        unset: z.array(z.string()).optional(),
+      }),
+      outputSchema: z.object({
+        path: z.string(),
+        frontmatter: z.record(z.string(), z.unknown()),
+      }),
+      annotations: OVERWRITE,
+    },
+    ({ path, set, unset }) =>
+      guarded(tc.log, async () => {
+        // Read first so a missing file or encoding problem surfaces with its real error code;
+        // batchFrontmatterUpdate (below) swallows per-item errors into `failed` for its own
+        // best-effort batch semantics, which would otherwise flatten that distinction away.
+        await adapter.read(path);
+        const result = await adapter.batchFrontmatterUpdate([{ path, set, unset }]);
+        if (result.updated.length === 0) {
+          throw new VaultError(
+            'INVALID_INPUT',
+            result.failed[0]?.error ?? `Failed to update ${path}.`,
+          );
+        }
+        await touch(tc, ...result.updated);
+        const note = await adapter.read(result.updated[0] as string);
+        return okJson(
+          { path: note.path, frontmatter: note.frontmatter },
+          `Updated frontmatter on ${note.path}.`,
+        );
+      }),
+  );
+
+  server.registerTool(
     'vault_batch_frontmatter_update',
     {
       title: 'Update frontmatter on several notes',
-      description: `Set or remove YAML frontmatter keys on up to ${MAX_BATCH} markdown files without touching their bodies. Per-file failures are reported in "failed".`,
+      description: `Set or remove YAML frontmatter keys on up to ${MAX_BATCH} markdown files without touching their bodies. Per-file failures are reported in "failed". For a single note use vault_frontmatter_update.`,
       inputSchema: z.object({
         updates: z
           .array(

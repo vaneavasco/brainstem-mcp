@@ -17,6 +17,13 @@ export const DEFAULT_DAILY_NOTE_SETTINGS: DailyNoteSettings = {
   timezone: 'UTC',
 };
 
+/**
+ * Used to create a daily note when no DAILY_NOTES_TEMPLATE is configured, so a fresh daily note
+ * always has frontmatter (an empty file would otherwise be flagged by vault_analytics_summary as
+ * frontmatter_missing).
+ */
+export const DEFAULT_DAILY_TEMPLATE = '---\ntype: daily\ndate: {{date}}\n---\n\n# {{title}}\n';
+
 const STRFTIME: Record<string, string> = {
   Y: 'yyyy',
   y: 'yy',

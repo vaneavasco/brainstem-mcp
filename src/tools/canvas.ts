@@ -62,7 +62,7 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Add canvas node',
       description:
-        'Append a node (text, file, link or group) to a .canvas file, creating the canvas if missing. The id is generated when omitted.',
+        'Append a node (text, file, link or group) to a .canvas file. Creates the canvas file when it does not exist yet — there is intentionally no separate vault_canvas_create. The id is generated when omitted.',
       inputSchema: z.object({ path: z.string(), node: CanvasNodeInputSchema }),
       outputSchema: z.object({ path: z.string(), node: z.record(z.string(), z.unknown()) }),
       annotations: OVERWRITE,

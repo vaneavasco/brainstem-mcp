@@ -307,7 +307,8 @@ export class LocalFSAdapter implements StorageAdapter {
       if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
     }
     const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-    const next = `${existing}${separator}${content}`;
+    const suffix = content.endsWith('\n') ? '' : '\n';
+    const next = `${existing}${separator}${content}${suffix}`;
     assertWithinSize(Buffer.byteLength(next, 'utf8'), 'Appended content');
     await this.atomicWrite(p, Buffer.from(next, 'utf8'));
   }

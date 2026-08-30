@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { VaultError } from '../storage/types.ts';
 import {
+  DEFAULT_DAILY_TEMPLATE,
   formatInVaultZone,
   parseDateArg,
   renderDailyTemplate,
@@ -85,7 +86,7 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Append to daily note',
       description:
-        'Append text to the daily note for a date (default today), creating it from the configured template when missing.',
+        'Append text to the daily note for a date (default today), creating it from the configured template (default: frontmatter with type/date plus a title) when missing.',
       inputSchema: z.object({ content: z.string().min(1), date: DateArg }),
       outputSchema: z.object({ path: z.string(), created: z.boolean() }),
       annotations: APPEND_ONLY,
@@ -99,10 +100,11 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
         } catch (error) {
           if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
           created = true;
-          await adapter.write(
-            path,
-            daily.template ? renderDailyTemplate(daily.template, when, daily) : '',
-          );
+          const templateSource =
+            daily.template && daily.template.trim() !== ''
+              ? daily.template
+              : DEFAULT_DAILY_TEMPLATE;
+          await adapter.write(path, renderDailyTemplate(templateSource, when, daily));
         }
         await adapter.append(path, content);
         await touch(tc, path);

@@ -64,6 +64,24 @@ describe('LocalFSAdapter core', () => {
     expect(note.body).toBe('new body\n');
   });
 
+  it('preserves the trailing newline through write and frontmatter round-trips', async () => {
+    const noFrontmatter = 'plain body without frontmatter.\n';
+    await vault.write('plain.md', noFrontmatter);
+    expect(await fs.readFile(path.join(root, 'plain.md'), 'utf8')).toBe(noFrontmatter);
+
+    const withFrontmatter = '---\ntype: test\n---\n\n# A\n\nline.\n';
+    await vault.write('a.md', withFrontmatter);
+    const rawA = await fs.readFile(path.join(root, 'a.md'), 'utf8');
+    expect(rawA).toBe(withFrontmatter);
+    expect(rawA.endsWith('\n')).toBe(true);
+
+    const merged = '---\ntype: test\nstatus: draft\n---\n\nline.\n';
+    await vault.write('b.md', merged, { mergeFrontmatter: true });
+    const rawB = await fs.readFile(path.join(root, 'b.md'), 'utf8');
+    expect(rawB).toBe(merged);
+    expect(rawB.endsWith('\n')).toBe(true);
+  });
+
   it('rejects oversized writes and reports NOT_FOUND for missing files', async () => {
     expect(await code(vault.write('big.md', 'x'.repeat(MAX_FILE_BYTES + 1)))).toBe('TOO_LARGE');
     expect(await code(vault.read('nope.md'))).toBe('NOT_FOUND');
@@ -118,6 +136,15 @@ describe('LocalFSAdapter core', () => {
     await vault.append('log.md', 'second');
     await vault.append('log.md', 'third\n');
     expect((await vault.read('log.md')).content).toBe('first\nsecond\nthird\n');
+  });
+
+  it('leaves the file newline-terminated even when the appended content is not, so a later dry-run diff does not report a missing trailing newline', async () => {
+    await vault.write('a.md', '---\ntype: test\n---\n\n# A\n\nline.\n');
+    await vault.append('a.md', 'appended without its own newline');
+    const raw = await fs.readFile(path.join(root, 'a.md'), 'utf8');
+    expect(raw.endsWith('\n')).toBe(true);
+    const dry = await vault.edit('a.md', [{ find: 'line.', replace: 'line changed.' }], true);
+    expect(dry.diff).not.toContain('No newline at end of file');
   });
 
   it('batch-reads reporting missing and failed files separately', async () => {

@@ -141,6 +141,8 @@ Rules:
 
 ## 5. Tool surface (parity with reference repo — 20 tools)
 
+> Now 21 tools: the phase-3 acceptance follow-up (2026-08-30) added `vault_frontmatter_update`, a single-note sibling of `vault_batch_frontmatter_update`.
+
 Port name-for-name from https://github.com/jimprosser/obsidian-web-mcp:
 
 `vault_read`, `vault_batch_read`, `vault_write`, `vault_write_binary` (base64 image/PDF, media-type allowlist, 1 MB), `vault_edit` (ordered exact-text patches, dry-run diff), `vault_append`, `vault_batch_frontmatter_update`, `vault_search`, `vault_search_frontmatter`, `vault_list`, `vault_move`, `vault_delete` (soft, `confirm=true` required), `vault_canvas_read`, `vault_canvas_add_node`, `vault_canvas_add_edge`, `vault_daily_note_path`, `vault_daily_note_read`, `vault_daily_note_append`, `vault_analytics_summary`, `vault_analytics_findings`.

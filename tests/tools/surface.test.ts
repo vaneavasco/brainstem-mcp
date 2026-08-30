@@ -8,6 +8,7 @@ const EXPECTED = [
   'vault_write_binary',
   'vault_edit',
   'vault_append',
+  'vault_frontmatter_update',
   'vault_batch_frontmatter_update',
   'vault_search',
   'vault_search_frontmatter',
@@ -33,7 +34,7 @@ afterAll(async () => {
 });
 
 describe('tool surface parity', () => {
-  it('exposes exactly the 20 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
+  it('exposes exactly the 21 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED, 'brainstem_ping'].sort());
     for (const tool of tools) {
