@@ -64,6 +64,12 @@ describe('vault_search_frontmatter', () => {
         hasFrontmatter: true,
         size: 1,
         modifiedAt: new Date().toISOString(),
+        hash: `hash-${i}`,
+        links: [],
+        tags: [],
+        headings: [],
+        blockIds: [],
+        wordCount: 0,
       });
     }
     const r = await h.call('vault_search_frontmatter', { field: 'status', equals: 'open' });

@@ -8,6 +8,7 @@ export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;
 export const MAX_MATCH_TEXT_CHARS = 400;
+export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 
 export const BINARY_MIME_ALLOWLIST: ReadonlyMap<string, readonly string[]> = new Map([
   ['image/png', ['.png']],

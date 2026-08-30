@@ -1,6 +1,7 @@
-import { MAX_BATCH } from '../storage/limits.ts';
-import { isMarkdownPath } from '../storage/path-policy.ts';
+import { MAX_BATCH, MAX_INDEX_BYTES } from '../storage/limits.ts';
+import { isMarkdownPath, isReservedPath } from '../storage/path-policy.ts';
 import { type Note, type StorageAdapter, type Unsubscribe, VaultError } from '../storage/types.ts';
+import { type BlockId, type Heading, type LinkRef, parseNote } from './note-parse.ts';
 
 export interface IndexEntry {
   path: string;
@@ -8,6 +9,12 @@ export interface IndexEntry {
   hasFrontmatter: boolean;
   size: number;
   modifiedAt: string;
+  hash: string;
+  links: LinkRef[];
+  tags: string[];
+  headings: Heading[];
+  blockIds: BlockId[];
+  wordCount: number;
 }
 
 export interface FrontmatterQuery {
@@ -20,6 +27,11 @@ export interface FrontmatterQuery {
 export interface FrontmatterHit {
   path: string;
   value: unknown;
+}
+
+/** True for a path that must never be tracked as an asset: reserved (`_brainstem/`) or dot-segmented. */
+function isDotOrReservedPath(p: string): boolean {
+  return isReservedPath(p) || p.split('/').some((segment) => segment.startsWith('.'));
 }
 
 function getPath(obj: Record<string, unknown>, dotted: string): unknown {
@@ -51,11 +63,41 @@ function matchesContains(value: unknown, needle: string): boolean {
 
 export class FrontmatterIndex {
   readonly builtAt: Date;
+  /** Bumped by exactly 1 on every upsert/remove/rename/addAsset/removeAsset/renameAsset that actually
+   *  changes the index, so consumers (e.g. VaultGraph) can cheaply detect staleness. */
+  private _version = 0;
+  /** Called at most once per over-budget episode (reset once back under budget); never throws. */
+  onOverBudget?: () => void;
   private readonly entries = new Map<string, IndexEntry>();
+  private readonly assetPaths = new Set<string>();
   private bytes = 0;
+  private overBudgetLogged = false;
 
   private constructor() {
     this.builtAt = new Date();
+  }
+
+  get version(): number {
+    return this._version;
+  }
+
+  private bumpVersion(): void {
+    this._version += 1;
+  }
+
+  private entrySize(entry: IndexEntry): number {
+    return JSON.stringify(entry).length;
+  }
+
+  private checkByteBudget(): void {
+    if (this.bytes > MAX_INDEX_BYTES) {
+      if (!this.overBudgetLogged) {
+        this.overBudgetLogged = true;
+        this.onOverBudget?.();
+      }
+    } else {
+      this.overBudgetLogged = false;
+    }
   }
 
   static fromNote(note: Note): IndexEntry {
@@ -65,13 +107,19 @@ export class FrontmatterIndex {
       hasFrontmatter: note.hasFrontmatter,
       size: note.meta.size,
       modifiedAt: note.meta.modifiedAt,
+      hash: note.hash,
+      ...parseNote(note.content, note.frontmatter, note.body),
     };
   }
 
   static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
     const index = new FrontmatterIndex();
     const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
-    const mdPaths = files.map((f) => f.path).filter(isMarkdownPath);
+    const mdPaths: string[] = [];
+    for (const file of files) {
+      if (isMarkdownPath(file.path)) mdPaths.push(file.path);
+      else index.addAsset(file.path);
+    }
     for (let i = 0; i < mdPaths.length; i += MAX_BATCH) {
       const chunk = mdPaths.slice(i, i + MAX_BATCH);
       const { notes } = await adapter.batchRead(chunk);
@@ -81,23 +129,32 @@ export class FrontmatterIndex {
   }
 
   upsert(entry: IndexEntry): void {
-    this.remove(entry.path);
+    const existing = this.entries.get(entry.path);
+    if (existing) this.bytes -= this.entrySize(existing);
     this.entries.set(entry.path, entry);
-    this.bytes += JSON.stringify(entry).length;
+    this.bytes += this.entrySize(entry);
+    this.bumpVersion();
+    this.checkByteBudget();
   }
 
   remove(path: string): void {
     const existing = this.entries.get(path);
     if (!existing) return;
-    this.bytes -= JSON.stringify(existing).length;
+    this.bytes -= this.entrySize(existing);
     this.entries.delete(path);
+    this.bumpVersion();
   }
 
   rename(from: string, to: string): void {
     const existing = this.entries.get(from);
     if (!existing) return;
-    this.remove(from);
-    this.upsert({ ...existing, path: to });
+    this.bytes -= this.entrySize(existing);
+    this.entries.delete(from);
+    const renamed = { ...existing, path: to };
+    this.entries.set(to, renamed);
+    this.bytes += this.entrySize(renamed);
+    this.bumpVersion();
+    this.checkByteBudget();
   }
 
   get(path: string): IndexEntry | undefined {
@@ -116,6 +173,32 @@ export class FrontmatterIndex {
 
   byteSize(): number {
     return this.bytes;
+  }
+
+  /** Vault-relative paths of every non-markdown file the index has seen — never dot or reserved paths. */
+  assets(): ReadonlySet<string> {
+    return this.assetPaths;
+  }
+
+  addAsset(path: string): void {
+    if (isDotOrReservedPath(path)) return;
+    if (this.assetPaths.has(path)) return;
+    this.assetPaths.add(path);
+    this.bumpVersion();
+  }
+
+  removeAsset(path: string): void {
+    if (!this.assetPaths.has(path)) return;
+    this.assetPaths.delete(path);
+    this.bumpVersion();
+  }
+
+  renameAsset(from: string, to: string): void {
+    if (!this.assetPaths.has(from)) return;
+    if (isDotOrReservedPath(to)) return;
+    this.assetPaths.delete(from);
+    this.assetPaths.add(to);
+    this.bumpVersion();
   }
 
   query(q: FrontmatterQuery): FrontmatterHit[] {
@@ -157,7 +240,11 @@ export class FrontmatterIndex {
   attach(adapter: StorageAdapter): Unsubscribe {
     if (!adapter.capabilities().watch || !adapter.watch) return () => {};
     return adapter.watch((event) => {
-      if (!isMarkdownPath(event.path)) return;
+      if (!isMarkdownPath(event.path)) {
+        if (event.type === 'delete') this.removeAsset(event.path);
+        else this.addAsset(event.path);
+        return;
+      }
       if (event.type === 'delete') {
         this.remove(event.path);
         return;

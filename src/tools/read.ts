@@ -15,6 +15,7 @@ const NoteSummary = z.object({
   hasFrontmatter: z.boolean(),
   size: z.number(),
   modifiedAt: z.string(),
+  hash: z.string(),
 });
 
 export function registerReadTools(server: McpServer, tc: ToolContext): void {
@@ -41,6 +42,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             hasFrontmatter: note.hasFrontmatter,
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
+            hash: note.hash,
             truncated: clamped.truncated,
             totalChars: clamped.totalChars,
           },
@@ -77,6 +79,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             hasFrontmatter: note.hasFrontmatter,
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
+            hash: note.hash,
             body: clamped.text,
             truncated: clamped.truncated,
           };

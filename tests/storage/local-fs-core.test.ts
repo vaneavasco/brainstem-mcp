@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { sha256hex } from '../../src/auth/hash.ts';
 import { MAX_FILE_BYTES } from '../../src/storage/limits.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import { VaultError } from '../../src/storage/types.ts';
@@ -54,6 +55,17 @@ describe('LocalFSAdapter core', () => {
       n.endsWith('.tmp'),
     );
     expect(leftovers).toEqual([]);
+  });
+
+  it('computes a content hash on read that changes after the content changes', async () => {
+    await vault.write('h.md', '---\ntitle: H\n---\nv1\n');
+    const n1 = await vault.read('h.md');
+    expect(n1.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(n1.hash).toBe(sha256hex(n1.content));
+    await vault.append('h.md', 'v2');
+    const n2 = await vault.read('h.md');
+    expect(n2.hash).not.toBe(n1.hash);
+    expect(n2.hash).toBe(sha256hex(n2.content));
   });
 
   it('merges frontmatter on write when requested, incoming keys winning', async () => {

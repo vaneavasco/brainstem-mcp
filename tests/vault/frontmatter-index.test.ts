@@ -2,8 +2,11 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { sha256hex } from '../../src/auth/hash.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import { FrontmatterIndex } from '../../src/vault/frontmatter-index.ts';
+
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 let root: string;
 let vault: LocalFSAdapter;
@@ -101,5 +104,95 @@ describe('attach', () => {
       await new Promise((r) => setTimeout(r, 50));
     expect(index.get('live.md')).toBeUndefined();
     detach();
+  });
+});
+
+describe('parsed fields, hash, assets and version', () => {
+  let pRoot: string;
+  let pVault: LocalFSAdapter;
+  let index: FrontmatterIndex;
+
+  beforeEach(async () => {
+    pRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-index-parsed-'));
+    pVault = await LocalFSAdapter.create(pRoot, { ripgrepPath: null });
+    await pVault.write('a.md', '---\ntags: [t1]\n---\n# H\n[[b]] #t2 ^blk');
+    await pVault.write('b.md', 'x');
+    await pVault.writeBinary('img.png', PNG_BYTES, 'image/png');
+    index = await FrontmatterIndex.build(pVault);
+  });
+
+  afterEach(async () => {
+    await fs.rm(pRoot, { recursive: true, force: true });
+  });
+
+  it('indexes links, tags, headings, block ids, word count and content hash per note', async () => {
+    const a = index.get('a.md');
+    expect(a?.links.map((l) => l.target)).toEqual(['b']);
+    expect(a?.tags).toEqual(['t1', 't2']);
+    expect(a?.headings).toEqual([{ level: 1, text: 'H', line: 4 }]);
+    expect(a?.blockIds).toEqual([{ id: 'blk', line: 5 }]);
+    expect(a?.wordCount).toBe(4);
+    expect(a?.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(a?.hash).toBe(sha256hex((await pVault.read('a.md')).content));
+  });
+
+  it('tracks non-markdown assets and bumps version on every mutation', async () => {
+    expect([...index.assets()]).toEqual(['img.png']);
+    const aEntry = index.get('a.md');
+    if (!aEntry) throw new Error('expected a.md to be indexed');
+    const v0 = index.version;
+    index.upsert({ ...aEntry, wordCount: 99 });
+    index.removeAsset('img.png');
+    index.addAsset('new.pdf');
+    index.renameAsset('new.pdf', 'docs/new.pdf');
+    index.rename('a.md', 'z.md');
+    index.remove('z.md');
+    expect(index.version).toBe(v0 + 6);
+    expect([...index.assets()]).toEqual(['docs/new.pdf']);
+  });
+
+  it('never adds a reserved or dot path as an asset, even via addAsset/renameAsset', () => {
+    const before = index.version;
+    index.addAsset('_brainstem/state.json');
+    index.addAsset('.obsidian/workspace.json');
+    expect([...index.assets()]).toEqual(['img.png']);
+    expect(index.version).toBe(before);
+    index.renameAsset('img.png', '_brainstem/moved.png');
+    expect([...index.assets()]).toEqual(['img.png']);
+  });
+});
+
+describe('assets via watch', () => {
+  it('watch events keep assets in sync (create/move/delete of a .png)', async () => {
+    const wRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-index-watch-'));
+    const wVault = await LocalFSAdapter.create(wRoot, { ripgrepPath: null, watchPollMs: 300 });
+    const index = await FrontmatterIndex.build(wVault);
+    const detach = index.attach(wVault);
+    await new Promise((r) => setTimeout(r, 400));
+
+    await wVault.writeBinary('img2.png', PNG_BYTES, 'image/png');
+    const created = Date.now() + 5000;
+    while (Date.now() < created && !index.assets().has('img2.png'))
+      await new Promise((r) => setTimeout(r, 50));
+    expect(index.assets().has('img2.png')).toBe(true);
+
+    await wVault.move('img2.png', 'moved/img2.png');
+    const moved = Date.now() + 5000;
+    while (
+      Date.now() < moved &&
+      (index.assets().has('img2.png') || !index.assets().has('moved/img2.png'))
+    )
+      await new Promise((r) => setTimeout(r, 50));
+    expect(index.assets().has('img2.png')).toBe(false);
+    expect(index.assets().has('moved/img2.png')).toBe(true);
+
+    await wVault.softDelete('moved/img2.png', true);
+    const deleted = Date.now() + 5000;
+    while (Date.now() < deleted && index.assets().has('moved/img2.png'))
+      await new Promise((r) => setTimeout(r, 50));
+    expect(index.assets().has('moved/img2.png')).toBe(false);
+
+    detach();
+    await fs.rm(wRoot, { recursive: true, force: true });
   });
 });

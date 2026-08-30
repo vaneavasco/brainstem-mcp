@@ -6,6 +6,7 @@ import readline from 'node:readline';
 import { promisify } from 'node:util';
 import { watch as chokidarWatch } from 'chokidar';
 import picomatch from 'picomatch';
+import { sha256hex } from '../auth/hash.ts';
 import {
   applyFrontmatterUpdate,
   joinFrontmatter,
@@ -209,6 +210,7 @@ export class LocalFSAdapter implements StorageAdapter {
       body,
       hasFrontmatter,
       meta: { size: stat.size, modifiedAt: stat.mtime.toISOString() },
+      hash: sha256hex(content),
     };
   }
 

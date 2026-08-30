@@ -31,6 +31,7 @@ export interface Note {
   body: string;
   hasFrontmatter: boolean;
   meta: NoteMeta;
+  hash: string;
 }
 
 export interface Entry {

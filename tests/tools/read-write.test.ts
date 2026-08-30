@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { sha256hex } from '../../src/auth/hash.ts';
 import { type Harness, startHarness, text } from './harness.ts';
 
 let h: Harness;
@@ -63,6 +64,7 @@ describe('vault_write / vault_read', () => {
       frontmatter: { title: 'Plan' },
       hasFrontmatter: true,
       truncated: false,
+      hash: sha256hex('---\ntitle: Plan\n---\n# Plan\n'),
     });
     expect(h.runtime.index.get('01-projects/plan.md')?.frontmatter).toEqual({ title: 'Plan' });
   });
@@ -97,9 +99,10 @@ describe('vault_batch_read', () => {
     await h.call('vault_write', { path: 'b.md', content: 'B' });
     const r = await h.call('vault_batch_read', { paths: ['a.md', 'b.md', 'zzz.md'] });
     expect(r.structuredContent).toMatchObject({ missing: ['zzz.md'], failed: [] });
-    expect(
-      (r.structuredContent as { notes: { path: string; body: string }[] }).notes.map((n) => n.body),
-    ).toEqual(['A', 'B']);
+    const notes = (r.structuredContent as { notes: { path: string; body: string; hash: string }[] })
+      .notes;
+    expect(notes.map((n) => n.body)).toEqual(['A', 'B']);
+    expect(notes.map((n) => n.hash)).toEqual([sha256hex('A'), sha256hex('B')]);
     const tooMany = await h.call('vault_batch_read', { paths: new Array(21).fill('a.md') });
     expect(tooMany.isError).toBe(true);
   });
