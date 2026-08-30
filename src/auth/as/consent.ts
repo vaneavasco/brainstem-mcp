@@ -228,9 +228,9 @@ export function renderConsentPage(v: ConsentView): string {
 <h1>Connect <strong>${esc(v.clientName)}</strong> to your vault?</h1>
 <p class="muted">Approving lets this client work with every note in your vault:</p>
 <ul class="perms">
-<li>Read any note, folder or attachment</li>
-<li>Write: create notes and edit existing ones</li>
-<li>Delete only by moving to <code>.trash/</code> — nothing is erased outright</li>
+<li><span>Read any note, folder or attachment</span></li>
+<li><span>Write: create notes and edit existing ones</span></li>
+<li><span>Delete only by moving to <code>.trash/</code> — nothing is erased outright</span></li>
 </ul>
 <p class="muted">After you approve, the browser returns to <code>${esc(v.redirectHost)}</code>.</p>
 ${v.loopbackOnly ? '<p class="note">This client only registers a <strong>loopback</strong> address (localhost). Any local process could be listening there — approve only if you just started this connection yourself.</p>' : ''}
