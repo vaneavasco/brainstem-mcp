@@ -80,12 +80,17 @@ function failure(result: TxResult): { index: number; op: string; error: string }
   return hit === undefined ? null : { index: hit.index, op: hit.op, error: hit.error ?? 'failed' };
 }
 
+/** A dry run only "succeeds" when every op passed pre-flight; a failed one is still a failure. */
+function isClean(result: TxResult): boolean {
+  return result.results.every((r) => r.ok);
+}
+
 function summarize(result: TxResult): string {
   const failed = failure(result);
   if (result.applied) {
     return `Transaction ${result.id}: applied ${result.results.length} op(s) across ${result.touched.length} file(s).`;
   }
-  if (result.dryRun) {
+  if (result.dryRun && isClean(result)) {
     const diffs = result.results
       .map((r) => r.diff)
       .filter((d): d is string => d !== undefined && d !== '')
@@ -98,9 +103,13 @@ function summarize(result: TxResult): string {
     return `IO: transaction ${result.id} failed${where}\nThe rollback did not finish. The original files are kept as pre-images in ${result.journal} — restore them by hand; nothing else will touch that folder.`;
   }
   if (result.rolledBack) {
-    return `Transaction ${result.id} failed${where}\nEvery change was rolled back; the vault is unchanged.`;
+    return `Transaction ${result.id} failed${where}\nEvery change was rolled back; a copy of any deleted note may remain in .trash/.`;
   }
-  return `Transaction ${result.id} was not applied — it failed pre-flight${where}\nNothing was written.`;
+  const problems = result.results
+    .filter((r) => !r.ok && r.error !== undefined)
+    .map((r) => `op #${r.index + 1} (${r.op}): ${r.error}`)
+    .join('\n');
+  return `Transaction ${result.id} was not applied — it failed pre-flight:\n${problems}\nNothing was written.`;
 }
 
 export function registerTxTools(server: McpServer, tc: ToolContext): void {
@@ -110,7 +119,10 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
       title: 'Run several writes as one transaction',
       description: `Apply up to ${MAX_TX_OPS} write/edit/append/frontmatter_update/move/delete ops to at most ${MAX_TX_FILES} files as one all-or-nothing unit. Every op is checked first (hashes, patches, move destinations); if any check fails nothing is written. If a write fails half-way, every touched file is restored from a journalled copy. Ops on the same path compose in order. Use dryRun=true to see the diffs first.`,
       inputSchema: z.object({
-        ops: z.array(opSchema()).min(1).describe(`Ordered operations, ${MAX_TX_OPS} at most.`),
+        // No Zod .min/.max here on purpose: both caps are enforced inside runTransaction so a
+        // violation comes back as INVALID_INPUT like every other vault error, instead of the
+        // SDK's generic "Input validation error".
+        ops: z.array(opSchema()).describe(`Ordered operations, 1 to ${MAX_TX_OPS} of them.`),
         dryRun: z.boolean().optional().describe('Validate and return diffs without writing.'),
       }),
       outputSchema: z.object({
@@ -138,7 +150,9 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
           await touch(tc, ...result.touched);
         }
         const text = summarize(result);
-        if (result.applied || result.dryRun) return okJson({ ...result }, text);
+        if (result.applied || (result.dryRun && isClean(result))) {
+          return okJson({ ...result }, text);
+        }
         return {
           isError: true,
           content: [{ type: 'text', text }],

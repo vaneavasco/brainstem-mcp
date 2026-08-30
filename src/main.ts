@@ -8,6 +8,7 @@ import { StoreCorruptError } from './auth/store/types.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './logger.ts';
 import { startServer } from './server.ts';
+import { classifyJournal } from './storage/transaction.ts';
 import { waitForPublicUrl, watchPublicUrl } from './tunnel/public-url-file.ts';
 import { writeConnectionNote, writeInstanceFile } from './vault/connection-note.ts';
 import {
@@ -136,14 +137,27 @@ async function main(): Promise<void> {
     logger.warn({ err: error }, 'could not scan state dir for sync-conflict copies');
   }
 
-  // A transaction journal only survives a crash mid-apply: report it and leave it alone. There
-  // is deliberately no replay — the pre-images are the owner's to restore (see spec 4.6 step 5).
+  // A journal outlives its transaction only after a crash mid-apply or a failed cleanup. Report
+  // it and leave it alone — there is deliberately no replay (spec 4.6 step 5) — but say which of
+  // the two it is: telling the owner to restore the pre-images of a *committed* batch would
+  // revert it, so the manifest's own `state` decides the advice.
   try {
-    for (const entry of await fs.readdir(path.join(stateDir, 'tx'), { withFileTypes: true })) {
+    const txRoot = path.join(stateDir, 'tx');
+    for (const entry of await fs.readdir(txRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
+      const journal = path.join(txRoot, entry.name);
+      const manifest = await fs
+        .readFile(path.join(journal, 'manifest.json'), 'utf8')
+        .catch(() => null);
+      const status = classifyJournal(manifest);
       logger.warn(
-        { transaction: entry.name, journal: path.join(stateDir, 'tx', entry.name) },
-        'unfinished transaction journal found — the original files are kept there as pre-images; nothing was replayed',
+        {
+          transaction: status.id ?? entry.name,
+          journal,
+          state: status.state,
+          needsRestore: status.needsRestore,
+        },
+        `transaction journal left behind — ${status.message}; nothing was replayed`,
       );
     }
   } catch (error) {

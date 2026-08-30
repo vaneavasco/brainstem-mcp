@@ -108,6 +108,32 @@ describe('vault_transaction', () => {
     expect(await fs.readFile(path.join(h.root, 'tx', 'conflict.md'), 'utf8')).toBe('one\n');
   });
 
+  it('reports a failed dry run as an error instead of a preview', async () => {
+    await seed('tx/dryfail.md', 'one\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        { op: 'append', path: 'tx/dryfail.md', content: 'two' },
+        { op: 'edit', path: 'tx/dryfail.md', patches: [{ find: 'nowhere', replace: 'x' }] },
+      ],
+      dryRun: true,
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/op #2 \(edit\)/);
+    expect(text(result)).toMatch(/INVALID_INPUT: patch #1/);
+    expect(text(result)).not.toMatch(/would apply/);
+    const s = structured(result);
+    expect(s.dryRun).toBe(true);
+    expect(s.applied).toBe(false);
+    expect(s.results[1]?.ok).toBe(false);
+    expect(await fs.readFile(path.join(h.root, 'tx', 'dryfail.md'), 'utf8')).toBe('one\n');
+  });
+
+  it('rejects an empty op list with INVALID_INPUT', async () => {
+    const result = await h.call('vault_transaction', { ops: [] });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/^INVALID_INPUT: /);
+  });
+
   it('rejects more than 20 ops with INVALID_INPUT', async () => {
     const ops = Array.from({ length: 21 }, (_, i) => ({
       op: 'write',

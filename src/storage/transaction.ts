@@ -80,6 +80,84 @@ interface JournalEntry {
   hash: string | null;
 }
 
+/**
+ * Lifecycle of a journal directory. `applying` is written before the first mutation and flipped
+ * to a terminal state *before* the directory is removed, so a journal that outlives its
+ * transaction (a failed `rm`, a sync client holding the folder) still says whether the batch
+ * committed. Without it a leftover directory is ambiguous, and restoring the pre-images of a
+ * committed batch is the one way this design can lose data.
+ */
+export type TxJournalState = 'applying' | 'applied' | 'rolled-back';
+
+export interface JournalStatus {
+  state: TxJournalState | 'unknown';
+  id: string | null;
+  startedAt: string | null;
+  /** The pre-images may be the only copy of the originals — the owner has to look at them. */
+  needsRestore: boolean;
+  /** Ready-made advice for the boot log. */
+  message: string;
+}
+
+/**
+ * Classifies a leftover journal from the raw text of its `manifest.json` (`null` when it could
+ * not be read). Pure, so the boot scan in main.ts — which has no test harness — stays four lines.
+ * Anything unreadable is treated as unfinished: over-warning is cheap, under-warning is not.
+ */
+export function classifyJournal(manifestJson: string | null): JournalStatus {
+  let parsed: unknown;
+  try {
+    parsed = manifestJson === null ? null : JSON.parse(manifestJson);
+  } catch {
+    parsed = null;
+  }
+  const record =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null;
+  const id = typeof record?.id === 'string' ? record.id : null;
+  const startedAt = typeof record?.startedAt === 'string' ? record.startedAt : null;
+  const raw = record?.state;
+  const state: TxJournalState | 'unknown' =
+    raw === 'applying' || raw === 'applied' || raw === 'rolled-back' ? raw : 'unknown';
+  switch (state) {
+    case 'applied':
+      return {
+        state,
+        id,
+        startedAt,
+        needsRestore: false,
+        message:
+          'the transaction completed — this folder is a leftover copy that is safe to delete; restoring its pre-images would revert changes that were committed',
+      };
+    case 'rolled-back':
+      return {
+        state,
+        id,
+        startedAt,
+        needsRestore: false,
+        message:
+          'the transaction was rolled back — the vault already holds this content, so the folder is safe to delete',
+      };
+    case 'applying':
+      return {
+        state,
+        id,
+        startedAt,
+        needsRestore: true,
+        message:
+          'the server stopped while applying this transaction — the pre-images here are the originals of the files it was part-way through writing',
+      };
+    default:
+      return {
+        state,
+        id,
+        startedAt,
+        needsRestore: true,
+        message:
+          'the manifest is missing or unreadable — treat it as unfinished and inspect the pre-images before deleting anything',
+      };
+  }
+}
+
 /** What pre-flight computed for one op: the diff it would produce and the resulting hash. */
 interface Plan {
   diff: string;
@@ -422,31 +500,48 @@ export async function runTransaction(
       await fs.copyFile(absOf(vaultRoot, p), path.join(dir, file), fsConstants.COPYFILE_EXCL);
       preImages.push({ path: p, file, hash: before.hash });
     }
-    const manifest = {
-      id,
-      createdAt: startedAt.toISOString(),
-      vaultRoot,
-      touched,
-      created,
-      preImages,
-      ops,
-    };
-    await fs.writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, {
-      flag: 'wx',
-    });
+    /**
+     * Writes the manifest through tmp+rename so the state flip is atomic: a half-written manifest
+     * would read back as `unknown` and send the owner looking for originals to restore, which for
+     * a committed transaction is exactly the wrong advice.
+     */
+    async function writeManifest(state: TxJournalState): Promise<void> {
+      const body = `${JSON.stringify(
+        {
+          id,
+          startedAt: startedAt.toISOString(),
+          state,
+          vaultRoot,
+          touched,
+          created,
+          preimages: preImages,
+          ops,
+        },
+        null,
+        2,
+      )}\n`;
+      const tmp = path.join(dir, 'manifest.json.tmp');
+      await fs.writeFile(tmp, body);
+      await fs.rename(tmp, path.join(dir, 'manifest.json'));
+    }
+
+    await writeManifest('applying');
 
     /** Restores every touched path to the state the journal recorded. */
     async function rollback(): Promise<{ ok: true } | { ok: false; error: unknown }> {
       try {
-        // Content first, then the files this transaction created: if anything fails half-way,
-        // the bytes that existed before are already back. Touched paths are distinct, so the
-        // two loops never fight over the same file.
-        for (const pre of [...preImages].reverse()) {
+        // Not an op-by-op inverse: every touched path is simply put back the way the journal
+        // found it, which is why a `move a→b` followed by an `edit b` still restores a's original
+        // bytes (undoing the rename instead would resurrect the edited content under a's name).
+        // The entries are distinct paths, so their order among themselves does not matter; only
+        // content-before-cleanup does, so that a half-finished rollback has already restored the
+        // bytes that existed before.
+        for (const pre of preImages) {
           const target = absOf(vaultRoot, pre.path);
           await fs.mkdir(path.dirname(target), { recursive: true });
           await fs.copyFile(path.join(dir, pre.file), target);
         }
-        for (const p of [...created].reverse()) {
+        for (const p of created) {
           try {
             await adapter.hardDelete(p);
           } catch (error) {
@@ -460,7 +555,17 @@ export async function runTransaction(
       }
     }
 
-    async function dropJournal(): Promise<boolean> {
+    /**
+     * Records how the transaction ended, then removes the journal. The state is flipped *first*
+     * and durably: if the removal fails (a sync client holding the folder, EBUSY), what is left
+     * behind still says "this batch committed / was undone — do not restore me".
+     */
+    async function closeJournal(state: TxJournalState): Promise<boolean> {
+      try {
+        await writeManifest(state);
+      } catch {
+        // Best effort: removing the directory below settles it just as well.
+      }
       try {
         await fs.rm(dir, { recursive: true, force: true });
         return true;
@@ -483,8 +588,16 @@ export async function runTransaction(
         }
         const undo = await rollback();
         if (undo.ok) {
-          await dropJournal();
-          return { id, applied: false, dryRun: false, rolledBack: true, results, touched };
+          const dropped = await closeJournal('rolled-back');
+          return {
+            id,
+            applied: false,
+            dryRun: false,
+            rolledBack: true,
+            results,
+            touched,
+            ...(dropped ? {} : { journal: dir }),
+          };
         }
         entry.error = `${entry.error} — rollback failed (${describeError(undo.error)}); the pre-images of transaction ${id} are kept in ${dir}`;
         return {
@@ -502,7 +615,7 @@ export async function runTransaction(
     for (const [index, plan] of plans.entries()) {
       if (plan.hash !== null) (results[index] as TxOpResult).hash = plan.hash;
     }
-    const dropped = await dropJournal();
+    const dropped = await closeJournal('applied');
     return {
       id,
       applied: true,
