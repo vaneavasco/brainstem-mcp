@@ -15,19 +15,22 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
     if (!refresh && cached && now().getTime() - cached.at < CACHE_TTL_MS) return cached.report;
     const fresh = await analyzeVault(adapter, {
       requiredFrontmatter: settings.requiredFrontmatter,
+      graph: tc.runtime.graph,
+      dailyNotesFolder: settings.dailyNotes.folder,
     });
     caches.analytics = { at: now().getTime(), report: fresh };
     return fresh;
   }
 
   const CategorySummary = z.object({ count: z.number(), examples: z.array(z.string()) });
+  const Hub = z.object({ path: z.string(), backlinks: z.number() });
 
   server.registerTool(
     'vault_analytics_summary',
     {
       title: 'Vault health summary',
       description:
-        'Counts and examples of vault hygiene issues: notes without frontmatter, missing required frontmatter keys, broken wikilinks, inconsistent tag spellings, non-UTF-8 files and oversized files. Results are cached for 10 minutes unless refresh=true.',
+        'Counts and examples of vault hygiene issues: notes without frontmatter, missing required frontmatter keys, broken wikilinks, ambiguous links, orphan notes, inconsistent tag spellings, non-UTF-8 files and oversized files. Also reports the top hub notes by backlink count. Results are cached for 10 minutes unless refresh=true.',
       inputSchema: z.object({ refresh: z.boolean().optional() }),
       outputSchema: z.object({
         scannedFiles: z.number(),
@@ -35,6 +38,7 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
         categories: z.object(
           Object.fromEntries(ANALYTICS_CATEGORIES.map((c) => [c, CategorySummary])),
         ),
+        hubs: z.array(Hub),
       }),
       annotations: READ_ONLY,
     },

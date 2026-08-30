@@ -4,6 +4,7 @@ import type { StorageAdapter, Unsubscribe } from '../storage/types.ts';
 import type { AnalyticsReport } from './analytics.ts';
 import { type DailyNoteSettings, DEFAULT_DAILY_NOTE_SETTINGS } from './daily-notes.ts';
 import { FrontmatterIndex } from './frontmatter-index.ts';
+import { VaultGraph } from './graph.ts';
 
 export interface VaultSettings {
   dailyNotes: DailyNoteSettings;
@@ -18,6 +19,7 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
 export interface VaultRuntime {
   adapter: StorageAdapter;
   index: FrontmatterIndex;
+  graph: VaultGraph;
   settings: VaultSettings;
   now: () => Date;
   caches: { analytics?: { at: number; report: AnalyticsReport } };
@@ -51,6 +53,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   return {
     adapter,
     index,
+    graph: new VaultGraph(index),
     settings: mergeSettings(opts.settings),
     now: opts.now ?? (() => new Date()),
     caches: {},

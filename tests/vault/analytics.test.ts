@@ -4,6 +4,14 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import { analyzeVault } from '../../src/vault/analytics.ts';
+import { FrontmatterIndex } from '../../src/vault/frontmatter-index.ts';
+import { VaultGraph } from '../../src/vault/graph.ts';
+
+/** Builds a fresh graph reflecting the vault's current contents, for tests that write files after
+ *  the shared beforeEach fixture and then call analyzeVault. */
+async function buildGraph(v: LocalFSAdapter): Promise<VaultGraph> {
+  return new VaultGraph(await FrontmatterIndex.build(v));
+}
 
 let root: string;
 let vault: LocalFSAdapter;
@@ -32,6 +40,7 @@ describe('analyzeVault', () => {
   it('produces counts, examples and detailed findings per category', async () => {
     const { summary, findings } = await analyzeVault(vault, {
       requiredFrontmatter: ['type', 'status'],
+      graph: await buildGraph(vault),
     });
     expect(summary.scannedFiles).toBe(5);
     expect(summary.truncated).toBe(false);
@@ -63,23 +72,56 @@ describe('analyzeVault', () => {
       'links.md',
       '[[target]] [[TARGET.md]] [[sub/deep.md]] [[deep]] [[Sub/Deep]]\n',
     );
-    const { findings } = await analyzeVault(vault);
+    const { findings } = await analyzeVault(vault, { graph: await buildGraph(vault) });
     expect(
       findings.filter((f) => f.category === 'broken_wikilinks' && f.path === 'links.md'),
     ).toEqual([]);
   });
 
   it('honors the oversized threshold option and defaults requiredFrontmatter to none', async () => {
-    const { summary } = await analyzeVault(vault, { oversizedBytes: 10 });
+    const { summary } = await analyzeVault(vault, {
+      oversizedBytes: 10,
+      graph: await buildGraph(vault),
+    });
     expect(summary.categories.oversized_files.count).toBeGreaterThanOrEqual(4);
     expect(summary.categories.required_frontmatter_missing.count).toBe(0);
   });
 
   it('does not treat a wikilink target split across lines as a broken link', async () => {
     await vault.write('multiline.md', 'See [[a\nb]] here.\n');
-    const { findings } = await analyzeVault(vault);
+    const { findings } = await analyzeVault(vault, { graph: await buildGraph(vault) });
     expect(
       findings.filter((f) => f.category === 'broken_wikilinks' && f.path === 'multiline.md'),
     ).toEqual([]);
+  });
+
+  it('derives ambiguous_links and orphan_notes from the graph, and lists top hubs in the summary', async () => {
+    await vault.write('note-a.md', '[[note-b]]\n');
+    await vault.write('note-b.md', 'x');
+    await vault.write('alpha.md', 'x');
+    await vault.write('nested/alpha.md', 'x');
+    await vault.write('linker.md', '[[alpha]]\n');
+    await vault.write('lonely-note.md', 'nothing here\n');
+    await vault.write('daily/2026-08-29.md', 'nothing here either\n');
+
+    const { summary, findings } = await analyzeVault(vault, {
+      graph: await buildGraph(vault),
+      dailyNotesFolder: 'daily',
+    });
+
+    expect(findings.filter((f) => f.category === 'ambiguous_links')).toEqual([
+      {
+        category: 'ambiguous_links',
+        path: 'linker.md',
+        detail: 'alpha → alpha.md, nested/alpha.md',
+      },
+    ]);
+
+    const orphanPaths = findings.filter((f) => f.category === 'orphan_notes').map((f) => f.path);
+    expect(orphanPaths).toContain('lonely-note.md');
+    expect(orphanPaths).not.toContain('daily/2026-08-29.md');
+
+    const noteBHub = summary.hubs.find((h) => h.path === 'note-b.md');
+    expect(noteBHub).toEqual({ path: 'note-b.md', backlinks: 1 });
   });
 });
