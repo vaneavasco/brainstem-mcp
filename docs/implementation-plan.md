@@ -139,7 +139,7 @@ Rules:
 - **Quota (model changed 2026-05-01 to quota units):** `files.get` 5, `files.update` 50, `files.list` 100 units; 325k units/min/user. Truncated exponential backoff with jitter on 403/429 (`min(2^n + rand, 32s)`); surface a clean MCP tool error, never a stack trace.
 - **Analytics tools** on Drive: compute over the frontmatter index + batched body reads (≤20/batch), cache result per tenant for 10 min; never scan the full vault on every call.
 
-## 5. Tool surface (parity with reference repo — 20 tools)
+## 5. Tool surface (parity with reference repo — its 20 tools, plus `vault_frontmatter_update` added 2026-08-30 ⇒ 21)
 
 > Now 21 tools: the phase-3 acceptance follow-up (2026-08-30) added `vault_frontmatter_update`, a single-note sibling of `vault_batch_frontmatter_update`.
 
