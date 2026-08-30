@@ -138,7 +138,7 @@ p { margin: 0 0 .875rem; }
   border-radius: 50%;
   background: var(--accent);
 }
-code {
+code { white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: .875em;
   background: var(--chip);
