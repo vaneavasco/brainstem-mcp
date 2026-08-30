@@ -807,3 +807,13 @@ Release (controller, after the final review): `CHANGELOG` `[Unreleased]` → `[0
 - Type consistency: `LinkRef` (T1) is consumed by T2/T3/T6; `Resolution`/`VaultGraph` (T3) by T4/T6/T8; `WriteGate`/`MutateOpts`/`hardDelete` (T5) by T6/T7/T11; `Cond` (T8) reused by T9's `where`.
 - Tool count trail: 21 → 24 (T4) → 25 (T7) → 27 (T8) → 30 (T11); surface test and smoke updated in those tasks.
 - Deliberately not in this plan: embeddings (Phase 5), `.obsidian` access, app-only features.
+
+
+---
+
+## Acceptance log
+
+**2026-08-31 — LIVE MCP acceptance on the published image (before tagging v0.3.0): PASSED.**
+Stack pulled `ghcr.io/vaneavasco/brainstem-mcp{,-tunnel}:sha-d806c86` (no local build) on a fresh quick tunnel; headless OAuth via `npm run mcp:call`. Sweep: 45/45 checks across all 30 tools — hash round-trip, `expectedHash` → `CONFLICT` (wire-level `structuredContent {code, path, currentHash}` verified with a direct MCP client), outline/section read/heading append (disk-verified), links/backlinks/nested tags/query (eq + regex)/recent, `vault_move` rewriting links on disk **with an unparseable `{}` canvas present** (move succeeded, canvas reported in `failed[]`), transaction happy path + failed dry-run as error + pre-flight refusal with nothing written, canvas add/update/remove, mp3 attachment written and moved by its returned hash (stale hash → CONFLICT with the real hash, not "missing"), `.base` write/search, template with vars + `unresolved` + ALREADY_EXISTS, ripgrep regex search (rg exists only in the image), daily append with hash, analytics hubs, batch fm/read, list, ping, delete → `.trash/` (disk-verified). Negative regex cases: `(a+)+b` returned in ~0.5 s wall (mostly client startup), `^active$` → INVALID_INPUT. Link ambiguity live-validated: two `alpha.md` notes ⇒ `status: "ambiguous"` with both candidates, no guessing. Instructions composed (defaults + owner text) at 2,051 chars via `getInstructions()`.
+Earlier same-day runs also verified: Claude Code + claude.ai web end-to-end (Phase 2/3 acceptance), full suite in a ripgrep container (0 skips).
+Still owner-run: Claude mobile app, `cloudflare` (token) tunnel mode, Windows/macOS launchers.
