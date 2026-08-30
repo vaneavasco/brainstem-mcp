@@ -37,7 +37,13 @@ const TagsFilterSchema = z.object({
   none: z.array(z.string()).optional(),
 });
 
-const QuerySchema = z.object({
+/**
+ * Typed `z.ZodType<Query>` (not just `z.object({...})`) so this schema's inferred output is
+ * checked against the pure `Query` interface at compile time — the same pattern `tx.ts` uses for
+ * `TxOp`. If the two ever drift, this fails typecheck instead of silently succeeding behind an
+ * `as Query` cast at the call site.
+ */
+const QuerySchema: z.ZodType<Query> = z.object({
   where: z.array(CondSchema).optional(),
   tags: TagsFilterSchema.optional(),
   pathPrefix: z.string().optional(),
@@ -87,17 +93,17 @@ export function registerQueryTools(server: McpServer, tc: ToolContext): void {
       description:
         'Bases-style structured query over the in-memory index — no disk reads. Filter with ' +
         '"where" on frontmatter dot paths or virtual fields (path, basename, folder, modifiedAt, ' +
-        'size, wordCount, backlinks, outgoing, tags, hash); comparisons are typed (numeric, ' +
-        'chronological ISO dates, case-insensitive strings/arrays). "tags" (any/all/none) is ' +
-        'nested-aware ("proj" matches "proj/x"). Supports pathPrefix, select, sort, groupBy ' +
-        `(count + up to 20 paths per value), and limit (default 100, max ${MAX_QUERY_ROWS}). ` +
-        'Replaces most uses of vault_search_frontmatter, which stays for compatibility.',
+        'size, wordCount, tags, hash, backlinks/outgoing as counts, backlinkPaths/outgoingPaths ' +
+        'as path arrays); comparisons are typed (numeric, chronological ISO dates, ' +
+        'case-insensitive strings/arrays). "tags" (any/all/none) is nested-aware ("proj" matches ' +
+        `"proj/x"). Supports pathPrefix, select, sort, groupBy, and limit (default 100, max ` +
+        `${MAX_QUERY_ROWS}). Replaces most uses of vault_search_frontmatter, which stays for ` +
+        'compatibility.',
       inputSchema: QuerySchema,
       outputSchema: QueryResultSchema,
       annotations: READ_ONLY,
     },
-    (input) =>
-      guarded(tc.log, async () => okJson({ ...evaluateQuery(index.all(), graph, input as Query) })),
+    (input) => guarded(tc.log, async () => okJson({ ...evaluateQuery(index.all(), graph, input) })),
   );
 
   server.registerTool(

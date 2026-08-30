@@ -88,11 +88,13 @@ describe('fieldValue — virtual fields', () => {
     expect(fieldValue(a, graph, 'wordCount')).toBe(a.wordCount);
     expect(fieldValue(a, graph, 'hash')).toBe(a.hash);
     expect(fieldValue(a, graph, 'tags')).toEqual(['proj/x']);
-    expect(fieldValue(a, graph, 'outgoing')).toEqual(['notes/b.md']);
+    expect(fieldValue(a, graph, 'outgoing')).toBe(1);
+    expect(fieldValue(a, graph, 'outgoingPaths')).toEqual(['notes/b.md']);
 
     const b = index.get('notes/b.md');
     if (!b) throw new Error('fixture missing');
-    expect(fieldValue(b, graph, 'backlinks')).toEqual(['notes/a.md']);
+    expect(fieldValue(b, graph, 'backlinks')).toBe(1);
+    expect(fieldValue(b, graph, 'backlinkPaths')).toEqual(['notes/a.md']);
   });
 
   it('resolves a root-level file to folder ""', () => {
@@ -109,6 +111,56 @@ describe('fieldValue — virtual fields', () => {
     expect(fieldValue(a, graph, 'status')).toBe('Active');
     expect(fieldValue(a, graph, 'owners')).toEqual(['Alice', 'Bob']);
     expect(fieldValue(a, graph, 'nope.nested')).toBeUndefined();
+  });
+});
+
+describe('evaluateQuery — backlinks/outgoing degree (regression: must be counts, not path arrays)', () => {
+  beforeEach(() => {
+    // hub-two.md is linked from two different notes; hub-one.md from exactly one. Before the fix,
+    // `backlinks`/`outgoing` were sorted path arrays, so gt/sort fell through typedCompare's
+    // string-fallback branch and compared e.g. "linker1.md" against the number 1 as strings —
+    // always true, and never numerically ordered by degree.
+    index.upsert(entry('linker1.md', '[[hub-one]]'));
+    index.upsert(entry('linker2.md', '[[hub-two]]'));
+    index.upsert(entry('linker3.md', '[[hub-two]]'));
+    index.upsert(entry('hub-one.md', 'target one'));
+    index.upsert(entry('hub-two.md', 'target two'));
+  });
+
+  it('fieldValue: backlinks/outgoing are counts; backlinkPaths/outgoingPaths are sorted path arrays', () => {
+    const hubOne = index.get('hub-one.md');
+    const hubTwo = index.get('hub-two.md');
+    const linker1 = index.get('linker1.md');
+    if (!hubOne || !hubTwo || !linker1) throw new Error('fixture missing');
+    expect(fieldValue(hubOne, graph, 'backlinks')).toBe(1);
+    expect(fieldValue(hubTwo, graph, 'backlinks')).toBe(2);
+    expect(fieldValue(hubOne, graph, 'backlinkPaths')).toEqual(['linker1.md']);
+    expect(fieldValue(hubTwo, graph, 'backlinkPaths')).toEqual(['linker2.md', 'linker3.md']);
+    expect(fieldValue(linker1, graph, 'outgoing')).toBe(1);
+    expect(fieldValue(linker1, graph, 'outgoingPaths')).toEqual(['hub-one.md']);
+  });
+
+  it('sort backlinks desc ranks the 2-backlink note before the 1-backlink note', () => {
+    const r = run({
+      where: [{ field: 'path', op: 'regex', value: '^hub-' }],
+      sort: [{ field: 'backlinks', order: 'desc' }],
+    });
+    expect(r.rows.map((row) => row.path)).toEqual(['hub-two.md', 'hub-one.md']);
+  });
+
+  it('where backlinks gt 1 excludes the 1-backlink note', () => {
+    const r = run({
+      where: [
+        { field: 'path', op: 'regex', value: '^hub-' },
+        { field: 'backlinks', op: 'gt', value: 1 },
+      ],
+    });
+    expect(r.rows.map((row) => row.path)).toEqual(['hub-two.md']);
+  });
+
+  it('backlinkPaths contains matches by member path, for membership queries', () => {
+    const r = run({ where: [{ field: 'backlinkPaths', op: 'contains', value: 'linker2' }] });
+    expect(r.rows.map((row) => row.path)).toEqual(['hub-two.md']);
   });
 });
 
@@ -209,7 +261,7 @@ describe('evaluateQuery — where operators by type', () => {
   });
 
   it('in: throws INVALID_INPUT when value is not an array', () => {
-    expect(() => run({ where: [{ field: 'status', op: 'in', value: 'active' }] })).toThrowError(
+    expect(() => run({ where: [{ field: 'status', op: 'in', value: 'active' }] })).toThrow(
       VaultError,
     );
   });
@@ -338,6 +390,17 @@ describe('evaluateQuery — groupBy', () => {
     expect(byKey.get('Alice')).toMatchObject({ count: 1, paths: ['notes/a.md'] });
     expect(byKey.get('Bob')).toMatchObject({ count: 1, paths: ['notes/a.md'] });
     expect(byKey.get('Carol')).toMatchObject({ count: 1, paths: ['notes/b.md'] });
+    const none = byKey.get('(none)');
+    expect(none?.count).toBe(2);
+    expect(new Set(none?.paths)).toEqual(new Set(['notes/c.md', 'archive/d.md']));
+  });
+
+  it('groups an empty-array field (e.g. an untagged note\'s tags) under "(none)", not ""', () => {
+    // notes/c.md and archive/d.md have entry.tags === [] (no frontmatter/inline tags); before the
+    // fix, an empty array skipped the "(none)" branch and String([]) produced a "" key instead.
+    const r = run({ groupBy: 'tags' });
+    const byKey = new Map((r.groups ?? []).map((g) => [g.key, g]));
+    expect(byKey.has('')).toBe(false);
     const none = byKey.get('(none)');
     expect(none?.count).toBe(2);
     expect(new Set(none?.paths)).toEqual(new Set(['notes/c.md', 'archive/d.md']));

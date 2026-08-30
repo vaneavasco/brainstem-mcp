@@ -59,6 +59,8 @@ const VIRTUAL_FIELDS = new Set([
   'wordCount',
   'backlinks',
   'outgoing',
+  'backlinkPaths',
+  'outgoingPaths',
   'tags',
   'hash',
 ]);
@@ -79,10 +81,28 @@ function getFrontmatterPath(obj: Record<string, unknown>, dotted: string): unkno
   return current;
 }
 
+/** Unique, sorted target paths this entry resolves to (embeds and repeats collapsed). */
+function resolvedOutgoingPaths(entry: IndexEntry, graph: VaultGraph): string[] {
+  return [
+    ...new Set(
+      graph
+        .outgoing(entry.path)
+        .filter((rl) => rl.resolution.status === 'resolved')
+        .map((rl) => (rl.resolution as { status: 'resolved'; path: string }).path),
+    ),
+  ].sort();
+}
+
 /**
  * Resolves a note's value for one query field: a virtual field (computed from the index/graph)
  * or a frontmatter dot path. Virtual field names always win over a same-named frontmatter key,
  * since they are the stable, well-typed surface a query author can rely on.
+ *
+ * `backlinks`/`outgoing` are NUMBERS (link-occurrence counts, matching `vault_outline`'s
+ * `backlinkCount`/`linkCount` and `graph.backlinks()`'s one-entry-per-link semantics) so that
+ * `gt`/`lt`/`sort` do degree comparisons correctly instead of falling into the string-fallback
+ * branch of `typedCompare`. Use `backlinkPaths`/`outgoingPaths` (arrays of unique resolved paths)
+ * for membership queries like `backlinkPaths contains 'x.md'`.
  */
 export function fieldValue(entry: IndexEntry, graph: VaultGraph, field: string): unknown {
   if (!VIRTUAL_FIELDS.has(field)) return getFrontmatterPath(entry.frontmatter, field);
@@ -104,16 +124,13 @@ export function fieldValue(entry: IndexEntry, graph: VaultGraph, field: string):
     case 'tags':
       return entry.tags;
     case 'backlinks':
-      return [...new Set(graph.backlinks(entry.path).map((b) => b.source))].sort();
+      return graph.backlinks(entry.path).length;
     case 'outgoing':
-      return [
-        ...new Set(
-          graph
-            .outgoing(entry.path)
-            .filter((rl) => rl.resolution.status === 'resolved')
-            .map((rl) => (rl.resolution as { status: 'resolved'; path: string }).path),
-        ),
-      ].sort();
+      return graph.outgoing(entry.path).filter((rl) => rl.resolution.status === 'resolved').length;
+    case 'backlinkPaths':
+      return [...new Set(graph.backlinks(entry.path).map((b) => b.source))].sort();
+    case 'outgoingPaths':
+      return resolvedOutgoingPaths(entry, graph);
     default:
       return undefined;
   }
@@ -147,10 +164,9 @@ function matchesEq(fieldVal: unknown, value: unknown): boolean {
   return typedCompare(fieldVal, value) === 0;
 }
 
-function matchesIn(fieldVal: unknown, value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    throw new VaultError('INVALID_INPUT', '"in" requires an array value.');
-  }
+/** Membership check for the "in" op. `value` is guaranteed to be an array by compileCond's
+ *  up-front check before this ever runs — see the comment there. */
+function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => value.some((v) => typedCompare(el, v) === 0));
   return value.some((v) => typedCompare(fieldVal, v) === 0);
@@ -246,7 +262,7 @@ function compileCond(cond: Cond): CompiledCond {
       case 'lte':
         return matchesOrder(fv, cond.value, cond.op);
       case 'in':
-        return matchesIn(fv, cond.value);
+        return matchesIn(fv, cond.value as unknown[]);
       default:
         return false;
     }
@@ -302,8 +318,12 @@ function buildGroups(
   for (const entry of entries) {
     const v = fieldValue(entry, graph, field);
     const arr = asArray(v);
-    const keys =
-      arr && arr.length > 0 ? [...new Set(arr.map(groupKeyForValue))] : [groupKeyForValue(v)];
+    // An array field contributes one group per element; an empty array (e.g. an untagged note's
+    // `tags`) groups under "(none)" just like a missing value — it must not fall through to
+    // groupKeyForValue(v), which would stringify `[]` to `""` instead.
+    let keys: string[];
+    if (arr) keys = arr.length > 0 ? [...new Set(arr.map(groupKeyForValue))] : [NONE_GROUP_KEY];
+    else keys = [groupKeyForValue(v)];
     for (const key of keys) {
       let g = groups.get(key);
       if (!g) {
