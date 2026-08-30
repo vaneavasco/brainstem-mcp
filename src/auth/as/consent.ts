@@ -37,6 +37,10 @@ const CSS = `
   --fg: #16181d;
   --muted: #5a6472;
   --line: #dfe3ea;
+  /* Borders that carry meaning (the field you type into, the button you can
+     press) need >=3:1 against the card per WCAG 1.4.11, which the hairline
+     --line does not reach: 3.10:1 on white here, 3.35:1 on the dark card. */
+  --control-line: #8d939c;
   --field: #fbfcfd;
   --accent: #3355d1;
   --accent-fg: #ffffff;
@@ -56,6 +60,7 @@ const CSS = `
     --fg: #e9ebef;
     --muted: #a2aab8;
     --line: #272c36;
+    --control-line: #666d7a;
     --field: #12151b;
     --accent: #8098fa;
     --accent-fg: #0d0f13;
@@ -159,7 +164,7 @@ input[type="password"] {
   font: inherit;
   color: var(--fg);
   background: var(--field);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 10px;
 }
 .actions { display: flex; flex-wrap: wrap; gap: .625rem; margin-top: 1.125rem; }
@@ -174,7 +179,7 @@ button {
   cursor: pointer;
 }
 .approve { background: var(--accent); color: var(--accent-fg); }
-.deny { background: transparent; color: var(--fg); border-color: var(--line); }
+.deny { background: transparent; color: var(--fg); border-color: var(--control-line); }
 @media (hover: hover) {
   .approve:hover { background: var(--accent-hover); }
   .deny:hover { border-color: var(--muted); }
@@ -202,8 +207,9 @@ input[type="password"]:disabled, button:disabled { opacity: .55; cursor: not-all
 const MARK =
   '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="M12 7.2v4.1m0 0-4.6 2.9m4.6-2.9 4.6 2.9M12 16.6v2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="4.6" r="2.6" fill="currentColor"/><circle cx="6.2" cy="14.6" r="2.6" fill="currentColor"/><circle cx="17.8" cy="14.6" r="2.6" fill="currentColor"/><circle cx="12" cy="20.6" r="1.5" fill="currentColor"/></svg>';
 
+/** Escapes its own argument, so no call site can forget to. */
 function head(title: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${CSS}</style></head><body><main class="card"><div class="brand">${MARK}<span>brainstem-mcp</span></div>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${CSS}</style></head><body><main class="card"><div class="brand">${MARK}<span>brainstem-mcp</span></div>`;
 }
 
 const FOOT = '</main></body></html>';
@@ -218,7 +224,7 @@ function minutesLeft(seconds: number): string {
 export function renderConsentPage(v: ConsentView): string {
   const locked = Boolean(v.lockedForS);
   const disabled = locked ? ' disabled' : '';
-  return `${head(`brainstem-mcp — connect ${esc(v.clientName)}`)}
+  return `${head(`brainstem-mcp — connect ${v.clientName}`)}
 <h1>Connect <strong>${esc(v.clientName)}</strong> to your vault?</h1>
 <p class="muted">Approving lets this client work with every note in your vault:</p>
 <ul class="perms">
@@ -245,7 +251,7 @@ ${FOOT}`;
 
 /** Full HTML document for a terminal error (never redirected to, so the user isn't sent to an unverified URI). */
 export function renderErrorPage(title: string, detail: string): string {
-  return `${head(`brainstem-mcp — ${esc(title)}`)}
+  return `${head(`brainstem-mcp — ${title}`)}
 <h1>${esc(title)}</h1>
 <p class="alert" role="alert">${esc(detail)}</p>
 <p class="muted">Close this tab and start the connection again from Claude.</p>

@@ -15,6 +15,22 @@ function styleText(html: string): string {
   return [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1] ?? '').join('\n');
 }
 
+/**
+ * The response CSP is `default-src 'none'; style-src 'unsafe-inline'; …`, so a
+ * page that reaches for anything over the network silently loses it. Both pages
+ * are held to the same bar.
+ */
+function expectNoExternalResources(html: string): void {
+  const css = styleText(html);
+  expect(html).not.toContain('<script');
+  expect(html).not.toMatch(/<(?:img|link|iframe|object|embed)\b/i);
+  expect(html).not.toMatch(/(?:src|href)\s*=\s*["']?https?:/i);
+  expect(css).not.toMatch(/https?:/);
+  expect(css).not.toContain('url(');
+  expect(css).not.toContain('@import');
+  expect(html).not.toContain('@import');
+}
+
 describe('renderConsentPage', () => {
   it('keeps the form contract the browser and the CLI both depend on', () => {
     const html = renderConsentPage(view());
@@ -87,11 +103,15 @@ describe('renderConsentPage', () => {
     expect(css).toContain('prefers-color-scheme: dark');
     expect(html).toContain('name="viewport"');
     expect(html).toContain('max-width');
-    // No script anywhere, and nothing the browser would have to fetch.
-    expect(html).not.toContain('<script');
-    expect(css).not.toMatch(/https?:/);
-    expect(html).not.toMatch(/(?:src|href)\s*=\s*["']?https?:/i);
-    expect(html).not.toMatch(/<(?:img|link|iframe|object|embed)\b/i);
+    expectNoExternalResources(html);
+  });
+
+  it('gives the interactive borders their own >=3:1 token in both themes', () => {
+    const css = styleText(renderConsentPage(view()));
+    // Defined twice: once on :root, once inside the dark media query.
+    expect(css.match(/--control-line:/g)).toHaveLength(2);
+    expect(css).toMatch(/input\[type="password"\][\s\S]*?border: 1px solid var\(--control-line\)/);
+    expect(css).toMatch(/\.deny \{[^}]*border-color: var\(--control-line\)/);
   });
 });
 
@@ -107,8 +127,15 @@ describe('renderErrorPage', () => {
   it('carries the same card styling and no external resources', () => {
     const html = renderErrorPage('Unknown client', 'nope');
     const css = styleText(html);
+    expect(css).toContain('color-scheme: light dark');
     expect(css).toContain('prefers-color-scheme: dark');
-    expect(html).not.toContain('<script');
-    expect(html).not.toMatch(/(?:src|href)\s*=\s*["']?https?:/i);
+    expect(html).toContain('name="viewport"');
+    expect(html).toContain('class="card"');
+    expectNoExternalResources(html);
+  });
+
+  it('escapes the title in <title> too, not just in the heading', () => {
+    const html = renderErrorPage('Unknown <client>', 'nope');
+    expect(html).toContain('<title>brainstem-mcp — Unknown &lt;client&gt;</title>');
   });
 });
