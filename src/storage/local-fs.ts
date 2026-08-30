@@ -40,6 +40,7 @@ import {
   type FmUpdate,
   type ListOpts,
   type Match,
+  type MutateOpts,
   type Note,
   type SearchOpts,
   type StorageAdapter,
@@ -48,6 +49,7 @@ import {
   VaultError,
   type WriteOpts,
 } from './types.ts';
+import { assertExpectedHash } from './write-gate.ts';
 
 const execFileAsync = promisify(execFile);
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
@@ -185,13 +187,17 @@ export class LocalFSAdapter implements StorageAdapter {
     return this.toNote(p, bytes, stat);
   }
 
-  protected toNote(p: string, bytes: Buffer, stat: Stats): Note {
-    let content: string;
+  /** Shared by `toNote` and `hashOf` so the two never compute a hash over different text. */
+  private decodeText(p: string, bytes: Buffer | Uint8Array): string {
     try {
-      content = strictUtf8.decode(bytes);
+      return strictUtf8.decode(bytes);
     } catch {
       throw new VaultError('ENCODING', `${p} is not valid UTF-8 text.`);
     }
+  }
+
+  protected toNote(p: string, bytes: Buffer, stat: Stats): Note {
+    const content = this.decodeText(p, bytes);
     let frontmatter: Record<string, unknown> = {};
     let body = content;
     let hasFrontmatter = false;
@@ -233,6 +239,25 @@ export class LocalFSAdapter implements StorageAdapter {
     return result;
   }
 
+  /**
+   * sha256hex of the file's decoded text (matching `Note.hash`), or `null` when the file does
+   * not exist, is a directory, or is not valid UTF-8 text (e.g. a binary attachment) — none of
+   * those have a comparable "content hash" in this model.
+   */
+  async hashOf(inputPath: string): Promise<string | null> {
+    const p = requireFilePath(inputPath);
+    const abs = this.abs(p);
+    await this.assertInsideRoot(abs);
+    const stat = await this.statOrNull(abs);
+    if (!stat || stat.isDirectory()) return null;
+    const bytes = await fs.readFile(abs);
+    try {
+      return sha256hex(this.decodeText(p, bytes));
+    } catch {
+      return null;
+    }
+  }
+
   // ---- write --------------------------------------------------------------
 
   protected async atomicWrite(p: string, bytes: Uint8Array): Promise<void> {
@@ -253,6 +278,9 @@ export class LocalFSAdapter implements StorageAdapter {
   async write(inputPath: string, content: string, opts: WriteOpts = {}): Promise<void> {
     const p = requireFilePath(inputPath);
     assertWithinSize(Buffer.byteLength(content, 'utf8'), 'Content');
+    if (opts.expectedHash !== undefined) {
+      assertExpectedHash(p, await this.hashOf(p), opts.expectedHash);
+    }
     let finalContent = content;
     if (opts.mergeFrontmatter && isMarkdownPath(p)) {
       const incoming = splitFrontmatter(content);
@@ -271,7 +299,12 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.atomicWrite(p, Buffer.from(finalContent, 'utf8'));
   }
 
-  async writeBinary(inputPath: string, bytes: Uint8Array, mime: string): Promise<void> {
+  async writeBinary(
+    inputPath: string,
+    bytes: Uint8Array,
+    mime: string,
+    opts: MutateOpts = {},
+  ): Promise<void> {
     const p = requireFilePath(inputPath);
     if (!BINARY_MIME_ALLOWLIST.has(mime.toLowerCase())) {
       throw new VaultError(
@@ -286,11 +319,22 @@ export class LocalFSAdapter implements StorageAdapter {
       );
     }
     assertWithinSize(bytes.byteLength, 'Binary content');
+    if (opts.expectedHash !== undefined) {
+      assertExpectedHash(p, await this.hashOf(p), opts.expectedHash);
+    }
     await this.atomicWrite(p, bytes);
   }
 
-  async edit(inputPath: string, patches: TextPatch[], dryRun = false): Promise<EditResult> {
+  async edit(
+    inputPath: string,
+    patches: TextPatch[],
+    dryRun = false,
+    opts: MutateOpts = {},
+  ): Promise<EditResult> {
     const note = await this.read(inputPath);
+    if (opts.expectedHash !== undefined) {
+      assertExpectedHash(note.path, note.hash, opts.expectedHash);
+    }
     const { content, applied } = applyTextPatches(note.content, patches);
     const diff = unifiedDiff(note.path, note.content, content);
     if (!dryRun) {
@@ -300,13 +344,19 @@ export class LocalFSAdapter implements StorageAdapter {
     return { path: note.path, applied, diff, dryRun };
   }
 
-  async append(inputPath: string, content: string): Promise<void> {
+  async append(inputPath: string, content: string, opts: MutateOpts = {}): Promise<void> {
     const p = requireFilePath(inputPath);
     let existing = '';
+    let currentHash: string | null = null;
     try {
-      existing = (await this.read(p)).content;
+      const note = await this.read(p);
+      existing = note.content;
+      currentHash = note.hash;
     } catch (error) {
       if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
+    }
+    if (opts.expectedHash !== undefined) {
+      assertExpectedHash(p, currentHash, opts.expectedHash);
     }
     const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
     const suffix = content.endsWith('\n') ? '' : '\n';
@@ -325,6 +375,9 @@ export class LocalFSAdapter implements StorageAdapter {
           throw new VaultError('INVALID_INPUT', `${p} is not a markdown file.`);
         }
         const note = await this.read(p);
+        if (update.expectedHash !== undefined) {
+          assertExpectedHash(p, note.hash, update.expectedHash);
+        }
         const fm = applyFrontmatterUpdate(note.frontmatter, update.set, update.unset);
         const text = joinFrontmatter(fm, note.body);
         assertWithinSize(Buffer.byteLength(text, 'utf8'), 'Updated content');
@@ -332,7 +385,9 @@ export class LocalFSAdapter implements StorageAdapter {
         result.updated.push(p);
       } catch (error) {
         if (error instanceof VaultError) {
-          result.failed.push({ path: normalizedOrRaw(update.path), error: error.message });
+          const message =
+            error.code === 'CONFLICT' ? `${error.code}: ${error.message}` : error.message;
+          result.failed.push({ path: normalizedOrRaw(update.path), error: message });
         } else {
           throw error;
         }
@@ -385,17 +440,26 @@ export class LocalFSAdapter implements StorageAdapter {
     return out;
   }
 
-  async move(fromInput: string, toInput: string): Promise<void> {
+  async move(fromInput: string, toInput: string, opts: MutateOpts = {}): Promise<void> {
     const from = requireFilePath(fromInput);
     const to = requireFilePath(toInput);
     const fromAbs = this.abs(from);
     const toAbs = this.abs(to);
     await this.assertInsideRoot(fromAbs);
     await this.assertInsideRoot(toAbs);
-    if (!(await this.statOrNull(fromAbs)))
-      throw new VaultError('NOT_FOUND', `${from} does not exist.`);
+    const fromStat = await this.statOrNull(fromAbs);
+    if (!fromStat) throw new VaultError('NOT_FOUND', `${from} does not exist.`);
     if (await this.statOrNull(toAbs))
       throw new VaultError('ALREADY_EXISTS', `${to} already exists.`);
+    if (opts.expectedHash !== undefined) {
+      if (fromStat.isDirectory()) {
+        throw new VaultError(
+          'INVALID_INPUT',
+          'expectedHash is only supported when moving a single file, not a folder.',
+        );
+      }
+      assertExpectedHash(from, await this.hashOf(from), opts.expectedHash);
+    }
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     try {
       await fs.rename(fromAbs, toAbs);
@@ -404,7 +468,7 @@ export class LocalFSAdapter implements StorageAdapter {
     }
   }
 
-  async softDelete(inputPath: string, confirm: boolean): Promise<void> {
+  async softDelete(inputPath: string, confirm: boolean, opts: MutateOpts = {}): Promise<void> {
     if (confirm !== true) {
       throw new VaultError(
         'CONFIRM_REQUIRED',
@@ -414,8 +478,17 @@ export class LocalFSAdapter implements StorageAdapter {
     const p = requireFilePath(inputPath);
     const fromAbs = this.abs(p);
     await this.assertInsideRoot(fromAbs);
-    if (!(await this.statOrNull(fromAbs)))
-      throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+    const fromStat = await this.statOrNull(fromAbs);
+    if (!fromStat) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+    if (opts.expectedHash !== undefined) {
+      if (fromStat.isDirectory()) {
+        throw new VaultError(
+          'INVALID_INPUT',
+          'expectedHash is only supported when deleting a single file, not a folder.',
+        );
+      }
+      assertExpectedHash(p, await this.hashOf(p), opts.expectedHash);
+    }
 
     let target = normalizeVaultPath(`${TRASH_DIR}/${p}`, { allowInternal: true });
     if (await this.statOrNull(this.abs(target))) {
@@ -436,6 +509,23 @@ export class LocalFSAdapter implements StorageAdapter {
       await fs.rename(fromAbs, toAbs);
     } catch {
       throw new VaultError('IO', `Failed to move ${p} to trash.`);
+    }
+  }
+
+  /**
+   * Unlinks a file outright — no .trash, no confirm. Internal use only: transaction rollback
+   * (Task 7) uses this to undo a file it created mid-transaction. Rejects reserved (`_brainstem/`)
+   * and dot paths exactly like every other adapter method.
+   */
+  async hardDelete(inputPath: string): Promise<void> {
+    const p = requireFilePath(inputPath);
+    const abs = this.abs(p);
+    await this.assertInsideRoot(abs);
+    try {
+      await fs.unlink(abs);
+    } catch (error) {
+      if (isEnoent(error)) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+      throw new VaultError('IO', `Failed to delete ${p}.`);
     }
   }
 

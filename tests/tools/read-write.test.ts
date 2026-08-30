@@ -197,3 +197,219 @@ describe('vault_edit / vault_append / vault_batch_frontmatter_update', () => {
     expect(text(ambiguous)).toMatch(/INVALID_INPUT: patch #1/);
   });
 });
+
+describe('expectedHash / CONFLICT', () => {
+  const staleHash = 'f'.repeat(64);
+
+  function expectConflict(r: Awaited<ReturnType<Harness['call']>>, currentHash: string): void {
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/^CONFLICT: /);
+    expect(r.structuredContent).toMatchObject({ code: 'CONFLICT', currentHash });
+  }
+
+  it('vault_write rejects a stale expectedHash and succeeds with the current one, returning the new hash', async () => {
+    await h.call('vault_write', { path: 'c.md', content: 'v1\n' });
+    const v1Hash = (
+      (await h.call('vault_read', { path: 'c.md' })).structuredContent as {
+        hash: string;
+      }
+    ).hash;
+
+    const stale = await h.call('vault_write', {
+      path: 'c.md',
+      content: 'v2\n',
+      expectedHash: staleHash,
+    });
+    expectConflict(stale, v1Hash);
+    expect(text(await h.call('vault_read', { path: 'c.md' }))).toBe('v1\n');
+
+    const ok = await h.call('vault_write', {
+      path: 'c.md',
+      content: 'v2\n',
+      expectedHash: v1Hash,
+    });
+    expect(ok.isError).toBeFalsy();
+    const v2Hash = sha256hex('v2\n');
+    expect(ok.structuredContent).toMatchObject({ path: 'c.md', hash: v2Hash });
+  });
+
+  it('vault_edit and vault_append honour expectedHash', async () => {
+    await h.call('vault_write', { path: 'ce.md', content: 'alpha\n' });
+    const h1 = (
+      (await h.call('vault_read', { path: 'ce.md' })).structuredContent as {
+        hash: string;
+      }
+    ).hash;
+
+    const staleEdit = await h.call('vault_edit', {
+      path: 'ce.md',
+      patches: [{ find: 'alpha', replace: 'beta' }],
+      expectedHash: staleHash,
+    });
+    expectConflict(staleEdit, h1);
+
+    const okEdit = await h.call('vault_edit', {
+      path: 'ce.md',
+      patches: [{ find: 'alpha', replace: 'beta' }],
+      expectedHash: h1,
+    });
+    expect(okEdit.isError).toBeFalsy();
+    const h2 = (okEdit.structuredContent as { hash: string }).hash;
+    expect(h2).toBe(sha256hex('beta\n'));
+
+    const staleAppend = await h.call('vault_append', {
+      path: 'ce.md',
+      content: 'gamma',
+      expectedHash: h1,
+    });
+    expectConflict(staleAppend, h2);
+
+    const okAppend = await h.call('vault_append', {
+      path: 'ce.md',
+      content: 'gamma',
+      expectedHash: h2,
+    });
+    expect(okAppend.isError).toBeFalsy();
+    expect(okAppend.structuredContent).toMatchObject({ hash: sha256hex('beta\ngamma\n') });
+  });
+
+  it('vault_frontmatter_update honours expectedHash', async () => {
+    await h.call('vault_write', { path: 'cf.md', content: '---\nstatus: draft\n---\nbody\n' });
+    const h1 = (
+      (await h.call('vault_read', { path: 'cf.md' })).structuredContent as {
+        hash: string;
+      }
+    ).hash;
+
+    const stale = await h.call('vault_frontmatter_update', {
+      path: 'cf.md',
+      set: { status: 'done' },
+      expectedHash: staleHash,
+    });
+    expectConflict(stale, h1);
+
+    const ok = await h.call('vault_frontmatter_update', {
+      path: 'cf.md',
+      set: { status: 'done' },
+      expectedHash: h1,
+    });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.structuredContent).toMatchObject({ frontmatter: { status: 'done' } });
+  });
+
+  it('vault_batch_frontmatter_update reports a per-item CONFLICT in failed[] without aborting the batch', async () => {
+    await h.call('vault_write', { path: 'cb1.md', content: '---\na: 1\n---\nx\n' });
+    await h.call('vault_write', { path: 'cb2.md', content: '---\na: 1\n---\ny\n' });
+    const r = await h.call('vault_batch_frontmatter_update', {
+      updates: [
+        { path: 'cb1.md', set: { a: 2 }, expectedHash: staleHash },
+        { path: 'cb2.md', set: { a: 2 } },
+      ],
+    });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as {
+      updated: string[];
+      failed: { path: string; error: string }[];
+    };
+    expect(body.updated).toEqual(['cb2.md']);
+    expect(body.failed).toHaveLength(1);
+    expect(body.failed[0]?.path).toBe('cb1.md');
+    expect(body.failed[0]?.error).toMatch(/^CONFLICT: /);
+    expect((await h.call('vault_read', { path: 'cb1.md' })).structuredContent).toMatchObject({
+      frontmatter: { a: 1 },
+    });
+  });
+
+  it('vault_move honours expectedHash for a file and rejects it outright for a folder', async () => {
+    await h.call('vault_write', { path: 'cm.md', content: 'x\n' });
+    const h1 = (
+      (await h.call('vault_read', { path: 'cm.md' })).structuredContent as {
+        hash: string;
+      }
+    ).hash;
+
+    const stale = await h.call('vault_move', {
+      from: 'cm.md',
+      to: 'cm2.md',
+      expectedHash: staleHash,
+    });
+    expectConflict(stale, h1);
+
+    const ok = await h.call('vault_move', { from: 'cm.md', to: 'cm2.md', expectedHash: h1 });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.structuredContent).toMatchObject({ from: 'cm.md', to: 'cm2.md', hash: h1 });
+
+    await h.call('vault_write', { path: 'cmfolder/a.md', content: 'z\n' });
+    const folderMove = await h.call('vault_move', {
+      from: 'cmfolder',
+      to: 'cmfolder2',
+      expectedHash: staleHash,
+    });
+    expect(text(folderMove)).toMatch(/^INVALID_INPUT: /);
+  });
+
+  it('vault_delete honours expectedHash for a single file and rejects it outright for a folder', async () => {
+    await h.call('vault_write', { path: 'cd.md', content: 'x\n' });
+    const h1 = (
+      (await h.call('vault_read', { path: 'cd.md' })).structuredContent as {
+        hash: string;
+      }
+    ).hash;
+
+    const stale = await h.call('vault_delete', {
+      path: 'cd.md',
+      confirm: true,
+      expectedHash: staleHash,
+    });
+    expectConflict(stale, h1);
+
+    const ok = await h.call('vault_delete', { path: 'cd.md', confirm: true, expectedHash: h1 });
+    expect(ok.isError).toBeFalsy();
+    expect(ok.structuredContent).toMatchObject({ path: 'cd.md', trashed: true });
+
+    await h.call('vault_write', { path: 'cdfolder/a.md', content: 'z\n' });
+    const folderDelete = await h.call('vault_delete', {
+      path: 'cdfolder',
+      confirm: true,
+      expectedHash: staleHash,
+    });
+    expect(text(folderDelete)).toMatch(/^INVALID_INPUT: /);
+  });
+
+  it('canvas tools honour expectedHash', async () => {
+    const first = await h.call('vault_canvas_add_node', {
+      path: 'board.canvas',
+      node: { id: 'a', type: 'text', text: 'A', x: 0, y: 0, width: 100, height: 100 },
+    });
+    const h1 = (first.structuredContent as { hash: string }).hash;
+
+    const staleNode = await h.call('vault_canvas_add_node', {
+      path: 'board.canvas',
+      node: { id: 'b', type: 'text', text: 'B', x: 0, y: 0, width: 100, height: 100 },
+      expectedHash: staleHash,
+    });
+    expectConflict(staleNode, h1);
+
+    const second = await h.call('vault_canvas_add_node', {
+      path: 'board.canvas',
+      node: { id: 'b', type: 'text', text: 'B', x: 0, y: 0, width: 100, height: 100 },
+      expectedHash: h1,
+    });
+    expect(second.isError).toBeFalsy();
+    const h2 = (second.structuredContent as { hash: string }).hash;
+
+    const staleEdge = await h.call('vault_canvas_add_edge', {
+      path: 'board.canvas',
+      edge: { fromNode: 'a', toNode: 'b' },
+      expectedHash: staleHash,
+    });
+    expectConflict(staleEdge, h2);
+
+    const edgeOk = await h.call('vault_canvas_add_edge', {
+      path: 'board.canvas',
+      edge: { fromNode: 'a', toNode: 'b' },
+      expectedHash: h2,
+    });
+    expect(edgeOk.isError).toBeFalsy();
+  });
+});

@@ -36,7 +36,17 @@ export function clampText(
 }
 
 export function errorToResult(error: unknown, log: (e: unknown) => void): CallToolResult {
-  if (error instanceof VaultError) return fail(`${error.code}: ${error.message}`);
+  if (error instanceof VaultError) {
+    const text = `${error.code}: ${error.message}`;
+    if (error.code === 'CONFLICT') {
+      return {
+        isError: true,
+        content: [{ type: 'text', text }],
+        structuredContent: { code: error.code, ...error.details },
+      };
+    }
+    return fail(text);
+  }
   if (error instanceof ZodError) {
     const first = error.issues[0];
     return fail(

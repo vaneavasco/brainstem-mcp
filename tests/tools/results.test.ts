@@ -55,6 +55,23 @@ describe('results helpers', () => {
     const zr = errorToResult(zodErr.success ? null : zodErr.error, log);
     expect(zr.isError).toBe(true);
     expect((zr.content[0] as { text: string }).text).toMatch(/^INVALID_INPUT: /);
+    const conflict = errorToResult(
+      new VaultError('CONFLICT', 'note.md changed since it was read.', {
+        path: 'note.md',
+        currentHash: 'deadbeef',
+      }),
+      log,
+    );
+    expect(conflict.isError).toBe(true);
+    expect((conflict.content[0] as { text: string }).text).toBe(
+      'CONFLICT: note.md changed since it was read.',
+    );
+    expect(conflict.structuredContent).toEqual({
+      code: 'CONFLICT',
+      path: 'note.md',
+      currentHash: 'deadbeef',
+    });
+
     const internal = errorToResult(new Error('db password is hunter2'), log);
     expect((internal.content[0] as { text: string }).text).toBe(
       'INTERNAL: unexpected error; try again or report it.',

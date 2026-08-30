@@ -140,6 +140,7 @@ describe('acceptance scenario (claude.ai run, end to end)', () => {
     expect(moved.structuredContent).toEqual({
       from: 'acceptance/note-b.md',
       to: 'acceptance/moved/note-b.md',
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(h.runtime.index.get('acceptance/moved/note-b.md')?.frontmatter).toMatchObject({
       reviewed: true,

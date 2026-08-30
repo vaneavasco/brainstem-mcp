@@ -120,7 +120,11 @@ describe('vault_list', () => {
 describe('vault_move / vault_delete', () => {
   it('moves files and folders keeping the index in sync', async () => {
     const mv = await h.call('vault_move', { from: '00-inbox/todo.md', to: '04-archive/todo.md' });
-    expect(mv.structuredContent).toEqual({ from: '00-inbox/todo.md', to: '04-archive/todo.md' });
+    expect(mv.structuredContent).toEqual({
+      from: '00-inbox/todo.md',
+      to: '04-archive/todo.md',
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     expect(h.runtime.index.get('00-inbox/todo.md')).toBeUndefined();
     expect(h.runtime.index.get('04-archive/todo.md')?.frontmatter).toMatchObject({ type: 'task' });
     await h.call('vault_move', { from: '01-projects/brainstem', to: '01-projects/bs' });

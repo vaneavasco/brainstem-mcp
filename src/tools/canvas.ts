@@ -12,7 +12,7 @@ import {
   serializeCanvas,
 } from '../vault/canvas.ts';
 import { OVERWRITE, READ_ONLY } from './annotations.ts';
-import type { ToolContext } from './register.ts';
+import { ExpectedHashArg, locked, type ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 function requireCanvasPath(input: string): string {
@@ -63,16 +63,27 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Add canvas node',
       description:
         'Append a node (text, file, link or group) to a .canvas file. Creates the canvas file when it does not exist yet — there is intentionally no separate vault_canvas_create. The id is generated when omitted.',
-      inputSchema: z.object({ path: z.string(), node: CanvasNodeInputSchema }),
-      outputSchema: z.object({ path: z.string(), node: z.record(z.string(), z.unknown()) }),
+      inputSchema: z.object({
+        path: z.string(),
+        node: CanvasNodeInputSchema,
+        expectedHash: ExpectedHashArg,
+      }),
+      outputSchema: z.object({
+        path: z.string(),
+        node: z.record(z.string(), z.unknown()),
+        hash: z.string(),
+      }),
       annotations: OVERWRITE,
     },
-    ({ path, node }) =>
+    ({ path, node, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = requireCanvasPath(path);
-        const { canvas, node: added } = addNode(await readCanvasOrEmpty(p), node);
-        await adapter.write(p, serializeCanvas(canvas));
-        return okJson({ path: p, node: added }, `Added node ${added.id} to ${p}.`);
+        return locked(tc, [p], async () => {
+          const { canvas, node: added } = addNode(await readCanvasOrEmpty(p), node);
+          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          const hash = (await adapter.read(p)).hash;
+          return okJson({ path: p, node: added, hash }, `Added node ${added.id} to ${p}.`);
+        });
       }),
   );
 
@@ -82,17 +93,28 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Add canvas edge',
       description:
         'Append an edge between two existing nodes of a .canvas file. Both fromNode and toNode must exist.',
-      inputSchema: z.object({ path: z.string(), edge: CanvasEdgeInputSchema }),
-      outputSchema: z.object({ path: z.string(), edge: z.record(z.string(), z.unknown()) }),
+      inputSchema: z.object({
+        path: z.string(),
+        edge: CanvasEdgeInputSchema,
+        expectedHash: ExpectedHashArg,
+      }),
+      outputSchema: z.object({
+        path: z.string(),
+        edge: z.record(z.string(), z.unknown()),
+        hash: z.string(),
+      }),
       annotations: OVERWRITE,
     },
-    ({ path, edge }) =>
+    ({ path, edge, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = requireCanvasPath(path);
-        const current = parseCanvas((await adapter.read(p)).content);
-        const { canvas, edge: added } = addEdge(current, edge);
-        await adapter.write(p, serializeCanvas(canvas));
-        return okJson({ path: p, edge: added }, `Added edge ${added.id} to ${p}.`);
+        return locked(tc, [p], async () => {
+          const current = parseCanvas((await adapter.read(p)).content);
+          const { canvas, edge: added } = addEdge(current, edge);
+          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          const hash = (await adapter.read(p)).hash;
+          return okJson({ path: p, edge: added, hash }, `Added edge ${added.id} to ${p}.`);
+        });
       }),
   );
 }

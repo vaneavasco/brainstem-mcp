@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
 import { MAX_FILE_BYTES } from '../../src/storage/limits.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
+import { TRASH_DIR } from '../../src/storage/path-policy.ts';
 import { VaultError } from '../../src/storage/types.ts';
 
 let root: string;
@@ -204,6 +205,143 @@ describe('LocalFSAdapter core', () => {
     expect(await vault.read('y.md')).toMatchObject({
       frontmatter: { type: 'note' },
       body: 'No frontmatter body\n',
+    });
+  });
+
+  describe('hashOf', () => {
+    it('returns sha256hex of the decoded text, matching read().hash, and null when missing or a directory', async () => {
+      await vault.write('h2.md', '---\ntitle: H2\n---\nbody\n');
+      const note = await vault.read('h2.md');
+      expect(await vault.hashOf('h2.md')).toBe(note.hash);
+      expect(await vault.hashOf('h2.md')).toBe(sha256hex(note.content));
+      expect(await vault.hashOf('nope.md')).toBeNull();
+      await fs.mkdir(path.join(root, 'a-folder'));
+      expect(await vault.hashOf('a-folder')).toBeNull();
+    });
+
+    it('returns null rather than throwing for content that is not valid UTF-8 text', async () => {
+      await fs.writeFile(path.join(root, 'bin.png'), Buffer.from([0xff, 0xfe, 0x00, 0x41]));
+      expect(await vault.hashOf('bin.png')).toBeNull();
+    });
+  });
+
+  describe('hardDelete', () => {
+    it('unlinks a file outright (no .trash)', async () => {
+      await vault.write('gone.md', 'bye\n');
+      await vault.hardDelete('gone.md');
+      expect(await code(vault.read('gone.md'))).toBe('NOT_FOUND');
+      const rootEntries = await fs.readdir(root);
+      expect(rootEntries.includes(TRASH_DIR)).toBe(false);
+    });
+
+    it('reports NOT_FOUND for a missing file and rejects reserved/dot paths', async () => {
+      expect(await code(vault.hardDelete('nope.md'))).toBe('NOT_FOUND');
+      expect(await code(vault.hardDelete('_brainstem/state.json'))).toBe('INVALID_PATH');
+      expect(await code(vault.hardDelete('.trash/x.md'))).toBe('INVALID_PATH');
+    });
+  });
+
+  describe('expectedHash (optimistic concurrency)', () => {
+    it('write: proceeds when the hash matches, conflicts with the current hash when it does not', async () => {
+      await vault.write('c.md', 'v1\n');
+      const v1Hash = await vault.hashOf('c.md');
+      await vault.write('c.md', 'v2\n', { expectedHash: v1Hash ?? undefined });
+      const v2Hash = await vault.hashOf('c.md');
+      expect(v2Hash).not.toBe(v1Hash);
+
+      try {
+        await vault.write('c.md', 'v3\n', { expectedHash: v1Hash ?? undefined });
+        throw new Error('expected CONFLICT');
+      } catch (error) {
+        expect(error).toBeInstanceOf(VaultError);
+        expect((error as VaultError).code).toBe('CONFLICT');
+        expect((error as VaultError).details).toEqual({ path: 'c.md', currentHash: v2Hash });
+      }
+      // The failed write must not have mutated the file.
+      expect((await vault.read('c.md')).content).toBe('v2\n');
+    });
+
+    it('write: conflicts when the file does not exist yet but a hash was expected', async () => {
+      expect(await code(vault.write('new.md', 'x\n', { expectedHash: 'a'.repeat(64) }))).toBe(
+        'CONFLICT',
+      );
+    });
+
+    it('edit / append honour expectedHash', async () => {
+      await vault.write('e2.md', 'alpha\n');
+      const h1 = await vault.hashOf('e2.md');
+      expect(
+        await code(
+          vault.edit('e2.md', [{ find: 'alpha', replace: 'beta' }], false, {
+            expectedHash: 'f'.repeat(64),
+          }),
+        ),
+      ).toBe('CONFLICT');
+      await vault.edit('e2.md', [{ find: 'alpha', replace: 'beta' }], false, {
+        expectedHash: h1 ?? undefined,
+      });
+      const h2 = await vault.hashOf('e2.md');
+      expect(await code(vault.append('e2.md', 'gamma', { expectedHash: h1 ?? undefined }))).toBe(
+        'CONFLICT',
+      );
+      await vault.append('e2.md', 'gamma', { expectedHash: h2 ?? undefined });
+      expect((await vault.read('e2.md')).content).toBe('beta\ngamma\n');
+    });
+
+    it('writeBinary honours expectedHash', async () => {
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      await vault.writeBinary('img/c.png', png, 'image/png');
+      expect(
+        await code(
+          vault.writeBinary('img/c.png', png, 'image/png', { expectedHash: 'a'.repeat(64) }),
+        ),
+      ).toBe('CONFLICT');
+    });
+
+    it('batchFrontmatterUpdate reports a per-item CONFLICT without touching the file', async () => {
+      await vault.write('bf.md', '---\nstatus: draft\n---\nBody\n');
+      const currentHash = await vault.hashOf('bf.md');
+      const r = await vault.batchFrontmatterUpdate([
+        { path: 'bf.md', set: { status: 'done' }, expectedHash: 'a'.repeat(64) },
+      ]);
+      expect(r.updated).toEqual([]);
+      expect(r.failed).toEqual([{ path: 'bf.md', error: expect.stringMatching(/^CONFLICT: /) }]);
+      expect(await vault.read('bf.md')).toMatchObject({ frontmatter: { status: 'draft' } });
+      const ok = await vault.batchFrontmatterUpdate([
+        { path: 'bf.md', set: { status: 'done' }, expectedHash: currentHash ?? undefined },
+      ]);
+      expect(ok.updated).toEqual(['bf.md']);
+    });
+
+    it('move honours expectedHash for a single file and rejects it for a folder', async () => {
+      await vault.write('mv1.md', 'x\n');
+      expect(await code(vault.move('mv1.md', 'mv2.md', { expectedHash: 'a'.repeat(64) }))).toBe(
+        'CONFLICT',
+      );
+      const h = await vault.hashOf('mv1.md');
+      await vault.move('mv1.md', 'mv2.md', { expectedHash: h ?? undefined });
+      expect(await code(vault.read('mv1.md'))).toBe('NOT_FOUND');
+      expect((await vault.read('mv2.md')).content).toBe('x\n');
+
+      await vault.write('folder/inside.md', 'y\n');
+      expect(await code(vault.move('folder', 'folder2', { expectedHash: 'a'.repeat(64) }))).toBe(
+        'INVALID_INPUT',
+      );
+    });
+
+    it('softDelete honours expectedHash for a single file and rejects it for a folder', async () => {
+      await vault.write('sd1.md', 'z\n');
+      expect(await code(vault.softDelete('sd1.md', true, { expectedHash: 'a'.repeat(64) }))).toBe(
+        'CONFLICT',
+      );
+      const h = await vault.hashOf('sd1.md');
+      await vault.softDelete('sd1.md', true, { expectedHash: h ?? undefined });
+      expect(await code(vault.read('sd1.md'))).toBe('NOT_FOUND');
+
+      await vault.write('folder3/inside.md', 'w\n');
+      expect(await code(vault.softDelete('folder3', true, { expectedHash: 'a'.repeat(64) }))).toBe(
+        'INVALID_INPUT',
+      );
     });
   });
 });

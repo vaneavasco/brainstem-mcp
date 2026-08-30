@@ -1,6 +1,7 @@
 import type { McpRequestContext } from '@modelcontextprotocol/server';
 import { LocalFSAdapter } from '../storage/local-fs.ts';
 import type { StorageAdapter, Unsubscribe } from '../storage/types.ts';
+import { WriteGate } from '../storage/write-gate.ts';
 import type { AnalyticsReport } from './analytics.ts';
 import { type DailyNoteSettings, DEFAULT_DAILY_NOTE_SETTINGS } from './daily-notes.ts';
 import { FrontmatterIndex } from './frontmatter-index.ts';
@@ -23,6 +24,8 @@ export interface VaultRuntime {
   settings: VaultSettings;
   now: () => Date;
   caches: { analytics?: { at: number; report: AnalyticsReport } };
+  /** Keyed write lock every mutating tool call runs inside (see src/storage/write-gate.ts). */
+  gate: WriteGate;
   close(): Promise<void>;
 }
 
@@ -57,6 +60,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     settings: mergeSettings(opts.settings),
     now: opts.now ?? (() => new Date()),
     caches: {},
+    gate: new WriteGate(),
     async close() {
       detach();
     },

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { MAX_LIST_ENTRIES } from '../storage/limits.ts';
 import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
-import { type ToolContext, touch } from './register.ts';
+import { ExpectedHashArg, locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
@@ -59,27 +59,32 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Move or rename',
       description:
-        'Move or rename a file or folder inside the vault. Fails if the destination already exists. Wikilinks in other notes are not rewritten.',
-      inputSchema: z.object({ from: z.string(), to: z.string() }),
-      outputSchema: z.object({ from: z.string(), to: z.string() }),
+        'Move or rename a file or folder inside the vault. Fails if the destination already exists. Wikilinks in other notes are not rewritten. expectedHash is only honoured when moving a single file (not a folder).',
+      inputSchema: z.object({ from: z.string(), to: z.string(), expectedHash: ExpectedHashArg }),
+      outputSchema: z.object({ from: z.string(), to: z.string(), hash: z.string().nullable() }),
       annotations: MOVE_OR_DELETE,
     },
-    ({ from, to }) =>
+    ({ from, to, expectedHash }) =>
       guarded(tc.log, async () => {
         const src = normalizeVaultPath(from);
         const dst = normalizeVaultPath(to);
-        await adapter.move(src, dst);
-        // Keep the index coherent for a single note or a whole folder.
-        if (index.get(src)) {
-          index.rename(src, dst);
-          await touch(tc, dst);
-        } else {
-          for (const entry of index.all()) {
-            if (entry.path.startsWith(`${src}/`))
-              index.rename(entry.path, `${dst}/${entry.path.slice(src.length + 1)}`);
+        return locked(tc, [src, dst], async () => {
+          await adapter.move(src, dst, { expectedHash });
+          // Keep the index coherent for a single note or a whole folder.
+          if (index.get(src)) {
+            index.rename(src, dst);
+            await touch(tc, dst);
+          } else {
+            for (const entry of index.all()) {
+              if (entry.path.startsWith(`${src}/`))
+                index.rename(entry.path, `${dst}/${entry.path.slice(src.length + 1)}`);
+            }
           }
-        }
-        return okJson({ from: src, to: dst }, `Moved ${src} → ${dst}.`);
+          // null for a moved folder (or a destination whose content is not text); a real hash
+          // for a moved file.
+          const hash = await adapter.hashOf(dst);
+          return okJson({ from: src, to: dst, hash }, `Moved ${src} → ${dst}.`);
+        });
       }),
   );
 
@@ -88,19 +93,25 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Delete (to trash)',
       description:
-        "Soft-delete a file or folder by moving it into the vault's .trash/ folder. Requires confirm=true — call without it first only if you need the user to confirm. Nothing is erased permanently.",
-      inputSchema: z.object({ path: z.string(), confirm: z.boolean() }),
+        "Soft-delete a file or folder by moving it into the vault's .trash/ folder. Requires confirm=true — call without it first only if you need the user to confirm. Nothing is erased permanently. expectedHash is only honoured when deleting a single file (not a folder).",
+      inputSchema: z.object({
+        path: z.string(),
+        confirm: z.boolean(),
+        expectedHash: ExpectedHashArg,
+      }),
       outputSchema: z.object({ path: z.string(), trashed: z.boolean() }),
       annotations: MOVE_OR_DELETE,
     },
-    ({ path, confirm }) =>
+    ({ path, confirm, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
-        await adapter.softDelete(p, confirm);
-        if (isMarkdownPath(p)) index.remove(p);
-        for (const entry of index.all())
-          if (entry.path.startsWith(`${p}/`)) index.remove(entry.path);
-        return okJson({ path: p, trashed: true }, `Moved ${p} to .trash/.`);
+        return locked(tc, [p], async () => {
+          await adapter.softDelete(p, confirm, { expectedHash });
+          if (isMarkdownPath(p)) index.remove(p);
+          for (const entry of index.all())
+            if (entry.path.startsWith(`${p}/`)) index.remove(entry.path);
+          return okJson({ path: p, trashed: true }, `Moved ${p} to .trash/.`);
+        });
       }),
   );
 }

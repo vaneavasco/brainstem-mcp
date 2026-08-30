@@ -9,7 +9,7 @@ import {
   resolveDailyNotePath,
 } from '../vault/daily-notes.ts';
 import { APPEND_ONLY, READ_ONLY } from './annotations.ts';
-import { type ToolContext, touch } from './register.ts';
+import { locked, type ToolContext, touch } from './register.ts';
 import { clampText, guarded, okJson } from './results.ts';
 
 const DateArg = z
@@ -94,24 +94,26 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
     ({ content, date }) =>
       guarded(tc.log, async () => {
         const { path, when } = resolve(date);
-        let created = false;
-        try {
-          await adapter.read(path);
-        } catch (error) {
-          if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
-          created = true;
-          const templateSource =
-            daily.template && daily.template.trim() !== ''
-              ? daily.template
-              : DEFAULT_DAILY_TEMPLATE;
-          await adapter.write(path, renderDailyTemplate(templateSource, when, daily));
-        }
-        await adapter.append(path, content);
-        await touch(tc, path);
-        return okJson(
-          { path, created },
-          `${created ? 'Created and appended to' : 'Appended to'} ${path}.`,
-        );
+        return locked(tc, [path], async () => {
+          let created = false;
+          try {
+            await adapter.read(path);
+          } catch (error) {
+            if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
+            created = true;
+            const templateSource =
+              daily.template && daily.template.trim() !== ''
+                ? daily.template
+                : DEFAULT_DAILY_TEMPLATE;
+            await adapter.write(path, renderDailyTemplate(templateSource, when, daily));
+          }
+          await adapter.append(path, content);
+          await touch(tc, path);
+          return okJson(
+            { path, created },
+            `${created ? 'Created and appended to' : 'Appended to'} ${path}.`,
+          );
+        });
       }),
   );
 }
