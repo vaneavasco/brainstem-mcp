@@ -50,13 +50,13 @@ describe('upsertEnv', () => {
     // compose-go (and Node's --env-file) expand \a \b \f \n \r \t \v \\ \" \$ inside
     // DOUBLE quotes, which would mangle this path; inside single quotes every
     // character is literal.
-    const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: 'C:\\Users\\vanea\\Obsidian Vault' });
-    expect(r.text).toBe("VAULT_PATH='C:\\Users\\vanea\\Obsidian Vault'\n");
-    expect(parseEnv(r.text).get('VAULT_PATH')).toBe('C:\\Users\\vanea\\Obsidian Vault');
+    const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: 'C:\\Users\\ana\\Obsidian Vault' });
+    expect(r.text).toBe("VAULT_PATH='C:\\Users\\ana\\Obsidian Vault'\n");
+    expect(parseEnv(r.text).get('VAULT_PATH')).toBe('C:\\Users\\ana\\Obsidian Vault');
   });
 
   it('falls back to escaped double quotes when the value itself contains an apostrophe', () => {
-    const value = "C:\\Users\\Vanea's PC\\Obsidian Vault";
+    const value = "C:\\Users\\Ana's PC\\Obsidian Vault";
     const r = upsertEnv('VAULT_PATH=\n', { VAULT_PATH: value });
     expect(r.text).toBe('VAULT_PATH="C:\\\\Users\\\\Vanea\'s PC\\\\Obsidian Vault"\n');
     expect(parseEnv(r.text).get('VAULT_PATH')).toBe(value);

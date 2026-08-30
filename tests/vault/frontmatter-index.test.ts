@@ -13,7 +13,7 @@ beforeEach(async () => {
   vault = await LocalFSAdapter.create(root, { ripgrepPath: null });
   await vault.write(
     'a.md',
-    '---\ntype: project\nstatus: active\ntags: [mcp, Notes]\nmeta:\n  owner: vanea\n---\nA',
+    '---\ntype: project\nstatus: active\ntags: [mcp, Notes]\nmeta:\n  owner: ana\n---\nA',
   );
   await vault.write('sub/b.md', '---\ntype: area\nstatus: active\ntags: [health]\n---\nB');
   await vault.write('sub/c.md', 'no frontmatter');
@@ -47,7 +47,7 @@ describe('query', () => {
     ]);
     expect(index.query({ field: 'tags', equals: 'mcp' }).map((h) => h.path)).toEqual(['a.md']);
     expect(index.query({ field: 'tags', contains: 'note' }).map((h) => h.path)).toEqual(['a.md']);
-    expect(index.query({ field: 'meta.owner', equals: 'vanea' }).map((h) => h.path)).toEqual([
+    expect(index.query({ field: 'meta.owner', equals: 'ana' }).map((h) => h.path)).toEqual([
       'a.md',
     ]);
     expect(index.query({ field: 'type', exists: true }).map((h) => h.path)).toEqual([

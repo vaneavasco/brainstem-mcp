@@ -49,7 +49,7 @@ export function parseEnv(text: string): Map<string, string> {
  * would otherwise be interpolated by compose-go). Quote with SINGLE quotes:
  * compose-go (and Node's `--env-file`) expand `\a \b \f \n \r \t \v \\ \" \$`
  * inside double quotes, which would mangle a Windows vault path such as
- * `C:\Users\vanea\Obsidian Vault`; inside single quotes every character is
+ * `C:\Users\ana\Obsidian Vault`; inside single quotes every character is
  * literal. A value that contains an apostrophe can't be single-quoted:
  * neither parser supports an escape there, and neither splices adjacent
  * quoted segments (`'\''`) the way a shell does — so it falls back to double
