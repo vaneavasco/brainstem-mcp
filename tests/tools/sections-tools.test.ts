@@ -181,3 +181,23 @@ describe('vault_append heading', () => {
     expect(text(await h.call('vault_read', { path: 'plain.md' }))).toBe('start\nmore\n');
   });
 });
+
+describe('vault_read / vault_append — frontmatter is never a source of headings (regression)', () => {
+  it('does not resolve a "#"-led YAML line as a heading, and never corrupts the frontmatter block', async () => {
+    const content = '---\ntitle: T\n# note\n---\n\n# Real\nbody\n';
+    await h.call('vault_write', { path: 'fm.md', content });
+
+    const badRead = await h.call('vault_read', { path: 'fm.md', section: 'note' });
+    expect(badRead.isError).toBe(true);
+    expect(text(badRead)).toMatch(/^NOT_FOUND: /);
+    // "note" is not among the real headings — only "Real" is.
+    expect(text(badRead)).toContain('Headings in this note: Real.');
+
+    const r = await h.call('vault_append', { path: 'fm.md', content: 'added', heading: 'Real' });
+    expect(r.isError).toBeFalsy();
+    const after = text(await h.call('vault_read', { path: 'fm.md' }));
+    expect(after).toBe('---\ntitle: T\n# note\n---\n\n# Real\nbody\nadded\n');
+    // The frontmatter block (including its own "# note" YAML comment) is byte-for-byte untouched.
+    expect(after.startsWith('---\ntitle: T\n# note\n---\n')).toBe(true);
+  });
+});

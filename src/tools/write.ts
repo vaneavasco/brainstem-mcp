@@ -4,26 +4,12 @@ import { BINARY_MIME_ALLOWLIST, MAX_BATCH, MAX_FILE_BYTES } from '../storage/lim
 import { normalizedOrRaw, normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { assertExpectedHash } from '../storage/write-gate.ts';
-import { findSection, insertIntoSection, listHeadingPaths } from '../vault/sections.ts';
+import { describeUnknownHeading, findSection, insertIntoSection } from '../vault/sections.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
 import { ExpectedHashArg, locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 const PathArg = z.string().describe('Vault-relative path, e.g. "00-inbox/idea.md".');
-
-const MAX_HEADING_LIST = 50;
-
-/** NOT_FOUND message for an unresolved heading path, listing what headings actually exist
- *  (capped so a huge note cannot blow out the error message). */
-function headingNotFoundMessage(content: string, headingPath: string): string {
-  const paths = listHeadingPaths(content);
-  if (paths.length === 0) {
-    return `No heading "${headingPath}" found; this note has no headings.`;
-  }
-  const shown = paths.slice(0, MAX_HEADING_LIST).join(', ');
-  const more = paths.length > MAX_HEADING_LIST ? ` (+${paths.length - MAX_HEADING_LIST} more)` : '';
-  return `No heading "${headingPath}" found. Headings in this note: ${shown}${more}.`;
-}
 
 function decodeBase64Strict(input: string): Uint8Array {
   const cleaned = input.replace(/\s+/g, '');
@@ -178,7 +164,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
             const note = await adapter.read(p);
             const range = findSection(note.content, heading);
             if (!range) {
-              throw new VaultError('NOT_FOUND', headingNotFoundMessage(note.content, heading));
+              throw new VaultError('NOT_FOUND', describeUnknownHeading(note.content, heading));
             }
             const updated = insertIntoSection(note.content, range, content, position ?? 'end');
             await adapter.write(p, updated, { expectedHash });

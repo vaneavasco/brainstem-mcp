@@ -35,7 +35,9 @@ const WIKI = /(!?)\[\[([^[\]\n]+?)\]\]/g;
 const MD = /(!?)\[([^\]\n]*)\]\((?:<([^>\n]+)>|([^()\s]+))\)/g;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const TAG = /(^|[\s([{,;"'])#([\p{L}\p{N}_/-]+)/gu;
-const HEADING = /^(#{1,6})[ \t]+(.+?)[ \t]*(?:#+[ \t]*)?$/;
+// Exported: sections.ts (read/append by section) reuses this exact heading grammar rather
+// than duplicating it, so the two never drift apart.
+export const HEADING = /^(#{1,6})[ \t]+(.+?)[ \t]*(?:#+[ \t]*)?$/;
 const BLOCK_ID_EOL = /(?:^|\s)\^([A-Za-z0-9-]+)[ \t]*$/;
 
 /** Blank everything that is not note content, preserving length and newlines so offsets/lines hold. */
@@ -68,7 +70,9 @@ function blank(s: string): string {
   return s.replace(/[^\n]/g, ' ');
 }
 
-function lineAt(text: string, offset: number): number {
+/** Exported for sections.ts, which needs the same file-line arithmetic to offset headings
+ *  found in the body back to file-absolute line numbers. */
+export function lineAt(text: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) line++;
   return line;

@@ -113,6 +113,66 @@ describe('findSection', () => {
     expect(findSection(DOC, '')).toBeNull();
     expect(findSection(DOC, '   ')).toBeNull();
   });
+
+  it('backtracks across a same-named candidate that does not itself contain the child path', () => {
+    // Two "# A" roots; only the SECOND contains a "## B". A naive "first match wins, no
+    // backtracking" search would commit to the first "A" (whose range ends right before the
+    // second "A" starts, since it's a same-or-higher-level sibling) and fail to find "B" inside
+    // it, reporting the whole path as not found even though listHeadingPaths lists "A > B".
+    const content = `${['# A', 'alpha-one', '', '# A', 'alpha-two', '', '## B', 'b-content'].join(
+      '\n',
+    )}\n`;
+    expect(listHeadingPaths(content)).toEqual(['A', 'A', 'A > B']);
+    const range = findSection(content, 'A > B');
+    expect(range).toEqual({ startLine: 7, endLine: 9, level: 2, heading: 'B' });
+  });
+});
+
+describe('findSection — headings scoped to the body (frontmatter is never a source of headings)', () => {
+  it('does not treat a "#"-led YAML line inside frontmatter as a heading', () => {
+    const content = '---\ntitle: T\n# note\n---\n\n# Real\n';
+    expect(listHeadingPaths(content)).toEqual(['Real']);
+    expect(findSection(content, 'note')).toBeNull();
+    // Line 6 is the real heading's file-absolute line: 4 frontmatter lines (---, title, # note,
+    // ---) plus the blank line right after the closing "---".
+    expect(findSection(content, 'Real')).toEqual({
+      startLine: 6,
+      endLine: 7,
+      level: 1,
+      heading: 'Real',
+    });
+  });
+
+  it('falls back to treating the whole file as the body when frontmatter YAML is invalid', () => {
+    // splitFrontmatter throws INVALID_INPUT on malformed YAML; extractHeadings must swallow that
+    // and scan the whole content as body, exactly like LocalFSAdapter.toNote does for reads.
+    const content = '---\n[not: valid: yaml\n---\n\n# Real\n';
+    expect(() => listHeadingPaths(content)).not.toThrow();
+    expect(listHeadingPaths(content)).toEqual(['Real']);
+  });
+});
+
+describe('findSection — a heading whose own text contains a literal ">"', () => {
+  it('falls back to the whole path as one literal heading name when the nested split does not resolve', () => {
+    const content = '# A > B\nbody text\n';
+    expect(listHeadingPaths(content)).toEqual(['A > B']);
+    expect(findSection(content, 'A > B')).toEqual({
+      startLine: 1,
+      endLine: 3,
+      level: 1,
+      heading: 'A > B',
+    });
+  });
+
+  it('prefers a real nested path over a same-written literal heading elsewhere in the file', () => {
+    const content = `${['# A', '## B', 'nested content', '# A > B', 'literal content'].join(
+      '\n',
+    )}\n`;
+    // The nested "A" > "B" resolves first and wins; the literal "# A > B" heading (unreachable by
+    // this same path string while the nested interpretation succeeds) is never tried.
+    const range = findSection(content, 'A > B');
+    expect(range).toEqual({ startLine: 2, endLine: 3, level: 2, heading: 'B' });
+  });
 });
 
 describe('sliceSection', () => {
@@ -174,6 +234,14 @@ describe('insertIntoSection — position "end"', () => {
     const range = findSection(content, 'Only') as SectionRange;
     const updated = insertIntoSection(content, range, 'added', 'end');
     expect(updated).toBe('## Only\nbody\nadded\n');
+  });
+
+  it('forces a trailing newline when inserting at absolute EOF on a file that lacked one, matching plain vault_append', () => {
+    const content = '## Only\nbody'; // no trailing newline
+    const range = findSection(content, 'Only') as SectionRange;
+    const updated = insertIntoSection(content, range, 'added', 'end');
+    expect(updated).toBe('## Only\nbody\nadded\n');
+    expect(updated.endsWith('\n')).toBe(true);
   });
 
   it('adds a trailing newline to inserted text that lacks one, and keeps one that already has it', () => {

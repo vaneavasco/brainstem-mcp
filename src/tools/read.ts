@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { MAX_BATCH, MAX_RESULT_CHARS } from '../storage/limits.ts';
 import { VaultError } from '../storage/types.ts';
-import { findSection, listHeadingPaths, sliceSection } from '../vault/sections.ts';
+import { describeUnknownHeading, findSection, sliceSection } from '../vault/sections.ts';
 import { READ_ONLY } from './annotations.ts';
 import type { ToolContext } from './register.ts';
 import { clampText, guarded, okJson } from './results.ts';
@@ -10,20 +10,6 @@ import { clampText, guarded, okJson } from './results.ts';
 const PathArg = z
   .string()
   .describe('Vault-relative path, e.g. "01-projects/plan.md". No leading slash, no "..".');
-
-const MAX_HEADING_LIST = 50;
-
-/** NOT_FOUND message for an unresolved heading path, listing what headings actually exist
- *  (capped so a huge note cannot blow out the error message). */
-function headingNotFoundMessage(content: string, headingPath: string): string {
-  const paths = listHeadingPaths(content);
-  if (paths.length === 0) {
-    return `No heading "${headingPath}" found; this note has no headings.`;
-  }
-  const shown = paths.slice(0, MAX_HEADING_LIST).join(', ');
-  const more = paths.length > MAX_HEADING_LIST ? ` (+${paths.length - MAX_HEADING_LIST} more)` : '';
-  return `No heading "${headingPath}" found. Headings in this note: ${shown}${more}.`;
-}
 
 const NoteSummary = z.object({
   path: z.string(),
@@ -67,7 +53,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         if (section !== undefined) {
           const range = findSection(note.content, section);
           if (!range) {
-            throw new VaultError('NOT_FOUND', headingNotFoundMessage(note.content, section));
+            throw new VaultError('NOT_FOUND', describeUnknownHeading(note.content, section));
           }
           textOut = sliceSection(note.content, range);
           sectionRange = { startLine: range.startLine, endLine: range.endLine };
