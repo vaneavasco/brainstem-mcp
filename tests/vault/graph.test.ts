@@ -200,3 +200,35 @@ describe('freshness', () => {
     expect((graph as unknown as { rebuilds: number }).rebuilds).toBe(rebuildsAfterUpsert);
   });
 });
+
+describe('ordering tie-breaks (shared case-insensitive rule)', () => {
+  it('orders orphans case-insensitively', () => {
+    index.upsert(entry('B-orphan.md', 'x'));
+    index.upsert(entry('a-orphan.md', 'x'));
+    const orphans = graph.orphans();
+    expect(orphans.indexOf('a-orphan.md')).toBeLessThan(orphans.indexOf('B-orphan.md'));
+  });
+
+  it('breaks hub ties case-insensitively', () => {
+    index.upsert(entry('B-hub.md', 'x'));
+    index.upsert(entry('a-hub.md', 'x'));
+    index.upsert(entry('pointer.md', '[[B-hub]] [[a-hub]]'));
+    const hubs = graph.hubs().filter((h) => h.path.endsWith('-hub.md'));
+    expect(hubs).toEqual([
+      { path: 'a-hub.md', backlinks: 1 },
+      { path: 'B-hub.md', backlinks: 1 },
+    ]);
+  });
+});
+
+describe('tag rollup', () => {
+  it('rolls nested descendants into ancestors, case-insensitively', () => {
+    index.upsert(entry('t1.md', '#Deep/Nested/leaf'));
+    index.upsert(entry('t2.md', '#deep'));
+    const deep = graph.tags().find((t) => t.tag.toLowerCase() === 'deep');
+    expect(deep?.count).toBe(2);
+    expect(graph.notesWithTag('deep').map((n) => n.path)).toEqual(['t1.md', 't2.md']);
+    expect(graph.notesWithTag('deep', false).map((n) => n.path)).toEqual(['t2.md']);
+    expect(graph.notesWithTag('deep/nested').map((n) => n.path)).toEqual(['t1.md']);
+  });
+});

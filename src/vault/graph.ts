@@ -1,6 +1,7 @@
 import { baseName, isMarkdownPath } from '../storage/path-policy.ts';
 import type { FrontmatterIndex } from './frontmatter-index.ts';
 import { frontmatterTags, type LinkRef } from './note-parse.ts';
+import { compareCaseInsensitive } from './tags.ts';
 
 export type Resolution =
   | { status: 'resolved'; path: string; anchorFound?: boolean }
@@ -53,12 +54,6 @@ function extensionOf(name: string): string | null {
   return dot > 0 ? name.slice(dot).toLowerCase() : null;
 }
 
-function compareCaseInsensitive(a: string, b: string): number {
-  const la = a.toLowerCase();
-  const lb = b.toLowerCase();
-  return la < lb ? -1 : la > lb ? 1 : 0;
-}
-
 /**
  * Derives the vault's link/backlink/tag graph from a `FrontmatterIndex`. Every public method calls
  * `ensureFresh()`, which recomputes the derived maps only when `index.version` has changed since the
@@ -81,6 +76,14 @@ export class VaultGraph {
   /** Every tag key that can be reported by tags()/notesWithTag(): direct tags plus every ancestor
    *  prefix a nested tag implies (so a parent with no literal occurrence of its own still shows up). */
   private tagKeyRegistry = new Map<string, TagKeyInfo>();
+  /** entry paths in index.all() order, cached per rebuild so orphans()/hubs() don't re-copy. */
+  private entryPaths: string[] = [];
+  /** notesForKey(includeNested=true) precomputed per registry key — O(T·depth) built once per
+   *  rebuild instead of an O(T²) scan of every direct bucket on every tags() call. */
+  private rolledTagBuckets = new Map<
+    string,
+    { frontmatterNotes: Set<string>; inlineNotes: Set<string> }
+  >();
 
   constructor(index: FrontmatterIndex) {
     this.index = index;
@@ -140,29 +143,17 @@ export class VaultGraph {
     }
     return [...perNote.entries()]
       .map(([path, sources]) => ({ path, sources: [...sources].sort() }))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+      .sort((a, b) => compareCaseInsensitive(a.path, b.path));
   }
 
-  /** Notes contributing to `key`: its own direct tag, plus (when includeNested) every descendant. */
+  /** Notes contributing to `key`: the precomputed rollup (with every descendant) or the direct
+   *  bucket alone. Returns internal sets — callers only read, never mutate. */
   private notesForKey(
     key: string,
     includeNested: boolean,
-  ): { frontmatterNotes: Set<string>; inlineNotes: Set<string> } {
-    const frontmatterNotes = new Set<string>();
-    const inlineNotes = new Set<string>();
-    const direct = this.directTagBuckets.get(key);
-    if (direct) {
-      for (const p of direct.frontmatterNotes) frontmatterNotes.add(p);
-      for (const p of direct.inlineNotes) inlineNotes.add(p);
-    }
-    if (includeNested) {
-      for (const [dkey, bucket] of this.directTagBuckets) {
-        if (!dkey.startsWith(`${key}/`)) continue;
-        for (const p of bucket.frontmatterNotes) frontmatterNotes.add(p);
-        for (const p of bucket.inlineNotes) inlineNotes.add(p);
-      }
-    }
-    return { frontmatterNotes, inlineNotes };
+  ): { frontmatterNotes: ReadonlySet<string>; inlineNotes: ReadonlySet<string> } {
+    const bucket = includeNested ? this.rolledTagBuckets.get(key) : this.directTagBuckets.get(key);
+    return bucket ?? { frontmatterNotes: new Set(), inlineNotes: new Set() };
   }
 
   /**
@@ -174,17 +165,17 @@ export class VaultGraph {
   orphans(exclude?: (path: string) => boolean): string[] {
     this.ensureFresh();
     const result: string[] = [];
-    for (const entry of this.index.all()) {
-      if (!isMarkdownPath(entry.path)) continue;
-      const hasResolvedOut = (this.outgoingByPath.get(entry.path) ?? []).some(
-        (rl) => rl.resolution.status === 'resolved' && rl.resolution.path !== entry.path,
+    for (const path of this.entryPaths) {
+      if (!isMarkdownPath(path)) continue;
+      const hasResolvedOut = (this.outgoingByPath.get(path) ?? []).some(
+        (rl) => rl.resolution.status === 'resolved' && rl.resolution.path !== path,
       );
-      const hasBacklinks = this.foreignBacklinkCount(entry.path) > 0;
+      const hasBacklinks = this.foreignBacklinkCount(path) > 0;
       if (hasResolvedOut || hasBacklinks) continue;
-      if (exclude?.(entry.path)) continue;
-      result.push(entry.path);
+      if (exclude?.(path)) continue;
+      result.push(path);
     }
-    return result.sort();
+    return result.sort(compareCaseInsensitive);
   }
 
   /** Backlinks from *other* notes only — see `orphans()` for why self-links do not count. */
@@ -197,16 +188,10 @@ export class VaultGraph {
   /** Most-linked-to notes first. Self-links are excluded, exactly as in `orphans()`. */
   hubs(limit?: number): { path: string; backlinks: number }[] {
     this.ensureFresh();
-    const all = this.index
-      .all()
-      .map((entry) => ({
-        path: entry.path,
-        backlinks: this.foreignBacklinkCount(entry.path),
-      }))
+    const all = this.entryPaths
+      .map((path) => ({ path, backlinks: this.foreignBacklinkCount(path) }))
       .filter((h) => h.backlinks > 0)
-      .sort(
-        (a, b) => b.backlinks - a.backlinks || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
-      );
+      .sort((a, b) => b.backlinks - a.backlinks || compareCaseInsensitive(a.path, b.path));
     return typeof limit === 'number' ? all.slice(0, limit) : all;
   }
 
@@ -243,6 +228,7 @@ export class VaultGraph {
 
   private rebuild(): void {
     const entries = this.index.all();
+    this.entryPaths = entries.map((e) => e.path);
 
     this.notesByPath = new Map();
     this.notesByBase = new Map();
@@ -309,6 +295,23 @@ export class VaultGraph {
         const display = segments.slice(0, i).join('/');
         const key = norm(display);
         if (!this.tagKeyRegistry.has(key)) this.tagKeyRegistry.set(key, { display, nested: i > 1 });
+      }
+    }
+
+    // Roll every direct bucket up into each of its ancestor prefixes once, at rebuild time, so
+    // tags()/notesWithTag() are O(keys) lookups instead of re-scanning every direct bucket per
+    // call (which made tags() O(T²) in the number of tag keys).
+    this.rolledTagBuckets = new Map();
+    for (const key of this.tagKeyRegistry.keys()) {
+      this.rolledTagBuckets.set(key, { frontmatterNotes: new Set(), inlineNotes: new Set() });
+    }
+    for (const [dkey, bucket] of this.directTagBuckets) {
+      const segments = dkey.split('/');
+      for (let i = 1; i <= segments.length; i += 1) {
+        const rolled = this.rolledTagBuckets.get(segments.slice(0, i).join('/'));
+        if (!rolled) continue;
+        for (const p of bucket.frontmatterNotes) rolled.frontmatterNotes.add(p);
+        for (const p of bucket.inlineNotes) rolled.inlineNotes.add(p);
       }
     }
   }
