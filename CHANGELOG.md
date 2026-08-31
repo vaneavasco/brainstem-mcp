@@ -6,6 +6,13 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `docs/user-guide.md` — a guide for non-technical users (managers, marketing):
+  what the connector is for, how to connect from Claude, copy-paste prompts,
+  the safety net, and honest limits (Claude-only, single-user). Linked from
+  the README intro.
+
 ### Changed
 
 - Ordering ties in `vault_tags`, `orphan_notes` and `hubs` now break

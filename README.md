@@ -6,6 +6,8 @@ A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claud
 
 30 tools cover the vault the way Obsidian sees it: reading and writing notes, sections, frontmatter and attachments; the link/tag graph (backlinks, orphans, hubs); structured queries and recency; safe concurrent edits and multi-note transactions; canvases; templates; daily notes. See "What Claude can do" below.
 
+Handing this to someone non-technical — a manager, a marketer, anyone who just wants their notes to work with Claude? Give them **[docs/user-guide.md](docs/user-guide.md)**: what it's for, how to connect, and copy-paste prompts.
+
 ## Status
 
 **v0.3.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
