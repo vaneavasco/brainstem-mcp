@@ -80,6 +80,20 @@ describe('limits', () => {
     expect(MAX_BINARY_BYTES).toBe(8 * 1024 * 1024);
   });
 
+  it('mentions MiB only for limits of at least 1 MiB', () => {
+    const msg = (bytes: number, limit: number): string => {
+      try {
+        assertWithinSize(bytes, 'blob', limit);
+      } catch (e) {
+        return (e as VaultError).message;
+      }
+      return '';
+    };
+    expect(msg(101, 100)).not.toContain('MiB');
+    expect(msg(MAX_FILE_BYTES + 1, MAX_FILE_BYTES)).toContain('(1 MiB)');
+    expect(msg(9_000_000, MAX_BINARY_BYTES)).toContain('(8 MiB)');
+  });
+
   it('windows long match text with an ellipsis', () => {
     const exact = 'x'.repeat(MAX_MATCH_TEXT_CHARS);
     expect(clampMatchText(exact)).toBe(exact);

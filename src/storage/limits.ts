@@ -67,10 +67,13 @@ export function assertWithinSize(
   limit: number = MAX_FILE_BYTES,
 ): void {
   if (bytes > limit) {
-    const mib = (limit / (1024 * 1024)).toFixed(limit % (1024 * 1024) === 0 ? 0 : 1);
+    const mib = limit / (1024 * 1024);
+    // The parenthetical is a readability aid for MiB-scale limits; below 1 MiB it would round
+    // to a meaningless "0.0 MiB", so the exact byte count stands alone.
+    const inMib = mib >= 1 ? ` (${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB)` : '';
     throw new VaultError(
       'TOO_LARGE',
-      `${what} is ${bytes} bytes; the limit is ${limit} bytes (${mib} MiB). Split the content or use vault_append/vault_edit.`,
+      `${what} is ${bytes} bytes; the limit is ${limit} bytes${inMib}. Split the content or use vault_append/vault_edit.`,
     );
   }
 }

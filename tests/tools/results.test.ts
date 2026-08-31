@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { MAX_RESULT_CHARS } from '../../src/storage/limits.ts';
-import { VaultError } from '../../src/storage/types.ts';
+import { failedEntryMessage, VaultError } from '../../src/storage/types.ts';
 import {
   clampText,
   errorToResult,
@@ -90,6 +90,17 @@ describe('results helpers', () => {
     );
     expect((internal.content[0] as { text: string }).text).not.toContain('hunter2');
     expect(logged).toHaveLength(1);
+  });
+
+  it('serializes a CONFLICT thrown without details as {code} alone, without crashing', () => {
+    const r = errorToResult(new VaultError('CONFLICT', 'stale'), () => {});
+    expect(r.isError).toBe(true);
+    expect(r.structuredContent).toEqual({ code: 'CONFLICT' });
+  });
+
+  it('failedEntryMessage keeps the code prefix only for CONFLICT', () => {
+    expect(failedEntryMessage(new VaultError('CONFLICT', 'x changed'))).toBe('CONFLICT: x changed');
+    expect(failedEntryMessage(new VaultError('NOT_FOUND', 'x missing'))).toBe('x missing');
   });
 
   it('guarded() converts thrown errors and passes results through', async () => {

@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { MAX_LIST_ENTRIES } from '../storage/limits.ts';
 import { baseName, isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
-import { VaultError } from '../storage/types.ts';
+import { failedEntryMessage, VaultError } from '../storage/types.ts';
 import { parseCanvas, rewriteFileNodes, serializeCanvas } from '../vault/canvas.ts';
 import { newTargetText, rewriteLinks, type TargetRewrite } from '../vault/link-rewrite.ts';
 import type { LinkRef } from '../vault/note-parse.ts';
@@ -233,9 +233,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
                 linksUpdated.push({ path: actualPath, count: targetRewrites.length });
               } catch (error) {
                 if (error instanceof VaultError) {
-                  const message =
-                    error.code === 'CONFLICT' ? `${error.code}: ${error.message}` : error.message;
-                  failed.push({ path: actualPath, error: message });
+                  failed.push({ path: actualPath, error: failedEntryMessage(error) });
                 } else {
                   throw error;
                 }
@@ -262,9 +260,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
               }
             } catch (error) {
               if (error instanceof VaultError) {
-                const message =
-                  error.code === 'CONFLICT' ? `${error.code}: ${error.message}` : error.message;
-                failed.push({ path: actualCanvasPath, error: message });
+                failed.push({ path: actualCanvasPath, error: failedEntryMessage(error) });
               } else {
                 throw error;
               }

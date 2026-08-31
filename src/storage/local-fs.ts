@@ -44,6 +44,7 @@ import {
   type EditResult,
   type Entry,
   type FmUpdate,
+  failedEntryMessage,
   type ListOpts,
   type Match,
   type MutateOpts,
@@ -403,9 +404,10 @@ export class LocalFSAdapter implements StorageAdapter {
         result.updated.push(p);
       } catch (error) {
         if (error instanceof VaultError) {
-          const message =
-            error.code === 'CONFLICT' ? `${error.code}: ${error.message}` : error.message;
-          result.failed.push({ path: normalizedOrRaw(update.path), error: message });
+          result.failed.push({
+            path: normalizedOrRaw(update.path),
+            error: failedEntryMessage(error),
+          });
         } else {
           throw error;
         }

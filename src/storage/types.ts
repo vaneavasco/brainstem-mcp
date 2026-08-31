@@ -22,6 +22,13 @@ export class VaultError extends Error {
   }
 }
 
+/** Message for a per-item `failed[]` entry: CONFLICT keeps its code prefix (the caller needs the
+ *  re-read-and-retry advice), every other code stays bare. The one rule shared by
+ *  batchFrontmatterUpdate and vault_move's rewrite loops. */
+export function failedEntryMessage(error: VaultError): string {
+  return error.code === 'CONFLICT' ? `${error.code}: ${error.message}` : error.message;
+}
+
 export interface NoteMeta {
   size: number;
   modifiedAt: string;
