@@ -181,3 +181,14 @@ describe('compileSafePattern — linear-time guarantee', () => {
     expect(matcher.test('a'.repeat(MAX_SUBJECT_CHARS + 1))).toBe(false);
   });
 });
+
+describe('subject cap is counted in code points', () => {
+  it('accepts an astral-heavy subject whose UTF-16 length exceeds the cap', () => {
+    const matcher = compileSafePattern('.*');
+    // 2×cap UTF-16 units, exactly cap code points — must be within the cap.
+    expect(matcher.test('😀'.repeat(MAX_SUBJECT_CHARS))).toBe(true);
+    expect(matcher.test('😀'.repeat(MAX_SUBJECT_CHARS + 1))).toBe(false);
+    expect(matcher.test('a'.repeat(MAX_SUBJECT_CHARS))).toBe(true);
+    expect(matcher.test('a'.repeat(MAX_SUBJECT_CHARS + 1))).toBe(false);
+  });
+});

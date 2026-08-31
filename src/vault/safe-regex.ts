@@ -22,6 +22,10 @@ import { VaultError } from '../storage/types.ts';
  * Matching is case-insensitive: a subject character matches when any of its case variants is in
  * the pattern's set, with negation applied afterwards, so `[^A-Z]` rejects 'a' exactly as
  * `/^[^A-Z]$/i` does.
+ *
+ * `.` and every character set consume one code point, so an astral character (e.g. an emoji)
+ * counts as a single character — a deliberate divergence from JavaScript's non-`u` `RegExp`,
+ * which sees two surrogate halves.
  */
 
 /** Longest accepted pattern; mirrors `MAX_SEARCH_PATTERN_CHARS` for ripgrep-backed search. */
@@ -31,7 +35,9 @@ export const MAX_REPEAT = 100;
 /** Compile-time ceiling on the NFA; counted repetition is expanded, so this is what stops a short
  *  pattern such as `((a{100}){100}){100}` from building a million states. */
 export const MAX_NFA_STATES = 5000;
-/** Subjects longer than this never match — a query value that big is not a regex target. */
+/** Subjects longer than this never match — a query value that big is not a regex target.
+ *  Counted in Unicode code points, the unit the matcher consumes (an astral character counts
+ *  once, not twice). */
 export const MAX_SUBJECT_CHARS = 2048;
 
 function invalid(message: string): VaultError {
@@ -529,11 +535,18 @@ export function compileSafePattern(pattern: string): SafeMatcher {
   }
 
   function test(subject: string): boolean {
-    if (subject.length > MAX_SUBJECT_CHARS) return false;
+    // Cheap pre-reject: even all-astral (2 UTF-16 units per code point), a string this long has
+    // more code points than the cap.
+    if (subject.length > MAX_SUBJECT_CHARS * 2) return false;
     generation += 1;
     let current: number[] = [];
     addState(current, generation, start);
+    let codePoints = 0;
     for (const ch of subject) {
+      // The cap counts code points — the unit this loop consumes — so an astral-heavy subject
+      // is not rejected at half the advertised length.
+      codePoints += 1;
+      if (codePoints > MAX_SUBJECT_CHARS) return false;
       if (current.length === 0) return false;
       const variants = variantsOf(ch);
       generation += 1;
