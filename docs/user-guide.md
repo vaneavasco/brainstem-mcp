@@ -23,6 +23,68 @@ Two honest limits before anything else:
   A whole team means each person runs their own copy against their own vault —
   it is not a shared workspace with accounts and permissions.
 
+## Never used Obsidian? The idea in five minutes
+
+Skip this if you already live in Obsidian. If you don't, this is the mental
+model that makes everything below click.
+
+**A vault is just a folder of text files.** Every note is a small document —
+readable in any app, on any computer, forever. There is no company database
+holding your notes hostage: if you stopped using Obsidian tomorrow, the files
+would still be there, still readable. That's the foundation everything else
+stands on, and it's why Claude editing them is low-risk — they're *files*,
+and you can always look at them.
+
+**The magic is links, not folders.** Inside any note you can write
+`[[Brief Instagram]]` and it becomes a link to that note. Obsidian also shows
+you the reverse — every note that links *to* the one you're reading
+("backlinks"). Do this consistently and your notes stop being a pile of
+documents and become a web: open a campaign and see every meeting where it
+was discussed, every post that belongs to it, every decision that shaped it.
+People call this a "second brain" — knowledge that compounds instead of
+getting lost in a chat history or a dozen Google Docs.
+
+**A few simple conventions organize everything:**
+
+| Convention | What it looks like | What it's for |
+|---|---|---|
+| Folders | `Marketing/Campaigns/` | Broad buckets — where a note lives |
+| Links | `[[September launch]]` | Relationships — what a note is connected to |
+| Tags | `#marketing/q3` | Cross-cutting labels; they nest, so `#marketing` finds all of them |
+| Frontmatter | `status: draft`, `budget: 5000` at the top of a note | Structured fields — turns notes into rows you can filter and count |
+| Daily notes | one note named `2026-08-31` per day | A landing page for each day: meetings, decisions, loose thoughts |
+| Templates | a note full of `{{placeholders}}` | Recurring documents that always come out in the same shape |
+
+Here's a complete campaign note — this is *all* there is to it, a text file:
+
+```markdown
+---
+status: active
+owner: Ana
+budget: 5000
+channel: [email, social]
+tags: [marketing/q3]
+---
+# September launch
+
+Goal: 500 installs in the first month. Brief: [[Brief Instagram Q3]].
+
+## Actions
+- [ ] Approve budget
+- [ ] Schedule first three posts
+```
+
+**So why does Claude need access?** Because the honest weakness of this whole
+system is *discipline*. It works beautifully if every meeting gets filed,
+linked and tagged — and in real life, nobody keeps that up. That's the
+librarian work Claude takes over: you talk, it files. And because your
+structure is machine-readable — links, tags, fields — Claude doesn't just
+search text like a dumb search box. It can answer "which active campaigns
+are over budget?" (fields), "what's connected to this launch?" (links),
+"show me everything Q3" (tags), and when you rename a note it repairs every
+link pointing at it. You get the compounding value of a well-kept vault
+without having to become the kind of person who keeps one.
+
 ## Why you'd want this
 
 Without brainstem, Claude is a brilliant colleague with amnesia: every chat
