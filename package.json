@@ -1,6 +1,6 @@
 {
   "name": "brainstem-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Single-user, self-hosted MCP vault server for Claude (Obsidian vault, Docker, Cloudflare tunnel)",
   "directories": {
     "doc": "docs"

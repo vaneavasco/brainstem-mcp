@@ -4,7 +4,7 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] — 2026-08-31
 
 ### Added
 
@@ -154,6 +154,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.3.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vaneavasco/brainstem-mcp/releases/tag/v0.1.0
