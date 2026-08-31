@@ -17,43 +17,9 @@ import type { VaultGraph } from '../vault/graph.ts';
 import type { Cond, Query } from '../vault/query.ts';
 import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
+import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
-
-// Mirrors CondSchema/TagsFilterSchema in tools/query.ts (same shape, duplicated on purpose per
-// the Task 9 brief rather than importing values across tool modules — search.ts already imports
-// the pure vault/query.ts leaf module for Cond/Query/evaluateQuery, and keeping the Zod schemas
-// local avoids a second, needless cross-tool-module dependency for one small shape).
-const SearchCondSchema: z.ZodType<Cond> = z.object({
-  field: z.string().min(1),
-  op: z
-    .enum([
-      'eq',
-      'neq',
-      'contains',
-      'startsWith',
-      'exists',
-      'gt',
-      'gte',
-      'lt',
-      'lte',
-      'in',
-      'regex',
-    ])
-    .describe(
-      'Comparison operator. "regex" is a FULL match — the pattern is implicitly anchored to the ' +
-        'whole value — over a reduced, linear-time syntax: literals, ".", "[classes]", "* + ? ' +
-        '{m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", backreferences, ' +
-        'lookarounds or named groups; max 200 characters.',
-    ),
-  value: z.unknown().optional(),
-});
-
-const SearchTagsSchema: z.ZodType<NonNullable<Query['tags']>> = z.object({
-  any: z.array(z.string()).optional(),
-  all: z.array(z.string()).optional(),
-  none: z.array(z.string()).optional(),
-});
 
 interface CandidateOpts {
   tags?: Query['tags'];
@@ -239,11 +205,11 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         limit: z.number().int().min(1).max(MAX_SEARCH_RESULTS).optional(),
         caseSensitive: z.boolean().optional(),
         pathPrefix: z.string().optional().describe('Folder to search in, e.g. "01-projects".'),
-        tags: SearchTagsSchema.optional().describe(
+        tags: TagsFilterSchema.optional().describe(
           'Restrict to notes carrying these tags before searching text (nested-aware).',
         ),
         where: z
-          .array(SearchCondSchema)
+          .array(CondSchema)
           .optional()
           .describe('Restrict to notes matching these conditions before searching text.'),
         glob: z

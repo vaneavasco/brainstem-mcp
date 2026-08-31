@@ -4,33 +4,13 @@ import { MAX_QUERY_ROWS, MAX_RECENT } from '../storage/limits.ts';
 import type { Cond, Query } from '../vault/query.ts';
 import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
+import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 
-const OpSchema = z
-  .enum(['eq', 'neq', 'contains', 'startsWith', 'exists', 'gt', 'gte', 'lt', 'lte', 'in', 'regex'])
-  .describe(
-    'Comparison operator. "regex" is a FULL match — the pattern is implicitly anchored to the ' +
-      'whole value — over a reduced, linear-time syntax: literals, ".", "[classes]", "* + ? ' +
-      '{m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", backreferences, ' +
-      'lookarounds or named groups; max 200 characters.',
-  );
-
-const CondSchema = z.object({
-  field: z.string().min(1),
-  op: OpSchema,
-  value: z.unknown().optional(),
-});
-
 const SortSchema = z.object({ field: z.string().min(1), order: z.enum(['asc', 'desc']) });
-
-const TagsFilterSchema = z.object({
-  any: z.array(z.string()).optional(),
-  all: z.array(z.string()).optional(),
-  none: z.array(z.string()).optional(),
-});
 
 /**
  * Typed `z.ZodType<Query>` (not just `z.object({...})`) so this schema's inferred output is
