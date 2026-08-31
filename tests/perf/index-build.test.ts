@@ -16,9 +16,9 @@ import { createLocalRuntime, type VaultRuntime } from '../../src/vault/runtime.t
  * Measured in isolation: ~1.1s build, ~2ms query. Run alongside the other 60+ test files
  * (`npx vitest run`, the default full-suite command), CPU contention from every other file's
  * parallel worker pushed the build to ~5.1s on a 16-core box with nothing else running on it —
- * so the bounds below carry real headroom over the isolated numbers rather than sitting right at
- * them, to keep this a signal for an actual regression rather than a coin flip on scheduler
- * noise from unrelated tests sharing the machine.
+ * so the 15s bound sits ~3× above the worst measured full-suite time: headroom for scheduler
+ * noise from unrelated tests sharing the machine, not a target. The seeded vault itself is
+ * deterministic (seeded PRNG below), so run-to-run variance comes only from the machine.
  */
 
 const NOTE_COUNT = 5_000;
@@ -28,18 +28,32 @@ function noteName(i: number): string {
   return `note-${String(i).padStart(5, '0')}`;
 }
 
-/** Two "random" links and two "random" tags per note — deterministic scatter is enough to
- *  exercise realistic backlink/tag fan-out without making the guard's timing depend on the RNG. */
+/** Deterministic PRNG (mulberry32) so the seeded vault is identical on every run — the guard's
+ *  timing then varies only with the machine, never with the RNG. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Two seeded-PRNG links and two seeded-PRNG tags per note — deterministic scatter that still
+ *  exercises realistic backlink/tag fan-out. */
 async function seedVault(dir: string): Promise<void> {
+  const rand = mulberry32(0x5eed);
   const CHUNK = 200;
   for (let start = 0; start < NOTE_COUNT; start += CHUNK) {
     const end = Math.min(start + CHUNK, NOTE_COUNT);
     const writes: Promise<void>[] = [];
     for (let i = start; i < end; i++) {
-      const link1 = noteName(Math.floor(Math.random() * NOTE_COUNT));
-      const link2 = noteName(Math.floor(Math.random() * NOTE_COUNT));
-      const tag1 = TAG_POOL[Math.floor(Math.random() * TAG_POOL.length)];
-      const tag2 = TAG_POOL[Math.floor(Math.random() * TAG_POOL.length)];
+      const link1 = noteName(Math.floor(rand() * NOTE_COUNT));
+      const link2 = noteName(Math.floor(rand() * NOTE_COUNT));
+      const tag1 = TAG_POOL[Math.floor(rand() * TAG_POOL.length)];
+      const tag2 = TAG_POOL[Math.floor(rand() * TAG_POOL.length)];
       const content =
         `---\ntags:\n  - ${tag1}\n  - ${tag2}\n---\n\n` +
         `# ${noteName(i)}\n\nLinks to [[${link1}]] and [[${link2}]].\n`;
