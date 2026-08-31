@@ -154,6 +154,9 @@ function resolveSegments(
  * treating the *whole* `headingPath` as one literal heading name, but only once the nested
  * ("A" then child "B") interpretation has already failed — so when both a real nested path and a
  * same-written literal heading exist, the nested one wins.
+ *
+ * Two headings producing the identical path (same-text siblings, or same-text ancestors) cannot
+ * be told apart by path — every lookup reaches the first in file order.
  */
 export function findSection(content: string, headingPath: string): SectionRange | null {
   const headings = extractHeadings(content);
@@ -181,17 +184,24 @@ export function sliceSection(content: string, range: SectionRange): string {
 }
 
 /** All heading paths in `content`, in file order, in the same "A", "A > B" syntax `findSection`
- *  accepts — for building NOT_FOUND messages that list what headings actually exist. */
+ *  accepts — for building NOT_FOUND messages that list what headings actually exist. Identical
+ *  paths (same-text siblings, or same-text ancestors) are listed once — only the first
+ *  occurrence is addressable by path anyway (see `findSection`). */
 export function listHeadingPaths(content: string): string[] {
   const headings = extractHeadings(content);
   const stack: HeadingHit[] = [];
   const paths: string[] = [];
+  const seen = new Set<string>();
   for (const h of headings) {
     while (stack.length > 0 && (stack[stack.length - 1] as HeadingHit).level >= h.level) {
       stack.pop();
     }
     stack.push(h);
-    paths.push(stack.map((s) => s.text).join(' > '));
+    const path = stack.map((s) => s.text).join(' > ');
+    if (!seen.has(path)) {
+      seen.add(path);
+      paths.push(path);
+    }
   }
   return paths;
 }

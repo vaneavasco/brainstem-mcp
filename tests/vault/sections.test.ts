@@ -122,7 +122,8 @@ describe('findSection', () => {
     const content = `${['# A', 'alpha-one', '', '# A', 'alpha-two', '', '## B', 'b-content'].join(
       '\n',
     )}\n`;
-    expect(listHeadingPaths(content)).toEqual(['A', 'A', 'A > B']);
+    // The identical "A" path is listed once (dedupe), but BOTH roots stay searchable below.
+    expect(listHeadingPaths(content)).toEqual(['A', 'A > B']);
     const range = findSection(content, 'A > B');
     expect(range).toEqual({ startLine: 7, endLine: 9, level: 2, heading: 'B' });
   });
@@ -340,5 +341,13 @@ describe('CRLF handling', () => {
   it('round-trips a whole CRLF file, byte for byte, via slice of its sole top-level heading', () => {
     const range = findSection(crlfDoc, 'Head') as SectionRange;
     expect(sliceSection(crlfDoc, range)).toBe(crlfDoc);
+  });
+});
+
+describe('listHeadingPaths — identical sibling paths', () => {
+  it('lists an identical sibling heading path once; the first occurrence is the reachable one', () => {
+    const content = '# A\n\n## Tasks\none\n\n## Tasks\ntwo\n';
+    expect(listHeadingPaths(content)).toEqual(['A', 'A > Tasks']);
+    expect(findSection(content, 'A > Tasks')?.startLine).toBe(3);
   });
 });
