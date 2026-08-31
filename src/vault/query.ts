@@ -4,6 +4,7 @@ import { VaultError } from '../storage/types.ts';
 import type { IndexEntry } from './frontmatter-index.ts';
 import type { VaultGraph } from './graph.ts';
 import { compileSafePattern, type SafeMatcher } from './safe-regex.ts';
+import { isTagOrDescendant } from './tags.ts';
 
 export type Op =
   | 'eq'
@@ -261,14 +262,11 @@ function matchesPathPrefix(path: string, prefix?: string): boolean {
   return path.startsWith(p);
 }
 
-/** A tag filter value matches an entry's tag either exactly or as an ancestor of a nested tag
- *  ("proj" matches both "proj" and "proj/x"), case-insensitively. */
+/** A tag filter value matches an entry's tag either exactly or as an ancestor of a nested tag,
+ *  case-insensitively — the shared rule in vault/tags.ts. */
 function tagFilterMatches(entryTags: string[], filter: string): boolean {
   const f = filter.toLowerCase();
-  return entryTags.some((t) => {
-    const tl = t.toLowerCase();
-    return tl === f || tl.startsWith(`${f}/`);
-  });
+  return entryTags.some((t) => isTagOrDescendant(t.toLowerCase(), f));
 }
 
 function passesTagFilters(entryTags: string[], tags: Query['tags']): boolean {
