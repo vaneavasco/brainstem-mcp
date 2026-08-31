@@ -55,6 +55,12 @@ export const BINARY_MIME_ALLOWLIST: ReadonlyMap<string, readonly string[]> = new
   ['video/webm', ['.webm']],
 ]);
 
+/** Windows one line of match/context text so a single long line cannot blow the result-size cap.
+ *  The one clamp shared by adapter search matches and the graph tools' context lines. */
+export function clampMatchText(text: string): string {
+  return text.length > MAX_MATCH_TEXT_CHARS ? `${text.slice(0, MAX_MATCH_TEXT_CHARS)}…` : text;
+}
+
 export function assertWithinSize(
   bytes: number,
   what: string,

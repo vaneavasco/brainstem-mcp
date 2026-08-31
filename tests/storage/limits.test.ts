@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   assertBatchSize,
   assertWithinSize,
+  clampMatchText,
   extensionAllowedFor,
   MAX_BATCH,
   MAX_BINARY_BYTES,
   MAX_FILE_BYTES,
+  MAX_MATCH_TEXT_CHARS,
 } from '../../src/storage/limits.ts';
 import { VaultError } from '../../src/storage/types.ts';
 
@@ -76,5 +78,11 @@ describe('limits', () => {
 
   it('MAX_BINARY_BYTES defaults to 8 MiB', () => {
     expect(MAX_BINARY_BYTES).toBe(8 * 1024 * 1024);
+  });
+
+  it('windows long match text with an ellipsis', () => {
+    const exact = 'x'.repeat(MAX_MATCH_TEXT_CHARS);
+    expect(clampMatchText(exact)).toBe(exact);
+    expect(clampMatchText(`${exact}yyyyy`)).toBe(`${exact}…`);
   });
 });

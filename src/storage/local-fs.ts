@@ -17,9 +17,9 @@ import {
   assertBatchSize,
   assertWithinSize,
   BINARY_MIME_ALLOWLIST,
+  clampMatchText,
   extensionAllowedFor,
   MAX_BINARY_BYTES,
-  MAX_MATCH_TEXT_CHARS,
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
   MAX_SEARCH_RESULTS,
@@ -87,11 +87,6 @@ function isEnoent(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && (error as { code?: string }).code === 'ENOENT'
   );
-}
-
-/** Windows a search match's line text so one very long line cannot blow the result-size cap. */
-function windowMatchText(text: string): string {
-  return text.length > MAX_MATCH_TEXT_CHARS ? `${text.slice(0, MAX_MATCH_TEXT_CHARS)}…` : text;
 }
 
 /** True when any path segment starts with '.' — mirrors the dot-entry skip in list()'s walk, so
@@ -639,7 +634,7 @@ export class LocalFSAdapter implements StorageAdapter {
         const line = lines[i] ?? '';
         const haystack = caseSensitive ? line : line.toLowerCase();
         if (haystack.includes(needle))
-          out.push({ path: candidate, line: i + 1, text: windowMatchText(line.trimEnd()) });
+          out.push({ path: candidate, line: i + 1, text: clampMatchText(line.trimEnd()) });
       }
       if (out.length >= limit) break;
     }
@@ -732,7 +727,7 @@ export class LocalFSAdapter implements StorageAdapter {
         out.push({
           path: this.rel(event.data.path.text),
           line: event.data.line_number ?? 0,
-          text: windowMatchText(text),
+          text: clampMatchText(text),
         });
         if (out.length >= limit) {
           killedForLimit = true;
