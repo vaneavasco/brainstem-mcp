@@ -21,6 +21,17 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   return { promise, resolve };
 }
 
+/** Polls until `cond()` holds (or the deadline passes — the caller's assertion then reports the
+ *  actual state). For "the call has reached X" checks, which a fixed sleep under-waits on a
+ *  loaded CI runner: the in-flight tool call crosses a real HTTP round-trip plus planning I/O
+ *  before it can hit the instrumented adapter method. */
+async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 let h: Harness;
 
 beforeEach(async () => {
@@ -338,7 +349,7 @@ describe('vault_move / vault_delete', () => {
     }) as typeof originalMove;
 
     const movePromise = h.call('vault_move', { from: 'projF', to: 'projF2' });
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => events.length > 0);
     expect(events).toEqual(['move-start']); // move is holding the lock, waiting on `gate`
 
     const writePromise = h.call('vault_write', { path: 'projF/plan.md', content: 'concurrent\n' });
@@ -377,7 +388,7 @@ describe('vault_move / vault_delete', () => {
     }) as typeof originalSoftDelete;
 
     const deletePromise = h.call('vault_delete', { path: 'projG', confirm: true });
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() => events.length > 0);
     expect(events).toEqual(['delete-start']);
 
     const writePromise = h.call('vault_write', { path: 'projG/plan.md', content: 'concurrent\n' });
