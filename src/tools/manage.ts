@@ -1,14 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { MAX_LIST_ENTRIES } from '../storage/limits.ts';
-import { baseName, isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
-import { failedEntryMessage, VaultError } from '../storage/types.ts';
-import { parseCanvas, rewriteFileNodes, serializeCanvas } from '../vault/canvas.ts';
-import { newTargetText, rewriteLinks, type TargetRewrite } from '../vault/link-rewrite.ts';
-import type { LinkRef } from '../vault/note-parse.ts';
+import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
-import { applyNote, locked, type ToolContext, touch } from './register.ts';
+import { applyLinkRewrites, planMove } from './move.ts';
+import { locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
@@ -120,154 +117,20 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
       guarded(tc.log, async () => {
         const src = normalizeVaultPath(from);
         const dst = normalizeVaultPath(to);
-        const isNote = index.get(src) !== undefined;
-        const isAsset = !isNote && index.assets().has(src);
-        // Folder contents, tagged by kind — empty when src is a single file.
-        const under = entriesUnder(src);
-        const effectiveUpdateLinks = updateLinks ?? (isNote || isAsset || under.length > 0);
-
-        // The set of paths this move renames, computed from the pre-move index (a single note or
-        // asset, or every note/asset currently under a moved folder). Used to keep the index
-        // coherent below regardless of updateLinks, and — when link rewriting is enabled — to
-        // resolve backlinks and build the canvas file-node mapping.
-        const moved: { oldPath: string; newPath: string; kind: 'note' | 'asset' }[] =
-          isNote || isAsset
-            ? [{ oldPath: src, newPath: dst, kind: isNote ? 'note' : 'asset' }]
-            : under.map((entry) => ({
-                oldPath: entry.path,
-                newPath: `${dst}/${entry.path.slice(src.length + 1)}`,
-                kind: entry.kind,
-              }));
-
-        // Every link in the vault resolving to a moved path, collected from the graph *before*
-        // the move (so this is O(backlinks), not O(vault)) — excludes same-file anchors
-        // (`[[#x]]`, target === ''), which never carry a path and so are never rewritten. A moved
-        // note that links to *another* moved note lands here too (source === one of `moved`'s old
-        // paths); it is written back at its own new path once the loop below remaps it.
-        const rewritesBySource = new Map<string, { link: LinkRef; newPath: string }[]>();
-        if (effectiveUpdateLinks) {
-          const graph = tc.runtime.graph;
-          for (const m of moved) {
-            for (const bl of graph.backlinks(m.oldPath)) {
-              if (bl.link.target === '') continue;
-              const list = rewritesBySource.get(bl.source) ?? [];
-              list.push({ link: bl.link, newPath: m.newPath });
-              rewritesBySource.set(bl.source, list);
-            }
-          }
-        }
-
-        const movedNewPathByOld = new Map(moved.map((m) => [m.oldPath, m.newPath]));
-        const movedLower = new Map(moved.map((m) => [m.oldPath.toLowerCase(), m.newPath]));
-
-        const canvasPaths = effectiveUpdateLinks
-          ? (await adapter.list('', { depth: Number.POSITIVE_INFINITY, glob: '**/*.canvas' })).map(
-              (e) => e.path,
-            )
-          : [];
-
-        // A folder move must also lock everything currently known to live inside it (see
-        // entriesUnder's doc comment) *and* the new path each of those files ends up at — a moved
-        // note that links to another moved note is rewritten at its new path, which is a different
-        // lock key from its old one — plus every source note this call may rewrite and every
-        // canvas it may touch. Deduped because a canvas inside a moved folder is in both lists.
-        const lockPaths = [
-          ...new Set([
-            src,
-            dst,
-            ...moved.map((m) => m.oldPath),
-            ...moved.map((m) => m.newPath),
-            ...rewritesBySource.keys(),
-            ...canvasPaths,
-          ]),
-        ];
-        return locked(tc, lockPaths, async () => {
+        // entriesUnder: folder contents, tagged by kind — empty when src is a single file.
+        const plan = await planMove(tc, src, dst, entriesUnder(src), updateLinks);
+        return locked(tc, plan.lockPaths, async () => {
           await adapter.move(src, dst, { expectedHash });
 
           // Keep the index coherent for a single note/asset or a whole folder — unconditionally,
           // independent of link rewriting.
-          for (const m of moved) {
+          for (const m of plan.moved) {
             if (m.kind === 'note') index.rename(m.oldPath, m.newPath);
             else index.renameAsset(m.oldPath, m.newPath);
           }
-          if (isNote || isAsset) await touch(tc, dst);
+          if (plan.singleFile) await touch(tc, dst);
 
-          const linksUpdated: { path: string; count: number }[] = [];
-          const failed: { path: string; error: string }[] = [];
-
-          if (rewritesBySource.size > 0) {
-            const graph = tc.runtime.graph;
-            // Memoized per new path: is the moved note/asset's bare basename still the only one
-            // in the vault after the move? (Reuses VaultGraph's own resolution rules instead of
-            // re-implementing them.)
-            const basenameUniqueCache = new Map<string, boolean>();
-            const isBasenameUnique = (newPath: string): boolean => {
-              const cached = basenameUniqueCache.get(newPath);
-              if (cached !== undefined) return cached;
-              const bare = isMarkdownPath(newPath)
-                ? baseName(newPath.slice(0, -3))
-                : baseName(newPath);
-              const unique = graph.resolve(bare, newPath).status === 'resolved';
-              basenameUniqueCache.set(newPath, unique);
-              return unique;
-            };
-
-            for (const [source, rewrites] of rewritesBySource) {
-              // A moved note that itself links to another moved note is written at its *new*
-              // path — by now it has already moved.
-              const actualPath = movedNewPathByOld.get(source) ?? source;
-              try {
-                const expectedSourceHash = index.get(actualPath)?.hash;
-                const targetRewrites: TargetRewrite[] = rewrites.map(({ link, newPath }) => ({
-                  link,
-                  newTarget: newTargetText(link, newPath, {
-                    fromPath: actualPath,
-                    basenameUnique: isBasenameUnique(newPath),
-                  }),
-                }));
-                const note = await adapter.read(actualPath);
-                const newContent = rewriteLinks(note.content, targetRewrites);
-                if (newContent === note.content) continue;
-                const written = await adapter.write(actualPath, newContent, {
-                  expectedHash: expectedSourceHash,
-                });
-                applyNote(tc, written);
-                linksUpdated.push({ path: actualPath, count: targetRewrites.length });
-              } catch (error) {
-                if (error instanceof VaultError) {
-                  failed.push({ path: actualPath, error: failedEntryMessage(error) });
-                } else {
-                  throw error;
-                }
-              }
-            }
-          }
-
-          for (const canvasPath of canvasPaths) {
-            // A moved .canvas file itself is listed at its old path (collected before the move).
-            const actualCanvasPath = movedNewPathByOld.get(canvasPath) ?? canvasPath;
-            // Same contract as the note loop above: one canvas the server cannot parse (an empty
-            // object, a format from a newer Obsidian) is reported in failed[] — it must never
-            // abort a move that has already renamed files and rewritten notes.
-            try {
-              const file = await adapter.read(actualCanvasPath);
-              const canvas = parseCanvas(file.content);
-              const { canvas: rewritten, count } = rewriteFileNodes(canvas, movedLower);
-              // file.hash is the hash of exactly the bytes parsed above, read inside the lock:
-              // a concurrent edit that slipped in fails with CONFLICT instead of being clobbered.
-              if (count > 0) {
-                await adapter.write(actualCanvasPath, serializeCanvas(rewritten), {
-                  expectedHash: file.hash,
-                });
-              }
-            } catch (error) {
-              if (error instanceof VaultError) {
-                failed.push({ path: actualCanvasPath, error: failedEntryMessage(error) });
-              } else {
-                throw error;
-              }
-            }
-          }
+          const { linksUpdated, failed } = await applyLinkRewrites(tc, plan);
 
           // null for a moved folder; a real hash for a moved file.
           const hash = await adapter.hashOf(dst);
