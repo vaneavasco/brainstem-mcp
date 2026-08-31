@@ -214,7 +214,17 @@ export class LocalFSAdapter implements StorageAdapter {
   }
 
   protected toNote(p: string, bytes: Buffer, stat: Stats): Note {
-    const content = this.decodeText(p, bytes);
+    return this.noteFrom(p, this.decodeText(p, bytes), stat);
+  }
+
+  /** Builds a Note for text this adapter just wrote to `p` — fresh stat, no content re-read. */
+  private async noteForWritten(p: string, content: string): Promise<Note> {
+    const stat = await this.statOrNull(this.abs(p));
+    if (!stat) throw new VaultError('IO', `Failed to stat ${p} after writing it.`);
+    return this.noteFrom(p, content, stat);
+  }
+
+  private noteFrom(p: string, content: string, stat: Stats): Note {
     let frontmatter: Record<string, unknown> = {};
     let body = content;
     let hasFrontmatter = false;
@@ -270,6 +280,11 @@ export class LocalFSAdapter implements StorageAdapter {
     const stat = await this.statOrNull(abs);
     if (!stat || stat.isDirectory()) return null;
     const bytes = await fs.readFile(abs);
+    return this.hashForBytes(p, bytes);
+  }
+
+  /** Same rule `hashOf` documents: decoded text when the bytes are valid UTF-8, raw bytes otherwise. */
+  private hashForBytes(p: string, bytes: Uint8Array): string {
     try {
       return sha256hex(this.decodeText(p, bytes));
     } catch {
@@ -294,7 +309,7 @@ export class LocalFSAdapter implements StorageAdapter {
     }
   }
 
-  async write(inputPath: string, content: string, opts: WriteOpts = {}): Promise<void> {
+  async write(inputPath: string, content: string, opts: WriteOpts = {}): Promise<Note> {
     const p = requireFilePath(inputPath);
     assertWithinSize(Buffer.byteLength(content, 'utf8'), 'Content');
     if (opts.expectedHash !== undefined) {
@@ -316,6 +331,7 @@ export class LocalFSAdapter implements StorageAdapter {
       assertWithinSize(Buffer.byteLength(finalContent, 'utf8'), 'Merged content');
     }
     await this.atomicWrite(p, Buffer.from(finalContent, 'utf8'));
+    return this.noteForWritten(p, finalContent);
   }
 
   async writeBinary(
@@ -323,7 +339,7 @@ export class LocalFSAdapter implements StorageAdapter {
     bytes: Uint8Array,
     mime: string,
     opts: MutateOpts = {},
-  ): Promise<void> {
+  ): Promise<string> {
     const p = requireFilePath(inputPath);
     if (!BINARY_MIME_ALLOWLIST.has(mime.toLowerCase())) {
       throw new VaultError(
@@ -342,6 +358,7 @@ export class LocalFSAdapter implements StorageAdapter {
       assertExpectedHash(p, await this.hashOf(p), opts.expectedHash);
     }
     await this.atomicWrite(p, bytes);
+    return this.hashForBytes(p, bytes);
   }
 
   async edit(
@@ -356,14 +373,19 @@ export class LocalFSAdapter implements StorageAdapter {
     }
     const { content, applied } = applyTextPatches(note.content, patches);
     const diff = unifiedDiff(note.path, note.content, content);
-    if (!dryRun) {
-      assertWithinSize(Buffer.byteLength(content, 'utf8'), 'Edited content');
-      await this.atomicWrite(note.path, Buffer.from(content, 'utf8'));
-    }
-    return { path: note.path, applied, diff, dryRun };
+    if (dryRun) return { path: note.path, applied, diff, dryRun, note };
+    assertWithinSize(Buffer.byteLength(content, 'utf8'), 'Edited content');
+    await this.atomicWrite(note.path, Buffer.from(content, 'utf8'));
+    return {
+      path: note.path,
+      applied,
+      diff,
+      dryRun,
+      note: await this.noteForWritten(note.path, content),
+    };
   }
 
-  async append(inputPath: string, content: string, opts: MutateOpts = {}): Promise<void> {
+  async append(inputPath: string, content: string, opts: MutateOpts = {}): Promise<Note> {
     const p = requireFilePath(inputPath);
     let existing = '';
     let currentHash: string | null = null;
@@ -382,11 +404,12 @@ export class LocalFSAdapter implements StorageAdapter {
     const next = `${existing}${separator}${content}${suffix}`;
     assertWithinSize(Buffer.byteLength(next, 'utf8'), 'Appended content');
     await this.atomicWrite(p, Buffer.from(next, 'utf8'));
+    return this.noteForWritten(p, next);
   }
 
   async batchFrontmatterUpdate(updates: FmUpdate[]): Promise<BatchResult> {
     assertBatchSize(updates.length);
-    const result: BatchResult = { updated: [], failed: [] };
+    const result: BatchResult = { updated: [], updatedNotes: [], failed: [] };
     for (const update of updates) {
       try {
         const p = requireFilePath(update.path);
@@ -402,6 +425,7 @@ export class LocalFSAdapter implements StorageAdapter {
         assertWithinSize(Buffer.byteLength(text, 'utf8'), 'Updated content');
         await this.atomicWrite(p, Buffer.from(text, 'utf8'));
         result.updated.push(p);
+        result.updatedNotes.push(await this.noteForWritten(p, text));
       } catch (error) {
         if (error instanceof VaultError) {
           result.failed.push({

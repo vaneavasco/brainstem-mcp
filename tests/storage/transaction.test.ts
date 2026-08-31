@@ -284,7 +284,7 @@ describe('runTransaction apply', () => {
     const paths = ['notes/a.md', 'notes/moved.md', 'notes/gone.md', 'notes/append.md'];
     const before = await snapshot(paths);
 
-    adapter.append = async (): Promise<void> => {
+    adapter.append = async (): Promise<never> => {
       throw new Error('disk on fire');
     };
 
@@ -318,7 +318,7 @@ describe('runTransaction apply', () => {
     await seed('a.md', 'A\n');
     await seed('b.md', 'B\n');
 
-    adapter.append = async (): Promise<void> => {
+    adapter.append = async (): Promise<never> => {
       throw new Error('disk on fire');
     };
     adapter.hardDelete = async (): Promise<void> => {
@@ -390,7 +390,7 @@ describe('runTransaction journal state', () => {
   it('marks a journal left after a successful rollback as rolled-back', async () => {
     await seed('a.md', 'A\n');
     await seed('b.md', 'B\n');
-    adapter.append = async (): Promise<void> => {
+    adapter.append = async (): Promise<never> => {
       throw new Error('disk on fire');
     };
     const rm = vi.spyOn(fs, 'rm').mockRejectedValue(new Error('EBUSY'));
@@ -419,7 +419,7 @@ describe('runTransaction journal state', () => {
   it('restores the original bytes of a path that was moved and then edited under its new name', async () => {
     await seed('a.md', 'original\n');
     const before = await snapshot(['a.md']);
-    adapter.append = async (): Promise<void> => {
+    adapter.append = async (): Promise<never> => {
       throw new Error('disk on fire');
     };
 

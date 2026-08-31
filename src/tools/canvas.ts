@@ -16,7 +16,7 @@ import {
 } from '../vault/canvas.ts';
 import { OVERWRITE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
-import { locked, type ToolContext } from './register.ts';
+import { applyNote, locked, type ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 function requireCanvasPath(input: string): string {
@@ -84,9 +84,14 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         const p = requireCanvasPath(path);
         return locked(tc, [p], async () => {
           const { canvas, node: added } = addNode(await readCanvasOrEmpty(p), node);
-          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
-          const hash = (await adapter.read(p)).hash;
-          return okJson({ path: p, node: added, hash }, `Added node ${added.id} to ${p}.`);
+          const written = await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          // Also registers a freshly created canvas as an asset right away, so `[[x.canvas]]`
+          // resolves without waiting for the filesystem watcher.
+          applyNote(tc, written);
+          return okJson(
+            { path: p, node: added, hash: written.hash },
+            `Added node ${added.id} to ${p}.`,
+          );
         });
       }),
   );
@@ -115,9 +120,12 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         return locked(tc, [p], async () => {
           const current = parseCanvas((await adapter.read(p)).content);
           const { canvas, edge: added } = addEdge(current, edge);
-          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
-          const hash = (await adapter.read(p)).hash;
-          return okJson({ path: p, edge: added, hash }, `Added edge ${added.id} to ${p}.`);
+          const written = await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          applyNote(tc, written);
+          return okJson(
+            { path: p, edge: added, hash: written.hash },
+            `Added edge ${added.id} to ${p}.`,
+          );
         });
       }),
   );
@@ -147,9 +155,9 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         return locked(tc, [p], async () => {
           const current = parseCanvas((await adapter.read(p)).content);
           const { canvas, node } = updateNode(current, id, patch);
-          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
-          const hash = (await adapter.read(p)).hash;
-          return okJson({ path: p, node, hash }, `Updated node ${id} in ${p}.`);
+          const written = await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          applyNote(tc, written);
+          return okJson({ path: p, node, hash: written.hash }, `Updated node ${id} in ${p}.`);
         });
       }),
   );
@@ -188,10 +196,10 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
             nodeIds ?? [],
             edgeIds ?? [],
           );
-          await adapter.write(p, serializeCanvas(canvas), { expectedHash });
-          const hash = (await adapter.read(p)).hash;
+          const written = await adapter.write(p, serializeCanvas(canvas), { expectedHash });
+          applyNote(tc, written);
           return okJson(
-            { path: p, removedNodes, removedEdges, missing, hash },
+            { path: p, removedNodes, removedEdges, missing, hash: written.hash },
             `Removed ${removedNodes.length} node(s) and ${removedEdges.length} edge(s) from ${p}.`,
           );
         });

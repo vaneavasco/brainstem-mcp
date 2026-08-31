@@ -78,6 +78,9 @@ export interface EditResult {
   applied: number;
   diff: string;
   dryRun: boolean;
+  /** Post-edit note (for dryRun: the unchanged pre-edit note) — lets callers reuse the content
+   *  and hash without re-reading the file they just wrote. */
+  note: Note;
 }
 
 export interface FmUpdate {
@@ -95,6 +98,8 @@ export interface BatchReadResult {
 
 export interface BatchResult {
   updated: string[];
+  /** Post-write notes, aligned 1:1 with `updated` — same no-re-read purpose as EditResult.note. */
+  updatedNotes: Note[];
   failed: { path: string; error: string }[];
 }
 
@@ -133,15 +138,18 @@ export interface Caps {
 export interface StorageAdapter {
   read(path: string): Promise<Note>;
   batchRead(paths: string[]): Promise<BatchReadResult>;
-  write(path: string, content: string, opts?: WriteOpts): Promise<void>;
-  writeBinary(path: string, bytes: Uint8Array, mime: string, opts?: MutateOpts): Promise<void>;
+  /** Resolves to the post-write note (fresh stat, content from memory — no re-read). */
+  write(path: string, content: string, opts?: WriteOpts): Promise<Note>;
+  /** Resolves to the post-write content hash (same text-or-raw-bytes rule as `hashOf`). */
+  writeBinary(path: string, bytes: Uint8Array, mime: string, opts?: MutateOpts): Promise<string>;
   edit(
     path: string,
     patches: TextPatch[],
     dryRun?: boolean,
     opts?: MutateOpts,
   ): Promise<EditResult>;
-  append(path: string, content: string, opts?: MutateOpts): Promise<void>;
+  /** Resolves to the post-append note, like `write`. */
+  append(path: string, content: string, opts?: MutateOpts): Promise<Note>;
   batchFrontmatterUpdate(updates: FmUpdate[]): Promise<BatchResult>;
   list(prefix: string, opts?: ListOpts): Promise<Entry[]>;
   move(from: string, to: string, opts?: MutateOpts): Promise<void>;

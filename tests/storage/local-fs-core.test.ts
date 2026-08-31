@@ -662,3 +662,34 @@ describe.skipIf(!hasRipgrep())('search: regex (real ripgrep binary)', () => {
     expect(r.map((m) => m.path)).toEqual(['ok2.md']);
   });
 });
+
+describe('post-write results', () => {
+  it('write/append/edit return the post-write note; writeBinary returns the hash', async () => {
+    const written = await vault.write('pw.md', '---\nk: 1\n---\nbody\n');
+    expect(written.hash).toBe(await vault.hashOf('pw.md'));
+    expect(written.frontmatter).toEqual({ k: 1 });
+    expect(written.meta.size).toBeGreaterThan(0);
+
+    const appended = await vault.append('pw.md', 'more');
+    expect(appended.hash).toBe(await vault.hashOf('pw.md'));
+    expect(appended.content.endsWith('more\n')).toBe(true);
+
+    const edited = await vault.edit('pw.md', [{ find: 'more', replace: 'MORE' }]);
+    expect(edited.note.hash).toBe(await vault.hashOf('pw.md'));
+
+    const dry = await vault.edit('pw.md', [{ find: 'MORE', replace: 'zzz' }], true);
+    expect(dry.note.hash).toBe(await vault.hashOf('pw.md')); // unchanged pre-image
+
+    const png = Buffer.from('89504e470d0a1a0a', 'hex');
+    const hash = await vault.writeBinary('img/pw.png', png, 'image/png');
+    expect(hash).toBe(await vault.hashOf('img/pw.png'));
+  });
+
+  it('batchFrontmatterUpdate returns updatedNotes aligned with updated', async () => {
+    await vault.write('bfu.md', 'x\n');
+    const result = await vault.batchFrontmatterUpdate([{ path: 'bfu.md', set: { a: 1 } }]);
+    expect(result.updated).toEqual(['bfu.md']);
+    expect(result.updatedNotes.map((n) => n.path)).toEqual(['bfu.md']);
+    expect(result.updatedNotes[0]?.hash).toBe(await vault.hashOf('bfu.md'));
+  });
+});

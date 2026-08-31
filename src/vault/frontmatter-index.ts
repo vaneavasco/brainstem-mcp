@@ -128,6 +128,13 @@ export class FrontmatterIndex {
     return index;
   }
 
+  /** Applies a just-written (or just-read) Note without another disk read: markdown notes are
+   *  (re)indexed, anything else is tracked as an asset. */
+  applyNote(note: Note): void {
+    if (isMarkdownPath(note.path)) this.upsert(FrontmatterIndex.fromNote(note));
+    else this.addAsset(note.path);
+  }
+
   upsert(entry: IndexEntry): void {
     const existing = this.entries.get(entry.path);
     if (existing) this.bytes -= this.entrySize(existing);

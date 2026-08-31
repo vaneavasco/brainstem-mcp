@@ -486,3 +486,28 @@ describe('WriteGate (end-to-end, through the real harness)', () => {
     expect(lines).toEqual(expect.arrayContaining(['start', 'line-A', 'line-B']));
   });
 });
+
+describe('non-markdown writes register in the index immediately', () => {
+  it('vault_write_binary makes the attachment resolvable without waiting for the watcher', async () => {
+    await h.call('vault_write', { path: 'embeds.md', content: 'see ![[fresh.png]]\n' });
+    const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+    await h.call('vault_write_binary', {
+      path: 'img/fresh.png',
+      base64: png,
+      mimeType: 'image/png',
+    });
+    expect(h.runtime.index.assets().has('img/fresh.png')).toBe(true);
+    const links = await h.call('vault_links', { path: 'embeds.md' });
+    const outgoing = (links.structuredContent as { outgoing: { target: string; status: string }[] })
+      .outgoing;
+    expect(outgoing.find((o) => o.target === 'fresh.png')?.status).toBe('resolved');
+  });
+
+  it('creating a canvas registers it as an asset immediately', async () => {
+    await h.call('vault_canvas_add_node', {
+      path: 'boards/fresh.canvas',
+      node: { type: 'text', text: 'hi', x: 0, y: 0, width: 100, height: 60 },
+    });
+    expect(h.runtime.index.assets().has('boards/fresh.canvas')).toBe(true);
+  });
+});

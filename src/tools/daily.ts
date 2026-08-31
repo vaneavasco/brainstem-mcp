@@ -9,7 +9,7 @@ import {
   resolveDailyNotePath,
 } from '../vault/daily-notes.ts';
 import { APPEND_ONLY, READ_ONLY } from './annotations.ts';
-import { locked, type ToolContext, touch } from './register.ts';
+import { applyNote, locked, type ToolContext } from './register.ts';
 import { clampText, guarded, okJson } from './results.ts';
 
 const DateArg = z
@@ -107,11 +107,10 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
                 : DEFAULT_DAILY_TEMPLATE;
             await adapter.write(path, renderDailyTemplate(templateSource, when, daily));
           }
-          await adapter.append(path, content);
-          await touch(tc, path);
-          const hash = (await adapter.read(path)).hash;
+          const note = await adapter.append(path, content);
+          applyNote(tc, note);
           return okJson(
-            { path, created, hash },
+            { path, created, hash: note.hash },
             `${created ? 'Created and appended to' : 'Appended to'} ${path}.`,
           );
         });

@@ -8,7 +8,7 @@ import { newTargetText, rewriteLinks, type TargetRewrite } from '../vault/link-r
 import type { LinkRef } from '../vault/note-parse.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
-import { locked, type ToolContext, touch } from './register.ts';
+import { applyNote, locked, type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
@@ -228,8 +228,10 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
                 const note = await adapter.read(actualPath);
                 const newContent = rewriteLinks(note.content, targetRewrites);
                 if (newContent === note.content) continue;
-                await adapter.write(actualPath, newContent, { expectedHash: expectedSourceHash });
-                await touch(tc, actualPath);
+                const written = await adapter.write(actualPath, newContent, {
+                  expectedHash: expectedSourceHash,
+                });
+                applyNote(tc, written);
                 linksUpdated.push({ path: actualPath, count: targetRewrites.length });
               } catch (error) {
                 if (error instanceof VaultError) {

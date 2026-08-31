@@ -7,7 +7,7 @@ import { assertExpectedHash } from '../storage/write-gate.ts';
 import { describeUnknownHeading, findSection, insertIntoSection } from '../vault/sections.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
 import { ExpectedHashArg, PathArg } from './args.ts';
-import { locked, type ToolContext, touch } from './register.ts';
+import { applyNote, locked, type ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 function decodeBase64Strict(input: string): Uint8Array {
@@ -42,12 +42,11 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
         return locked(tc, [p], async () => {
-          await adapter.write(p, content, {
+          const note = await adapter.write(p, content, {
             mergeFrontmatter: mergeFrontmatter ?? false,
             expectedHash,
           });
-          const note = await adapter.read(p);
-          await touch(tc, note.path);
+          applyNote(tc, note);
           return okJson(
             { path: note.path, bytes: note.meta.size, hash: note.hash },
             `Wrote ${note.path} (${note.meta.size} bytes).`,
@@ -80,11 +79,10 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         const p = normalizeVaultPath(path);
         return locked(tc, [p], async () => {
           const bytes = decodeBase64Strict(base64);
-          await adapter.writeBinary(p, bytes, mimeType, { expectedHash });
-          const hash = await adapter.hashOf(p);
-          // Unreachable in practice: we just wrote this exact file successfully, so it exists
-          // and hashOf only returns null for a missing path or a directory.
-          if (hash === null) throw new VaultError('IO', `Could not compute a hash for ${p}.`);
+          const hash = await adapter.writeBinary(p, bytes, mimeType, { expectedHash });
+          // Track the attachment right away so `[[name.ext]]` resolves without waiting for the
+          // filesystem watcher to notice the new file.
+          tc.runtime.index.addAsset(p);
           return okJson(
             { path: p, bytes: bytes.byteLength, mimeType, hash },
             `Wrote ${p} (${bytes.byteLength} bytes, ${mimeType}).`,
@@ -121,10 +119,12 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
         return locked(tc, [p], async () => {
-          const result = await adapter.edit(p, patches, dryRun ?? false, { expectedHash });
-          if (!result.dryRun) await touch(tc, result.path);
-          // Present both for dryRun (still the pre-edit hash) and a real edit (the new hash).
-          const note = await adapter.read(result.path);
+          // `note` is destructured out so the full Note never lands in structuredContent; its
+          // hash is the pre-edit hash for a dry run and the new hash for a real edit.
+          const { note, ...result } = await adapter.edit(p, patches, dryRun ?? false, {
+            expectedHash,
+          });
+          if (!result.dryRun) applyNote(tc, note);
           const summary = result.dryRun
             ? `Dry run: ${result.applied} patch(es) would change ${result.path}.\n${result.diff}`
             : `Applied ${result.applied} patch(es) to ${result.path}.\n${result.diff}`;
@@ -166,17 +166,15 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
               throw new VaultError('NOT_FOUND', describeUnknownHeading(note.content, heading));
             }
             const updated = insertIntoSection(note.content, range, content, position ?? 'end');
-            await adapter.write(p, updated, { expectedHash });
-            const after = await adapter.read(p);
-            await touch(tc, after.path);
+            const after = await adapter.write(p, updated, { expectedHash });
+            applyNote(tc, after);
             return okJson(
               { path: after.path, bytes: after.meta.size, hash: after.hash },
               `Inserted into "${heading}" in ${after.path} (now ${after.meta.size} bytes).`,
             );
           }
-          await adapter.append(p, content, { expectedHash });
-          const note = await adapter.read(p);
-          await touch(tc, note.path);
+          const note = await adapter.append(p, content, { expectedHash });
+          applyNote(tc, note);
           return okJson(
             { path: note.path, bytes: note.meta.size, hash: note.hash },
             `Appended to ${note.path} (now ${note.meta.size} bytes).`,
@@ -220,17 +218,17 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           const result = await adapter.batchFrontmatterUpdate([
             { path: p, set, unset, expectedHash },
           ]);
-          if (result.updated.length === 0) {
+          const written = result.updatedNotes[0];
+          if (!written) {
             throw new VaultError(
               'INVALID_INPUT',
               result.failed[0]?.error ?? `Failed to update ${p}.`,
             );
           }
-          await touch(tc, ...result.updated);
-          const note = await adapter.read(result.updated[0] as string);
+          applyNote(tc, written);
           return okJson(
-            { path: note.path, frontmatter: note.frontmatter, hash: note.hash },
-            `Updated frontmatter on ${note.path}.`,
+            { path: written.path, frontmatter: written.frontmatter, hash: written.hash },
+            `Updated frontmatter on ${written.path}.`,
           );
         });
       }),
@@ -268,7 +266,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         const paths = updates.map((u) => normalizedOrRaw(u.path));
         return locked(tc, paths, async () => {
           const result = await adapter.batchFrontmatterUpdate(updates);
-          await touch(tc, ...result.updated);
+          for (const n of result.updatedNotes) applyNote(tc, n);
           return okJson({ updated: result.updated, failed: result.failed });
         });
       }),

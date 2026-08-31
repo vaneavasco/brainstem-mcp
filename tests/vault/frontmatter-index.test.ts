@@ -224,3 +224,15 @@ describe('assets via watch', () => {
     await fs.rm(wRoot, { recursive: true, force: true });
   });
 });
+
+describe('applyNote', () => {
+  it('indexes a markdown note and tracks anything else as an asset, without a disk read', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    const note = await vault.write('applied.md', '---\nk: 2\n---\nApplied');
+    index.applyNote(note);
+    expect(index.get('applied.md')?.hash).toBe(note.hash);
+    expect(index.get('applied.md')?.frontmatter).toEqual({ k: 2 });
+    index.applyNote({ ...note, path: 'img/applied.png' });
+    expect(index.assets().has('img/applied.png')).toBe(true);
+  });
+});

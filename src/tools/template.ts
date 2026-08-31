@@ -5,7 +5,7 @@ import { VaultError } from '../storage/types.ts';
 import { uniquePrefix as buildUniquePrefix, renderTemplate } from '../vault/templates.ts';
 import { APPEND_ONLY } from './annotations.ts';
 import { PathArg } from './args.ts';
-import { locked, type ToolContext, touch } from './register.ts';
+import { applyNote, locked, type ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
 /** The target's basename without a trailing ".md" (case-insensitive), Obsidian's own default for
@@ -80,11 +80,10 @@ export function registerTemplateTools(server: McpServer, tc: ToolContext): void 
             timezone: settings.dailyNotes.timezone,
             vars,
           });
-          await adapter.write(targetP, text);
-          await touch(tc, targetP);
-          const hash = (await adapter.read(targetP)).hash;
+          const written = await adapter.write(targetP, text);
+          applyNote(tc, written);
           return okJson(
-            { path: targetP, hash, unresolved },
+            { path: targetP, hash: written.hash, unresolved },
             `Created ${targetP} from ${templateP}.`,
           );
         });
