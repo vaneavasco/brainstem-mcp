@@ -73,59 +73,162 @@ out which vault operation fits. What helps:
    before touching anything" — Claude can preview edits as a diff and batch
    related changes so they all land or none do.
 4. **Mention your template by name** when you want one used.
+5. **Ask for tables and links.** "As a table, with a link to each note" turns
+   any answer into something you can act on and click through in Obsidian.
+6. **Stack requests in one chat.** Each answer builds on the last — find the
+   notes, then summarize them, then update their status, without re-explaining.
 
 ### Prompts you can copy-paste
 
-Capture and daily work:
+Grouped by workflow. Swap the folder names and details for your own.
+
+#### Capturing — get things out of your head and into the vault
 
 > Add to today's daily note, under "Marketing sync": we approved the launch
 > budget (5,000 EUR) and the Instagram brief is due Friday. Link the brief.
 
 > Save these raw meeting notes as a new note in Marketing/Meetings, clean them
 > up into bullet points, tag them #marketing/q3, and link every campaign
-> mentioned.
+> mentioned. Here are the notes: …
 
-Documents from templates:
+> I'm pasting a chaotic voice-memo transcript. Extract the decisions and the
+> action items, add the action items to the "Actions" section of the launch
+> campaign note, and file the rest under Marketing/Meetings.
+
+> New idea: a referral program for agencies. Check whether we already have a
+> note about referrals; if yes, append this idea there, if not, create one in
+> 00-inbox and tag it #idea.
+
+#### Recurring documents — templates do the formatting
 
 > Create a brief for the September launch from my "Campaign Brief" template.
 > Channel: Instagram, owner: me, budget: 1,500 EUR. Put it in
 > Marketing/Campaigns.
 
-Batch work:
+> Make a "Post-mortem" template with sections for goals, results, what worked,
+> what didn't, and next time. Then use it to start a post-mortem for the
+> August webinar.
+
+> Create my Monday 1:1 agenda from the "1:1" template, dated today, and carry
+> over any unchecked items from last week's 1:1 note.
+
+#### Batch work — many notes, one command, all-or-nothing
 
 > Create the content calendar for the September launch as one transaction:
 > a teaser post note for Sep 1, a newsletter note for Sep 5, and a case-study
 > note for Sep 12 — each in Marketing/Calendar, tagged by channel, linking
 > back to the campaign note.
 
-Finding and deciding:
+> Mark every note in Marketing/Campaigns with status "draft" and no edits in
+> the last 60 days as status "stale" — show me the list before you change
+> anything.
+
+> Split this long strategy note into one note per initiative, keep a short
+> index note in its place that links to all of them, and do it as a single
+> transaction.
+
+#### Finding and remembering — the vault as institutional memory
 
 > Search the vault for everything about pricing decisions, and summarize the
 > timeline with a link to each source note.
 
+> What did we agree with the design agency? Check meeting notes from March to
+> May and quote the exact lines, with the note each quote comes from.
+
 > Which notes mention "churn" but aren't linked to the Retention project?
 > Show me and add the links.
 
-Reporting:
+> Find every note that mentions our competitor by name — including notes that
+> mention it in passing without linking anywhere — and build a one-page
+> "what we know about them" summary.
 
-> List every note modified in the last 7 days under Marketing/, then draft a
-> short status update I can paste into Slack.
+#### Status boards without a dashboard — your frontmatter is a database
+
+If your notes carry frontmatter fields (status, owner, budget, channel,
+due…), Claude can query them like a spreadsheet — filter, sort, group, count:
 
 > Which campaign notes still have status "draft"? Table with note, owner and
 > budget, please.
 
-Housekeeping:
+> Group all Marketing/Calendar notes by channel and show the count per
+> channel — where are we thin?
+
+> Sum the "budget" field across all active campaigns and list the three
+> biggest.
+
+> Show everything with a "due" date in the next 14 days, sorted by date, with
+> owner and status.
+
+> Which notes under Clients/ have no "owner" field at all? I want to fill
+> those in.
+
+#### Reporting and reviews — the vault writes your update
+
+> List every note modified in the last 7 days under Marketing/, then draft a
+> short status update I can paste into Slack.
+
+> It's the end of the month: pull every campaign note touched in August,
+> extract results and learnings, and draft a one-page monthly review in
+> Marketing/Reviews, linking each campaign.
+
+> Compare the "Mesaje cheie" sections of the last three campaign briefs — are
+> we saying the same thing everywhere? Quote the differences.
+
+> Give me the outline of the annual strategy note — just its headings and how
+> long each section is — before I decide what to read.
+
+#### Reorganizing — housekeeping without broken links
 
 > Rename "Brief Instagram" to "Brief Instagram Q3" and update everything that
 > links to it.
 
-> What are my most-used tags? Any orphan notes under Marketing/ that link to
-> nothing and nothing links to?
+> Move everything about the spring campaign into Marketing/Archive/2026-Spring
+> — links should keep working.
 
-Visual planning:
+> What are my most-used tags? Merge #mktg into #marketing everywhere.
+
+> Run a health check: orphan notes under Marketing/ (nothing links to them,
+> they link to nothing), broken links, and ambiguous links — and propose what
+> to do with each.
+
+> Delete the three duplicate "Untitled" notes in 00-inbox. (Claude will
+> confirm first, and they go to `.trash/`, not into the void.)
+
+#### Visual planning — canvases
 
 > Add a card for the September launch to my "Q3 Plan" canvas and connect it
 > to the goals card.
+
+> Build a canvas called "Campaign flow" with the campaign note, its brief and
+> the three calendar posts as file cards, arranged left to right, with arrows
+> in order.
+
+#### Attachments
+
+> Save this image into Marketing/Assets as logo-v2.png and embed it in the
+> brand guidelines note.
+
+### A worked example — launching a campaign in one conversation
+
+The point of a connected vault is that one chat can carry a whole workflow.
+This is a realistic sequence, each prompt building on the last:
+
+1. *"Create the note for the September launch campaign in Marketing/Campaigns:
+   goal 500 installs in the first month, channels email and social, budget
+   5,000 EUR, status draft, tagged #marketing/q3."*
+2. *"Now a brief from the Campaign Brief template — channel Instagram, budget
+   1,500 — and link it from the campaign note."*
+3. *"Create the first three content-calendar entries as one transaction, each
+   linking back to the campaign."*
+4. *"Add today's meeting outcome to my daily note: budget approved, brief due
+   Friday."*
+5. *"Set the campaign status to active."*
+6. Next Monday, in a fresh chat: *"What's the state of the September launch?
+   Backlinks, calendar entries, open action items — and draft my status
+   update."*
+
+Nothing from steps 1–5 was lost when the chat ended: Monday's question is
+answered from the files, not from the conversation.
 
 ## The safety net (why you can let it write)
 
