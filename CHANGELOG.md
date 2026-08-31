@@ -4,6 +4,34 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Ordering ties in `vault_tags`, `orphan_notes` and `hubs` now break
+  case-insensitively everywhere (previously tags did, orphans/hubs did not);
+  the tag list also stops rescanning every tag per call, so `vault_tags` on
+  tag-heavy vaults is noticeably cheaper.
+- Write-type tools (`vault_write`, `vault_append`, `vault_edit`,
+  `vault_frontmatter_update`, canvas writes, templates, daily notes, link
+  rewrites during `vault_move`) index the content they just wrote instead of
+  re-reading it from disk — same results, fewer reads per mutation. A freshly
+  written attachment or newly created canvas is also resolvable by `[[name]]`
+  immediately, without waiting for the filesystem watcher.
+- The `regex` operator's subject cap (2048) in `vault_query`/`vault_search`
+  `where` conditions now counts characters (code points), not UTF-16 units —
+  emoji-heavy values up to 2048 characters match instead of being rejected at
+  half that length.
+
+### Fixed
+
+- `vault_create_from_template` reports `{{…}}` placeholders whose name the
+  grammar cannot parse (space- or digit-led, e.g. `{{my var}}`, `{{2nd}}`) in
+  `unresolved` instead of silently passing them through.
+- "No heading … found" messages list an identical sibling heading path once
+  instead of repeating it.
+- Size-limit errors for sub-MiB limits no longer print a rounded "(0.0 MiB)".
+
 ## [0.3.0] — 2026-08-31
 
 ### Added
