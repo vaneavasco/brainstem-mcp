@@ -99,3 +99,24 @@ describe('uniquePrefix', () => {
     expect(uniquePrefix(NOW, 'UTC')).toBe('202608301407 ');
   });
 });
+
+describe('renderTemplate — non-grammar placeholders', () => {
+  it('reports space- and digit-led {{…}} names in unresolved, left verbatim', () => {
+    const out = renderTemplate('Hello {{author}}, {{my var}} and {{2nd}} and {{ }}.', {
+      title: 't',
+      now: NOW,
+      timezone: TZ,
+    });
+    expect(out.text).toBe('Hello {{author}}, {{my var}} and {{2nd}} and {{ }}.');
+    expect(out.unresolved).toEqual(['author', 'my var', '2nd']);
+  });
+
+  it('does not double-report or misreport grammar-valid placeholders', () => {
+    const out = renderTemplate('{{date}} {{note.title:x}}', {
+      title: 't',
+      now: NOW,
+      timezone: TZ,
+    });
+    expect(out.unresolved).toEqual(['note.title']);
+  });
+});

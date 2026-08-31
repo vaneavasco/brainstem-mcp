@@ -11,7 +11,9 @@ export interface RenderedTemplate {
   text: string;
   /** Placeholder names (not the `{{…}}` text) that were not `title`/`date`/`time` and had no
    *  matching key in `vars`. Left verbatim in `text`. Deduplicated by name, in first-seen order —
-   *  a placeholder repeated in the template (e.g. two `{{author}}`) is reported once. */
+   *  a placeholder repeated in the template (e.g. two `{{author}}`) is reported once. Also
+   *  includes the (trimmed, before-':') text of `{{…}}` blocks whose name the grammar cannot
+   *  parse (space- or digit-led), likewise left verbatim; grammar-parsed names come first. */
   unresolved: string[];
 }
 
@@ -24,6 +26,11 @@ const DEFAULT_DATE_FORMAT = 'yyyy-MM-dd';
 // reported instead of silently ignored. FMT may contain spaces (e.g. "MMMM Do, YYYY") — only the
 // literal '}' ends it — and surrounding whitespace right after the colon/name is trimmed.
 const PLACEHOLDER = /\{\{\s*([A-Za-z_][\w.-]*)\s*(?::\s*([^}]*?)\s*)?\}\}/g;
+
+// Anchored single-placeholder version of PLACEHOLDER, for re-testing one extracted block.
+const PLACEHOLDER_GRAMMAR = /^\{\{\s*([A-Za-z_][\w.-]*)\s*(?::\s*([^}]*?)\s*)?\}\}$/;
+// Any {{...}} block at all, grammar-valid or not, for the unresolved sweep in renderTemplate.
+const ANY_PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
 
 /**
  * Renders Obsidian core-Templates-style placeholders against a fixed `now`/`timezone` (the vault
@@ -56,6 +63,15 @@ export function renderTemplate(template: string, ctx: TemplateContext): Rendered
     unresolvedSeen.add(name);
     return whole;
   });
+  // {{…}} blocks the grammar cannot even parse (space- or digit-led names, e.g. "{{my var}}" or
+  // "{{2nd}}") are left verbatim like any unknown var — so they belong in `unresolved` too,
+  // instead of silently passing through. Grammar-parsed names were handled by the replace above.
+  for (const [, inner] of template.matchAll(ANY_PLACEHOLDER)) {
+    const raw = (inner ?? '').trim();
+    if (raw === '' || PLACEHOLDER_GRAMMAR.test(`{{${raw}}}`)) continue;
+    const name = (raw.split(':')[0] ?? '').trim();
+    if (name !== '') unresolvedSeen.add(name);
+  }
   return { text, unresolved: [...unresolvedSeen] };
 }
 
