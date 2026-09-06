@@ -1,10 +1,20 @@
 # brainstem-mcp
 
+**Your Obsidian vault as Claude's second brain.** A self-hosted MCP connector that gives claude.ai, Claude mobile, Claude Desktop and Claude Code safe read/write access to your own notes: persistent, local-first memory that lives in your Markdown files, not in someone else's database.
+
 ## What it is
 
-A single-user, self-hosted MCP server that gives Claude — claude.ai web, Claude mobile, Claude Desktop, Claude Code — read/write access to your own Obsidian vault. It runs entirely in Docker on your machine; a Cloudflare tunnel makes it reachable from those Claude surfaces without opening any ports yourself.
+A single-user, self-hosted MCP server that turns your Obsidian vault into a personal knowledge base Claude can read and write — from claude.ai web, Claude mobile, Claude Desktop and Claude Code. Your notes stay plain Markdown files on your machine; Claude gets a memory that persists across conversations, and everything it writes shows up in Obsidian as a normal note you can open and edit. It runs entirely in Docker; a Cloudflare tunnel makes it reachable from those Claude surfaces without opening any ports yourself.
 
-30 tools cover the vault the way Obsidian sees it: reading and writing notes, sections, frontmatter and attachments; the link/tag graph (backlinks, orphans, hubs); structured queries and recency; safe concurrent edits and multi-note transactions; canvases; templates; daily notes. See "What Claude can do" below.
+30 tools cover the vault the way Obsidian sees it — a knowledge graph of linked notes, not a folder of files: reading and writing notes, sections, frontmatter and attachments; the link/tag graph (backlinks, orphans, hubs); structured queries and recency; safe concurrent edits and multi-note transactions; canvases; templates; daily notes. See "What Claude can do" below.
+
+What it is *not*, so you can compare it fairly:
+
+- **Not a RAG or semantic-search layer.** No embeddings, no vector database; it searches text and structure (links, tags, frontmatter).
+- **Not an Obsidian plugin.** Nothing to install inside Obsidian; it works on the vault folder, so it also runs while Obsidian is closed.
+- **Not a memory system with its own schema.** No new format, no sidecar database: your vault, as it is.
+- **Not a methodology.** PARA, Zettelkasten or no system at all — the conventions live in your vault and in `_brainstem/instructions.md` (see below).
+- **Not multi-user.** One owner, one vault, Claude only.
 
 Handing this to someone non-technical — a manager, a marketer, anyone who just wants their notes to work with Claude? Give them **[docs/user-guide.md](docs/user-guide.md)**: what it's for, how to connect, and copy-paste prompts.
 

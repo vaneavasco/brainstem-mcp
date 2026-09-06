@@ -4,6 +4,18 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Positioning: the README intro, `llms.txt` and the GitHub description/topics
+  now say what brainstem is *for* — your Obsidian vault as Claude's second brain
+  (personal knowledge management, local-first, persistent memory) — before
+  saying how it runs, and state plainly what it is not (no RAG/embeddings, no
+  Obsidian plugin, no schema of its own, no methodology, single-user).
+  `llms.txt` gains the user guide, the vault-graph spec and ADR 0006. No
+  behaviour change.
+
 ## [0.3.1] — 2026-08-31
 
 ### Added

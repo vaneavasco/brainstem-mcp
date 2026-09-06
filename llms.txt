@@ -1,17 +1,22 @@
 # brainstem-mcp
 
-> Single-user, self-hosted MCP server that gives Claude (claude.ai web/mobile, Claude Desktop, Claude Code) read/write access to an Obsidian vault. Runs in Docker on the owner's machine, reachable through a Cloudflare tunnel, protected by its own OAuth 2.1 authorization server. Install: `git clone https://github.com/vaneavasco/brainstem-mcp.git && cd brainstem-mcp && ./brainstem start`.
+> Your Obsidian vault as Claude's second brain. brainstem-mcp is a single-user, self-hosted MCP server (a remote MCP connector) that gives Claude — claude.ai web and mobile, Claude Desktop, Claude Code — read/write access to a personal Obsidian vault: a local-first, plain-Markdown personal knowledge base (PKM) that becomes Claude's persistent memory across conversations. 30 vault-native tools cover notes, sections, frontmatter, the link/tag graph (backlinks, orphans, hubs), structured queries, daily notes, templates, canvases and attachments, with link-preserving renames, conflict-safe concurrent edits (optimistic concurrency) and all-or-nothing multi-note transactions. It runs in Docker on the owner's machine, is reachable through a Cloudflare tunnel, and is protected by its own OAuth 2.1 authorization server. No RAG, no embeddings, no extra schema, no Obsidian plugin: it works on the vault folder as it is. Install: `git clone https://github.com/vaneavasco/brainstem-mcp.git && cd brainstem-mcp && ./brainstem start`.
 
 Version 0.3.x (beta). Verified with Claude Code and claude.ai web on Linux; Windows/macOS launchers and the Claude mobile app are implemented but not yet verified by a real run.
 
+Keywords: second brain, personal knowledge management, PKM, knowledge base, knowledge graph, Obsidian AI, Obsidian MCP server, Claude connector, Claude memory, AI memory, persistent memory, local-first, self-hosted, Markdown notes, note-taking, daily notes, backlinks, remote MCP, OAuth 2.1, Docker, Cloudflare tunnel.
+
 ## Docs
 
-- [README](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/README.md): install, connect Claude, every CLI command, stable vs quick tunnel, sync notes, security model, troubleshooting
+- [User guide](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/user-guide.md): for the non-technical user — what a second brain in Obsidian is and why Claude access to it compounds, how to connect, copy-paste prompts by workflow (capture, templates, batch changes, search and recall, status boards from frontmatter, reviews, reorganizing, canvases), the safety net, honest limits
+- [README](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/README.md): what it is and is not, install, connect Claude, every CLI command, stable vs quick tunnel, what Claude can do, sync notes, security model, troubleshooting
 - [CHANGELOG](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/CHANGELOG.md): what shipped in each version
 - [SECURITY](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/SECURITY.md): how to report a vulnerability, scope
 - [AGENTS.md](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/AGENTS.md): guide for coding agents and contributors — layout, commands, conventions, security invariants
 - [Design spec](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md): the binding architecture (owner secret, state in the vault, tunnel modes, CLI)
+- [Vault graph and safety spec](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/superpowers/specs/2026-08-30-phase-4-vault-graph-and-safety-design.md): links/backlinks/tags graph, structured queries, link-preserving moves, optimistic concurrency, transactions
 - [ADR 0005](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/adr/0005-single-user-state-in-vault-tunnel-modes.md): why single-user, why JSON state in `_brainstem/`, why two tunnel modes
+- [ADR 0006](https://raw.githubusercontent.com/vaneavasco/brainstem-mcp/main/docs/adr/0006-vault-graph-and-optimistic-concurrency.md): why an in-memory vault graph and hash-based optimistic concurrency
 
 ## Configuration
 
