@@ -19,6 +19,7 @@ import { runStatus } from './commands/status.ts';
 import { runUp } from './commands/up.ts';
 import { runUpdate } from './commands/update.ts';
 import { runUrl } from './commands/url.ts';
+import { runVaultSet, runVaultShow } from './commands/vault.ts';
 import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
 import { resolveImageTag } from './image-tag.ts';
@@ -436,8 +437,61 @@ export function buildProgram(
       });
     });
 
+  const vault = program.command('vault').description(summaryOf('vault'));
+
+  vault
+    .command('show')
+    .description('Print the vault path this instance is configured for')
+    .action(async () => {
+      await runAction(async () => {
+        const env = await loadEnvMap(repoDir);
+        return runVaultShow({ env, print: (line) => console.log(line) });
+      });
+    });
+
+  vault
+    .command('set')
+    .description(
+      'Switch to another vault: rewrites VAULT_PATH, carries the auth state over, restarts if running',
+    )
+    .argument('<path>', 'absolute path to the Obsidian vault to switch to')
+    .action(async (vaultPath: string) => {
+      await runAction(async () => {
+        const compose = createComposeRunner(repoDir);
+        const print = (line: string): void => console.log(line);
+        return runVaultSet(
+          { path: vaultPath },
+          {
+            envPath: path.join(repoDir, '.env'),
+            vaultCtx: createVaultCtx(repoDir),
+            compose,
+            readFile,
+            writeFile,
+            print,
+            down: () => runDown({ compose, print }),
+            // Re-read .env: `up` must see the VAULT_PATH just written, not the one loaded before.
+            up: async () => {
+              const env = await loadEnvMap(repoDir);
+              return runUp(
+                {},
+                {
+                  compose,
+                  env,
+                  print,
+                  fetchImpl: globalThis.fetch,
+                  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+                  localPort: localPortOf(env),
+                  imageTag: () => resolveImageTag(createSystemProbe().exec, repoDir),
+                },
+              );
+            },
+          },
+        );
+      });
+    });
+
   // The grouped catalog appended by `addHelpText('after', …)` is the command
-  // list; commander's built-in "Commands:" block printed the same eleven names
+  // list; commander's built-in "Commands:" block printed the same names
   // and summaries directly above it, so `--help` listed everything twice.
   // Hiding it here — AFTER every `.command()` call — matters: commander copies
   // the help configuration into each subcommand as it is created, so doing this

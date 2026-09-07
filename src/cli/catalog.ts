@@ -68,6 +68,12 @@ export const COMMANDS: readonly CommandInfo[] = [
     example: './brainstem secret show',
   },
   {
+    name: 'vault',
+    group: 'Configuration',
+    summary: 'Show or switch the vault this instance works on',
+    example: './brainstem vault set ~/Documents/Work',
+  },
+  {
     name: 'update',
     group: 'Maintenance',
     summary: 'Pull the latest version from GitHub, reinstall dependencies and restart',

@@ -37,6 +37,10 @@ describe('COMMANDS catalog', () => {
     const help = secret?.helpInformation() ?? '';
     expect(help).toContain('show');
     expect(help).toContain('rotate');
+    const vault = buildProgram().commands.find((c) => c.name() === 'vault');
+    const vaultHelp = vault?.helpInformation() ?? '';
+    expect(vaultHelp).toContain('show');
+    expect(vaultHelp).toContain('set');
   });
 
   it('renderHelpText lists the recommended flow first and groups commands', () => {

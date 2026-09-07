@@ -6,6 +6,17 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `./brainstem vault show` / `./brainstem vault set <path>` — switch the
+  instance to another Obsidian vault without re-running setup. `set` validates
+  the folder like `setup` does, rewrites only `VAULT_PATH` in `.env` (the owner
+  secret is untouched, unlike `setup --force`), pre-creates `_brainstem/` in
+  the new vault, copies `_brainstem/state.json` over from the previous vault so
+  already-connected clients keep working, and restarts the containers if they
+  were running. In quick-tunnel mode that restart hands out a new public URL,
+  as any restart does.
+
 ### Changed
 
 - Positioning: the README intro, `llms.txt` and the GitHub description/topics

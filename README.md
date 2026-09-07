@@ -87,6 +87,7 @@ The owner secret lives in `.env`. Show it any time with:
 |---|---|---|
 | `./brainstem setup` | Create or update `.env` (owner secret, vault path, tunnel mode) | `./brainstem setup --vault ~/Documents/Vault` |
 | `./brainstem secret` | Show or rotate the owner secret | `./brainstem secret show` |
+| `./brainstem vault` | Show or switch the vault this instance works on | `./brainstem vault set ~/Documents/Work` |
 
 ### Maintenance
 

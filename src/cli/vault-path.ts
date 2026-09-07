@@ -19,7 +19,7 @@ function pathModule(platform: NodeJS.Platform): typeof pathPosix | typeof pathWi
 }
 
 /** Case-insensitive comparison on win32 (paths there are case-insensitive), exact elsewhere. */
-function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
+export function samePath(a: string, b: string, platform: NodeJS.Platform): boolean {
   return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
