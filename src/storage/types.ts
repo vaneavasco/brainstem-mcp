@@ -40,6 +40,8 @@ export interface Note {
   frontmatter: Record<string, unknown>;
   body: string;
   hasFrontmatter: boolean;
+  /** Set when the note starts with a `---` block that is not valid YAML; the note is then exposed body-only. */
+  frontmatterError?: string;
   meta: NoteMeta;
   hash: string;
 }

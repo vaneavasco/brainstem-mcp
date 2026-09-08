@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { frontmatterProblem } from '../storage/frontmatter.ts';
 import { baseName, normalizeVaultPath, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { uniquePrefix as buildUniquePrefix, renderTemplate } from '../vault/templates.ts';
@@ -80,6 +81,13 @@ export function registerTemplateTools(server: McpServer, tc: ToolContext): void 
             timezone: settings.dailyNotes.timezone,
             vars,
           });
+          const problem = frontmatterProblem(text);
+          if (problem !== null) {
+            throw new VaultError(
+              'INVALID_INPUT',
+              `Rendered note has frontmatter that is not usable — ${problem} Check the vars (unresolved: ${JSON.stringify(unresolved)}); a value that is already quoted in the template must not be quoted again.`,
+            );
+          }
           const written = await adapter.write(targetP, text);
           applyNote(tc, written);
           return okJson(

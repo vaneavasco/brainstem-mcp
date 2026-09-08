@@ -64,3 +64,20 @@ export function applyFrontmatterUpdate(
   for (const key of unset) delete out[key];
   return out;
 }
+
+/**
+ * Why a leading `---` block cannot be used, or `null` when the text has no block or a valid one.
+ * `splitFrontmatter` throws for the same cases; this is the non-throwing form for callers that
+ * must refuse to build on a broken block (frontmatter updates, merges, template rendering)
+ * instead of treating the note as body-only, which would bury the broken block under a new one.
+ */
+export function frontmatterProblem(text: string): string | null {
+  if (!OPEN.test(text)) return null;
+  try {
+    splitFrontmatter(text);
+    return null;
+  } catch (error) {
+    if (error instanceof VaultError) return error.message;
+    throw error;
+  }
+}

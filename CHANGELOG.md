@@ -6,6 +6,20 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Invalid YAML frontmatter is refused instead of buried. `vault_frontmatter_update`,
+  `vault_batch_frontmatter_update`, the `frontmatter_update` transaction op and
+  `vault_write` with `mergeFrontmatter=true` used to treat a note whose leading
+  `---` block does not parse as body-only and then *prepended* a fresh block,
+  leaving two frontmatter blocks in the file. They now fail with
+  `INVALID_INPUT` naming the YAML error, and the file is left untouched.
+  `vault_create_from_template` likewise refuses to create a note whose rendered
+  frontmatter is not valid YAML (typically a var that was quoted twice), pointing
+  at the `unresolved` placeholders. Notes read through `vault_read` still expose
+  a broken block as body-only; the new `frontmatterError` field on the adapter's
+  `Note` carries the reason.
+
 ### Added
 
 - `./brainstem vault show` / `./brainstem vault set <path>` — switch the
