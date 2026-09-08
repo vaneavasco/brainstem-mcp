@@ -8,6 +8,11 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- `vault_read` now includes the note text in `structuredContent` (`text`), not only
+  in the content block. MCP clients that render `structuredContent` when it is
+  present (Claude Code among them) showed only frontmatter and stats, so a model
+  could not see a note's body to make exact-text edits; `vault_batch_read`
+  already returned the body. With `section`, `text` is the section slice.
 - Invalid YAML frontmatter is refused instead of buried. `vault_frontmatter_update`,
   `vault_batch_frontmatter_update`, the `frontmatter_update` transaction op and
   `vault_write` with `mergeFrontmatter=true` used to treat a note whose leading
