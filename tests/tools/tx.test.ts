@@ -158,3 +158,23 @@ describe('vault_transaction', () => {
     expect(text(reserved)).toMatch(/INVALID_PATH/);
   });
 });
+
+describe('vault_transaction frontmatter_update on invalid YAML frontmatter', () => {
+  it('fails pre-flight with INVALID_INPUT and writes nothing', async () => {
+    const broken = '---\norganization: """"\n---\nbody\n';
+    await seed('tx/broken.md', broken);
+    await seed('tx/ok.md', '---\ntype: note\n---\nbody\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        { op: 'frontmatter_update', path: 'tx/ok.md', set: { status: 'done' } },
+        { op: 'frontmatter_update', path: 'tx/broken.md', set: { status: 'done' } },
+      ],
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/not valid YAML/);
+    const ok = await h.call('vault_read', { path: 'tx/ok.md' });
+    expect(text(ok)).toBe('---\ntype: note\n---\nbody\n');
+    const brokenRead = await h.call('vault_read', { path: 'tx/broken.md' });
+    expect(text(brokenRead)).toBe(broken);
+  });
+});

@@ -97,6 +97,20 @@ function hasDotSegment(p: string): boolean {
   return p.split('/').some((segment) => segment.startsWith('.'));
 }
 
+/**
+ * A note whose leading `---` block failed to parse must not be "updated": `read()` exposes it
+ * body-only, so writing `joinFrontmatter(newKeys, body)` would prepend a second block and bury
+ * the broken one. Refuse with the parse error so the caller fixes the block first.
+ */
+function assertUsableFrontmatter(p: string, note: Note): void {
+  if (note.frontmatterError !== undefined) {
+    throw new VaultError(
+      'INVALID_INPUT',
+      `${p} has frontmatter that is not usable — ${note.frontmatterError} Fix the block with vault_edit or vault_write before changing keys.`,
+    );
+  }
+}
+
 export class LocalFSAdapter implements StorageAdapter {
   private static readonly TEXT_EXTENSIONS = new Set([
     '.md',
@@ -228,12 +242,15 @@ export class LocalFSAdapter implements StorageAdapter {
     let frontmatter: Record<string, unknown> = {};
     let body = content;
     let hasFrontmatter = false;
+    let frontmatterError: string | undefined;
     if (isMarkdownPath(p)) {
       try {
         ({ frontmatter, body, hasFrontmatter } = splitFrontmatter(content));
       } catch (error) {
-        // Invalid YAML must never block reading; the note is exposed as body-only.
+        // Invalid YAML must never block reading; the note is exposed as body-only, and the
+        // reason is kept so writers can refuse to build a new block on top of the broken one.
         if (!(error instanceof VaultError)) throw error;
+        frontmatterError = error.message;
       }
     }
     return {
@@ -242,6 +259,7 @@ export class LocalFSAdapter implements StorageAdapter {
       frontmatter,
       body,
       hasFrontmatter,
+      ...(frontmatterError === undefined ? {} : { frontmatterError }),
       meta: { size: stat.size, modifiedAt: stat.mtime.toISOString() },
       hash: sha256hex(content),
     };
@@ -320,7 +338,9 @@ export class LocalFSAdapter implements StorageAdapter {
       const incoming = splitFrontmatter(content);
       let existingFm: Record<string, unknown> = {};
       try {
-        existingFm = (await this.read(p)).frontmatter;
+        const existing = await this.read(p);
+        assertUsableFrontmatter(p, existing);
+        existingFm = existing.frontmatter;
       } catch (error) {
         if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
       }
@@ -420,6 +440,7 @@ export class LocalFSAdapter implements StorageAdapter {
         if (update.expectedHash !== undefined) {
           assertExpectedHash(p, note.hash, update.expectedHash);
         }
+        assertUsableFrontmatter(p, note);
         const fm = applyFrontmatterUpdate(note.frontmatter, update.set, update.unset);
         const text = joinFrontmatter(fm, note.body);
         assertWithinSize(Buffer.byteLength(text, 'utf8'), 'Updated content');

@@ -511,3 +511,51 @@ describe('non-markdown writes register in the index immediately', () => {
     expect(h.runtime.index.assets().has('boards/fresh.canvas')).toBe(true);
   });
 });
+
+describe('invalid YAML frontmatter is refused, never buried', () => {
+  const broken = '---\ntype: person\norganization: """"\n---\n# X\nbody\n';
+
+  it('vault_frontmatter_update fails INVALID_INPUT and leaves the file untouched', async () => {
+    await h.call('vault_write', { path: 'broken.md', content: broken });
+    const r = await h.call('vault_frontmatter_update', {
+      path: 'broken.md',
+      set: { last_seen: '2026-09-08' },
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/INVALID_INPUT/);
+    expect(text(r)).toMatch(/not valid YAML/);
+    const read = await h.call('vault_read', { path: 'broken.md' });
+    expect(text(read)).toBe(broken);
+  });
+
+  it('vault_batch_frontmatter_update reports it in failed[] and updates the valid item', async () => {
+    await h.call('vault_write', { path: 'broken2.md', content: broken });
+    await h.call('vault_write', { path: 'fine.md', content: '---\ntype: person\n---\nbody\n' });
+    const r = await h.call('vault_batch_frontmatter_update', {
+      updates: [
+        { path: 'broken2.md', set: { a: 1 } },
+        { path: 'fine.md', set: { a: 1 } },
+      ],
+    });
+    expect(r.structuredContent).toMatchObject({ updated: ['fine.md'] });
+    const failed = (r.structuredContent as { failed: { path: string; error: string }[] }).failed;
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ path: 'broken2.md' });
+    expect(failed[0]?.error).toMatch(/not valid YAML/);
+    const read = await h.call('vault_read', { path: 'broken2.md' });
+    expect(text(read)).toBe(broken);
+  });
+
+  it('vault_write with mergeFrontmatter fails INVALID_INPUT instead of merging into an empty block', async () => {
+    await h.call('vault_write', { path: 'broken3.md', content: broken });
+    const r = await h.call('vault_write', {
+      path: 'broken3.md',
+      content: '---\nstatus: active\n---\nnew body\n',
+      mergeFrontmatter: true,
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/INVALID_INPUT/);
+    const read = await h.call('vault_read', { path: 'broken3.md' });
+    expect(text(read)).toBe(broken);
+  });
+});

@@ -99,3 +99,40 @@ describe('vault_create_from_template', () => {
     expect(text(read)).toBe('y {{unknownVar}}\n');
   });
 });
+
+describe('vault_create_from_template refuses a rendered note whose frontmatter is invalid YAML', () => {
+  it('fails INVALID_INPUT, names the problem and creates nothing', async () => {
+    await h.call('vault_write', {
+      path: 'templates/person.md',
+      content:
+        '---\ntype: person\nname: "{{title}}"\norganization: "{{organization}}"\n---\n# {{title}}\n',
+    });
+    const result = await h.call('vault_create_from_template', {
+      templatePath: 'templates/person.md',
+      targetPath: 'People/Broken.md',
+      vars: { organization: '""' },
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/INVALID_INPUT/);
+    expect(text(result)).toMatch(/not valid YAML/);
+    const read = await h.call('vault_read', { path: 'People/Broken.md' });
+    expect(text(read)).toMatch(/NOT_FOUND/);
+  });
+
+  it('still creates notes whose rendered frontmatter is valid', async () => {
+    await h.call('vault_write', {
+      path: 'templates/person2.md',
+      content: '---\ntype: person\norganization: "{{organization}}"\n---\n# {{title}}\n',
+    });
+    const result = await h.call('vault_create_from_template', {
+      templatePath: 'templates/person2.md',
+      targetPath: 'People/Fine.md',
+      vars: { organization: '' },
+    });
+    expect(result.isError).toBeFalsy();
+    const read = await h.call('vault_read', { path: 'People/Fine.md' });
+    expect(read.structuredContent).toMatchObject({
+      frontmatter: { type: 'person', organization: '' },
+    });
+  });
+});

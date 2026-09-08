@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyFrontmatterUpdate,
+  frontmatterProblem,
   joinFrontmatter,
   mergeFrontmatter,
   splitFrontmatter,
@@ -70,5 +71,18 @@ describe('mergeFrontmatter / applyFrontmatterUpdate', () => {
   it('applies set and unset without touching other keys', () => {
     const out = applyFrontmatterUpdate({ a: 1, b: 2 }, { c: 3, a: 10 }, ['b', 'zzz']);
     expect(out).toEqual({ a: 10, c: 3 });
+  });
+});
+
+describe('frontmatterProblem', () => {
+  it('returns null for text without a block or with a valid block', () => {
+    expect(frontmatterProblem('just body\n')).toBeNull();
+    expect(frontmatterProblem('---\ntype: note\n---\nbody\n')).toBeNull();
+    expect(frontmatterProblem('---\n---\nbody\n')).toBeNull();
+  });
+
+  it('describes a leading --- block that is not valid YAML or not a mapping', () => {
+    expect(frontmatterProblem('---\norganization: """"\n---\nbody\n')).toMatch(/not valid YAML/);
+    expect(frontmatterProblem('---\n- a\n- b\n---\nbody\n')).toMatch(/mapping/);
   });
 });

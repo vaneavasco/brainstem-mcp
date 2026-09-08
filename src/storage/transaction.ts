@@ -4,6 +4,7 @@ import path from 'node:path';
 import { sha256hex } from '../auth/hash.ts';
 import {
   applyFrontmatterUpdate,
+  frontmatterProblem,
   joinFrontmatter,
   mergeFrontmatter,
   splitFrontmatter,
@@ -381,6 +382,13 @@ export async function runTransaction(
           }
           const cur = await requireText(p);
           assertExpectedHash(p, cur.hash, op.expectedHash);
+          const problem = frontmatterProblem(cur.content);
+          if (problem !== null) {
+            throw new VaultError(
+              'INVALID_INPUT',
+              `${p} has frontmatter that is not usable — ${problem} Fix the block with an edit or write op before changing keys.`,
+            );
+          }
           const { frontmatter, body } = splitLenient(p, cur.content);
           const next = joinFrontmatter(applyFrontmatterUpdate(frontmatter, op.set, op.unset), body);
           assertWithinSize(byteLen(next), 'Updated content');
