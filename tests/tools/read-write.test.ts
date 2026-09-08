@@ -559,3 +559,19 @@ describe('invalid YAML frontmatter is refused, never buried', () => {
     expect(text(read)).toBe(broken);
   });
 });
+
+describe('vault_read exposes the text in structuredContent', () => {
+  it('returns the full text, and only the section when asked', async () => {
+    const content = '---\ntype: note\n---\n# T\n\n## A\nalpha line\n\n## B\nbeta line\n';
+    await h.call('vault_write', { path: 'structured.md', content });
+    const full = await h.call('vault_read', { path: 'structured.md' });
+    expect(full.structuredContent).toMatchObject({
+      path: 'structured.md',
+      text: content,
+      truncated: false,
+    });
+    const section = await h.call('vault_read', { path: 'structured.md', section: 'A' });
+    expect((section.structuredContent as { text: string }).text).toContain('alpha line');
+    expect((section.structuredContent as { text: string }).text).not.toContain('beta line');
+  });
+});

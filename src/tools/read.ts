@@ -36,6 +36,9 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           ),
       }),
       outputSchema: NoteSummary.extend({
+        // The text also travels in the content block, but clients that render structuredContent
+        // when it is present would otherwise never show the note body.
+        text: z.string(),
         truncated: z.boolean(),
         totalChars: z.number(),
         sectionRange: z.object({ startLine: z.number(), endLine: z.number() }).optional(),
@@ -64,6 +67,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
             hash: note.hash,
+            text: clamped.text,
             truncated: clamped.truncated,
             totalChars: clamped.totalChars,
             ...(sectionRange ? { sectionRange } : {}),
