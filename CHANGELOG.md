@@ -6,7 +6,24 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `vault_append` and the `append` op of `vault_transaction` take `unique`: when the
+  target section (or the file, without `heading`) already has a line linking to the
+  same `[[target]]` — alias and anchor ignored — or an identical line when the text
+  has no wikilink, nothing is written and the result says `skipped: true` instead of
+  failing. The transaction `append` op also takes `heading` and `position`, like
+  `vault_append` already did, so a note and every reciprocal bullet on the notes it
+  links to can be written as one all-or-nothing unit, with retries and parallel
+  writers unable to duplicate a bullet.
+
 ### Fixed
+
+- Wikilinks inside frontmatter values (`author: "[[Alice]]"`, list items) are now
+  part of the link index, as they are in Obsidian: they count as backlinks in
+  `vault_links`, in `vault_analytics_*` and in the graph, and `vault_move` rewrites
+  them. Before, a note whose only link to another was a frontmatter property reported
+  zero backlinks, and renaming the target left the property pointing at the old name.
 
 - `vault_read` now includes the note text in `structuredContent` (`text`), not only
   in the content block. MCP clients that render `structuredContent` when it is

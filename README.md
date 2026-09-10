@@ -137,7 +137,7 @@ Every read (`vault_read`, `vault_batch_read`, `vault_outline`) returns a content
 
 ### Sections
 
-`vault_read { section: "Heading > Sub-heading" }` returns just that heading's text instead of the whole note; `vault_append { heading, position }` writes inside a section instead of at the end of the file.
+`vault_read { section: "Heading > Sub-heading" }` returns just that heading's text instead of the whole note; `vault_append { heading, position }` writes inside a section instead of at the end of the file, and `unique: true` makes it a no-op (reported as `skipped`) when the section already has a line linking to the same `[[target]]` — the `append` op of `vault_transaction` takes the same three fields, so a note and the reciprocal bullets on the notes it links to go in as one unit. Wikilinks inside frontmatter values count as links (backlinks, graph, rename), as in Obsidian.
 
 ### Attachments and file types
 

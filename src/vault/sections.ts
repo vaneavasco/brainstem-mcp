@@ -277,3 +277,31 @@ export function insertIntoSection(
   }
   return lines.join('\n');
 }
+
+const LINK_TARGETS = /\[\[([^[\]|#\n]*)(?:[#|][^\]\n]*)?\]\]/g;
+
+function linkTargets(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(LINK_TARGETS)) {
+    const t = (m[1] ?? '').trim().toLowerCase();
+    if (t !== '') out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Whether `region` already holds a line equivalent to `text`. When `text` contains a wikilink, a
+ * line linking to the same target counts (alias and anchor ignored, case-insensitive); otherwise
+ * only an identical line (trimmed) does. Powers `unique` on appends, so a retried or concurrent
+ * "reciprocal bullet" never lands twice.
+ */
+export function hasEquivalentLine(region: string, text: string): boolean {
+  const wanted = linkTargets(text);
+  const lines = splitLines(region).map(stripCr);
+  if (wanted.length > 0) {
+    const first = wanted[0] as string;
+    return lines.some((line) => linkTargets(line).includes(first));
+  }
+  const needle = text.trim();
+  return needle !== '' && lines.some((line) => line.trim() === needle);
+}

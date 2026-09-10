@@ -113,6 +113,28 @@ export function parseNote(
   const maskedBody = masked.slice(bodyStart);
   const links: LinkRef[] = [];
 
+  // Wikilinks inside the frontmatter block. Obsidian treats `[[…]]` in property values as links
+  // (backlinks, graph, rename), so the index must too — otherwise a note whose only link to X is
+  // `author: "[[X]]"` reports zero backlinks on X and a rename of X leaves the value stale.
+  if (bodyStart > 0) {
+    const head = content.slice(0, bodyStart);
+    for (const m of head.matchAll(WIKI)) {
+      const start = m.index ?? 0;
+      const end = start + m[0].length;
+      const parts = splitWikiInner(m[2] ?? '');
+      if (parts.target === '' && !parts.heading && !parts.block) continue;
+      links.push({
+        raw: content.slice(start, end),
+        ...parts,
+        embed: false,
+        kind: 'wiki',
+        line: lineAt(content, start),
+        start,
+        end,
+      });
+    }
+  }
+
   for (const m of maskedBody.matchAll(WIKI)) {
     const start = bodyStart + (m.index ?? 0);
     const end = start + m[0].length;

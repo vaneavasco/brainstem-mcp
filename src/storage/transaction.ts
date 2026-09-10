@@ -3,6 +3,13 @@ import { promises as fs, constants as fsConstants, type Stats } from 'node:fs';
 import path from 'node:path';
 import { sha256hex } from '../auth/hash.ts';
 import {
+  describeUnknownHeading,
+  findSection,
+  hasEquivalentLine,
+  insertIntoSection,
+  sliceSection,
+} from '../vault/sections.ts';
+import {
   applyFrontmatterUpdate,
   frontmatterProblem,
   joinFrontmatter,
@@ -29,7 +36,18 @@ export type TxOp =
       expectedHash?: string;
     }
   | { op: 'edit'; path: string; patches: TextPatch[]; expectedHash?: string }
-  | { op: 'append'; path: string; content: string; expectedHash?: string }
+  | {
+      op: 'append';
+      path: string;
+      content: string;
+      /** Insert inside this section (heading path) instead of at end of file; must exist. */
+      heading?: string;
+      position?: 'start' | 'end';
+      /** Skip (not fail) when the section — or the file, without `heading` — already holds an
+       *  equivalent line: same `[[target]]`, or the identical line when content has no link. */
+      unique?: boolean;
+      expectedHash?: string;
+    }
   | {
       op: 'frontmatter_update';
       path: string;
@@ -50,6 +68,8 @@ export interface TxOpResult {
   diff?: string;
   /** Content hash of the op's target after the op. Only produced for an applied transaction. */
   hash?: string;
+  /** A `unique` append found an equivalent line already present and wrote nothing (still `ok`). */
+  skipped?: boolean;
 }
 
 export interface TxResult {
@@ -163,6 +183,35 @@ export function classifyJournal(manifestJson: string | null): JournalStatus {
 interface Plan {
   diff: string;
   hash: string | null;
+  skipped?: boolean;
+}
+
+type AppendOp = Extract<TxOp, { op: 'append' }>;
+
+/**
+ * The text an append op produces over `existing` (null = file does not exist), shared by
+ * pre-flight and apply so both see exactly the same result. `skipped` is a `unique` append whose
+ * line is already there.
+ */
+function planAppend(existing: string | null, op: AppendOp): { next: string; skipped: boolean } {
+  if (op.heading !== undefined) {
+    if (existing === null) throw new VaultError('NOT_FOUND', `${op.path} does not exist.`);
+    const range = findSection(existing, op.heading);
+    if (!range) throw new VaultError('NOT_FOUND', describeUnknownHeading(existing, op.heading));
+    if (op.unique === true && hasEquivalentLine(sliceSection(existing, range), op.content)) {
+      return { next: existing, skipped: true };
+    }
+    return {
+      next: insertIntoSection(existing, range, op.content, op.position ?? 'end'),
+      skipped: false,
+    };
+  }
+  const base = existing ?? '';
+  if (op.unique === true && hasEquivalentLine(base, op.content))
+    return { next: base, skipped: true };
+  const separator = base.length === 0 || base.endsWith('\n') ? '' : '\n';
+  const suffix = op.content.endsWith('\n') ? '' : '\n';
+  return { next: `${base}${separator}${op.content}${suffix}`, skipped: false };
 }
 
 /** Simulated content of one path during pre-flight. */
@@ -363,15 +412,13 @@ export async function runTransaction(
         }
         case 'append': {
           const p = normalizeVaultPath(op.path);
-          const cur = await load(p);
+          const cur = op.heading !== undefined ? await requireText(p) : await load(p);
           if (cur.exists && cur.content === null) {
             throw new VaultError('ENCODING', `${p} is not valid UTF-8 text.`);
           }
           assertExpectedHash(p, cur.hash, op.expectedHash);
-          const existing = cur.content ?? '';
-          const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-          const suffix = op.content.endsWith('\n') ? '' : '\n';
-          const next = `${existing}${separator}${op.content}${suffix}`;
+          const { next, skipped } = planAppend(cur.content, op);
+          if (skipped) return { diff: '', hash: cur.hash, skipped: true };
           assertWithinSize(byteLen(next), 'Appended content');
           return produce(p, cur.content, next);
         }
@@ -441,9 +488,22 @@ export async function runTransaction(
         case 'edit':
           await adapter.edit(normalizeVaultPath(op.path), op.patches, false);
           return;
-        case 'append':
-          await adapter.append(normalizeVaultPath(op.path), op.content);
+        case 'append': {
+          const p = normalizeVaultPath(op.path);
+          if (op.heading === undefined && op.unique !== true) {
+            await adapter.append(p, op.content);
+            return;
+          }
+          let existing: string | null = null;
+          try {
+            existing = (await adapter.read(p)).content;
+          } catch (error) {
+            if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
+          }
+          const { next, skipped } = planAppend(existing, op);
+          if (!skipped) await adapter.write(p, next);
           return;
+        }
         case 'frontmatter_update': {
           const p = normalizeVaultPath(op.path);
           // batchFrontmatterUpdate collects per-item errors instead of throwing; a transaction
@@ -476,6 +536,7 @@ export async function runTransaction(
         plans.push(plan);
         const entry = results[index] as TxOpResult;
         entry.ok = true;
+        if (plan.skipped === true) entry.skipped = true;
         if (dryRun) entry.diff = plan.diff;
       } catch (error) {
         (results[index] as TxOpResult).error = describeError(error);

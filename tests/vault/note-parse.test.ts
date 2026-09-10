@@ -173,3 +173,23 @@ describe('parseNote headings, block ids, words', () => {
     expect(wordCount).toBe(5); // four five six seven + "#tag"? no: tags are words too → 5 tokens with letters/digits: four five six #tag seven
   });
 });
+
+describe('frontmatter links', () => {
+  it('extracts wikilinks from frontmatter values with file-absolute offsets and lines', () => {
+    const content =
+      '---\nauthor: "[[Alice Smith]]"\nprojects: ["[[R1]]", "[[R2|two]]"]\n---\nbody [[b]]\n';
+    const parsed = parse(content);
+    expect(parsed.links.map((l) => l.target)).toEqual(['Alice Smith', 'R1', 'R2', 'b']);
+    const first = parsed.links[0];
+    expect(first?.line).toBe(2);
+    expect(first?.kind).toBe('wiki');
+    expect(first?.embed).toBe(false);
+    expect(content.slice(first?.start ?? 0, first?.end ?? 0)).toBe('[[Alice Smith]]');
+    expect(parsed.links[2]?.alias).toBe('two');
+    expect(parsed.links[3]?.line).toBe(5);
+  });
+  it('finds no frontmatter links in a note without a frontmatter block', () => {
+    const parsed = parse('no block here\n[[only]]\n');
+    expect(parsed.links.map((l) => l.target)).toEqual(['only']);
+  });
+});
