@@ -338,3 +338,27 @@ describe('vault_move — link rewriting', () => {
     expect(locked).toContain('folder/p.md');
   });
 });
+
+describe('frontmatter wikilinks', () => {
+  it('count as backlinks and are rewritten on move', async () => {
+    await h.call('vault_write', { path: 'people/karen.md', content: '# Karen\n' });
+    await h.call('vault_write', {
+      path: 'retreats/r1.md',
+      content: '---\ninstructor: "[[karen]]"\nparticipants: ["[[karen|K]]"]\n---\n# R1\n',
+    });
+    const links = await h.call('vault_links', { path: 'people/karen.md', include: ['backlinks'] });
+    expect(links.isError, text(links)).toBeFalsy();
+    const backlinks = (links.structuredContent as LinksResult).backlinks;
+    expect(backlinks.map((b) => b.path)).toEqual(['retreats/r1.md', 'retreats/r1.md']);
+    expect(backlinks.map((b) => b.line)).toEqual([2, 3]);
+
+    const mv = await h.call('vault_move', { from: 'people/karen.md', to: 'people/karen-rice.md' });
+    expect(mv.isError, text(mv)).toBeFalsy();
+    expect((mv.structuredContent as MoveResult).linksUpdated).toEqual([
+      { path: 'retreats/r1.md', count: 2 },
+    ]);
+    expect(text(await h.call('vault_read', { path: 'retreats/r1.md' }))).toBe(
+      '---\ninstructor: "[[karen-rice]]"\nparticipants: ["[[karen-rice|K]]"]\n---\n# R1\n',
+    );
+  });
+});

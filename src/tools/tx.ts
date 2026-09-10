@@ -35,6 +35,22 @@ const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
     op: z.literal('append'),
     path: PathArg,
     content: z.string().min(1),
+    heading: z
+      .string()
+      .optional()
+      .describe(
+        'Insert inside this section (heading path like "Related" or "H1 > H2") instead of at end of file. The note and the heading must exist.',
+      ),
+    position: z
+      .enum(['start', 'end'])
+      .optional()
+      .describe('Where inside the section, when "heading" is given. Default "end".'),
+    unique: z
+      .boolean()
+      .optional()
+      .describe(
+        'Skip the op (reported as skipped, not an error) when the section — or the whole file without "heading" — already has a line linking to the same [[target]] (alias/anchor ignored), or an identical line when content has no wikilink. Use it for reciprocal bullets so retries and parallel writers never duplicate them.',
+      ),
     expectedHash: ExpectedHashArg,
   }),
   z.object({
@@ -65,6 +81,7 @@ const OpResultSchema = z.object({
   error: z.string().optional(),
   diff: z.string().optional(),
   hash: z.string().optional(),
+  skipped: z.boolean().optional(),
 });
 
 /** The first op that actually failed; the ones after it are only marked "not attempted". */
@@ -81,7 +98,9 @@ function isClean(result: TxResult): boolean {
 function summarize(result: TxResult): string {
   const failed = failure(result);
   if (result.applied) {
-    return `Transaction ${result.id}: applied ${result.results.length} op(s) across ${result.touched.length} file(s).`;
+    const skipped = result.results.filter((r) => r.skipped === true).length;
+    const note = skipped > 0 ? ` ${skipped} unique append(s) skipped: already present.` : '';
+    return `Transaction ${result.id}: applied ${result.results.length} op(s) across ${result.touched.length} file(s).${note}`;
   }
   if (result.dryRun && isClean(result)) {
     const diffs = result.results
@@ -110,7 +129,7 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
     'vault_transaction',
     {
       title: 'Run several writes as one transaction',
-      description: `Apply up to ${MAX_TX_OPS} write/edit/append/frontmatter_update/move/delete ops to at most ${MAX_TX_FILES} files as one all-or-nothing unit. Every op is checked first (hashes, patches, move destinations); if any check fails nothing is written. If a write fails half-way, every touched file is restored from a journalled copy. Ops on the same path compose in order. Use dryRun=true to see the diffs first.`,
+      description: `Apply up to ${MAX_TX_OPS} write/edit/append/frontmatter_update/move/delete ops to at most ${MAX_TX_FILES} files as one all-or-nothing unit. Every op is checked first (hashes, patches, move destinations); if any check fails nothing is written. If a write fails half-way, every touched file is restored from a journalled copy. Ops on the same path compose in order. An append op takes "heading" (insert inside a section) and "unique" (skip when an equivalent line is already there), so a note plus every reciprocal bullet on other notes can be written as one unit. Use dryRun=true to see the diffs first.`,
       inputSchema: z.object({
         // No Zod .min/.max here on purpose: both caps are enforced inside runTransaction so a
         // violation comes back as INVALID_INPUT like every other vault error, instead of the

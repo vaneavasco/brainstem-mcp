@@ -4,7 +4,13 @@ import { BINARY_MIME_ALLOWLIST, MAX_BATCH, MAX_FILE_BYTES } from '../storage/lim
 import { normalizedOrRaw, normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { assertExpectedHash } from '../storage/write-gate.ts';
-import { describeUnknownHeading, findSection, insertIntoSection } from '../vault/sections.ts';
+import {
+  describeUnknownHeading,
+  findSection,
+  hasEquivalentLine,
+  insertIntoSection,
+  sliceSection,
+} from '../vault/sections.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
 import { ExpectedHashArg, PathArg } from './args.ts';
 import { applyNote, locked, type ToolContext } from './register.ts';
@@ -138,7 +144,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Append to note',
       description:
-        'Append text to the end of a file (a newline is inserted before the appended text if the file does not already end with one, and after it so the file always ends with a newline). Creates the file when missing. Cheaper than vault_write for adding to existing notes. With "heading" (a heading path like "Heading" or "H1 > H2"), inserts inside that section instead — at its end (default) or its start ("position").',
+        'Append text to the end of a file (newline-terminated; the file is created when missing). Cheaper than vault_write for adding to existing notes. With "heading" (a heading path like "Heading" or "H1 > H2"), inserts inside that section instead — at its end (default) or its start ("position"). With "unique", writes nothing (reports skipped) when the section — or the file, without "heading" — already has a line linking to the same [[target]] (alias/anchor ignored), or an identical line when the content has no wikilink.',
       inputSchema: z.object({
         path: PathArg,
         content: z.string().min(1),
@@ -150,12 +156,23 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .enum(['start', 'end'])
           .optional()
           .describe('Where inside the section to insert, when "heading" is given. Default "end".'),
+        unique: z
+          .boolean()
+          .optional()
+          .describe(
+            'Skip when an equivalent line (same [[target]], or identical text) is already in the target section / file.',
+          ),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({ path: z.string(), bytes: z.number(), hash: z.string() }),
+      outputSchema: z.object({
+        path: z.string(),
+        bytes: z.number(),
+        hash: z.string(),
+        skipped: z.boolean().optional(),
+      }),
       annotations: APPEND_ONLY,
     },
-    ({ path, content, heading, position, expectedHash }) =>
+    ({ path, content, heading, position, unique, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
         return locked(tc, [p], async () => {
@@ -165,6 +182,13 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
             if (!range) {
               throw new VaultError('NOT_FOUND', describeUnknownHeading(note.content, heading));
             }
+            if (unique === true && hasEquivalentLine(sliceSection(note.content, range), content)) {
+              assertExpectedHash(p, note.hash, expectedHash);
+              return okJson(
+                { path: note.path, bytes: note.meta.size, hash: note.hash, skipped: true },
+                `Skipped: "${heading}" in ${note.path} already has an equivalent line; nothing written.`,
+              );
+            }
             const updated = insertIntoSection(note.content, range, content, position ?? 'end');
             const after = await adapter.write(p, updated, { expectedHash });
             applyNote(tc, after);
@@ -172,6 +196,21 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
               { path: after.path, bytes: after.meta.size, hash: after.hash },
               `Inserted into "${heading}" in ${after.path} (now ${after.meta.size} bytes).`,
             );
+          }
+          if (unique === true) {
+            let current: Awaited<ReturnType<typeof adapter.read>> | null = null;
+            try {
+              current = await adapter.read(p);
+            } catch (error) {
+              if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
+            }
+            if (current !== null && hasEquivalentLine(current.content, content)) {
+              assertExpectedHash(p, current.hash, expectedHash);
+              return okJson(
+                { path: current.path, bytes: current.meta.size, hash: current.hash, skipped: true },
+                `Skipped: ${current.path} already has an equivalent line; nothing written.`,
+              );
+            }
           }
           const note = await adapter.append(p, content, { expectedHash });
           applyNote(tc, note);

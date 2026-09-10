@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   findSection,
+  hasEquivalentLine,
   insertIntoSection,
   listHeadingPaths,
   type SectionRange,
@@ -349,5 +350,21 @@ describe('listHeadingPaths — identical sibling paths', () => {
     const content = '# A\n\n## Tasks\none\n\n## Tasks\ntwo\n';
     expect(listHeadingPaths(content)).toEqual(['A', 'A > Tasks']);
     expect(findSection(content, 'A > Tasks')?.startLine).toBe(3);
+  });
+});
+
+describe('hasEquivalentLine', () => {
+  const region = '## Related\n- Instructor of [[Karen Rice 7 (Rodier)|Karen]]\n- plain line\n';
+  it('matches a line linking to the same target regardless of alias, anchor or case', () => {
+    expect(hasEquivalentLine(region, '- Instructor of [[karen rice 7 (rodier)]]')).toBe(true);
+    expect(hasEquivalentLine(region, '- Teaches [[Karen Rice 7 (Rodier)#Summary|x]]')).toBe(true);
+  });
+  it('does not match a different link target', () => {
+    expect(hasEquivalentLine(region, '- Instructor of [[Karen Rice 8]]')).toBe(false);
+  });
+  it('falls back to an identical trimmed line when the text has no wikilink', () => {
+    expect(hasEquivalentLine(region, '  - plain line ')).toBe(true);
+    expect(hasEquivalentLine(region, '- other line')).toBe(false);
+    expect(hasEquivalentLine(region, '   ')).toBe(false);
   });
 });

@@ -19,7 +19,14 @@ interface TxStructured {
   rolledBack: boolean;
   touched: string[];
   journal?: string;
-  results: { index: number; op: string; ok: boolean; error?: string; diff?: string }[];
+  results: {
+    index: number;
+    op: string;
+    ok: boolean;
+    error?: string;
+    diff?: string;
+    skipped?: boolean;
+  }[];
 }
 
 function structured(result: { structuredContent?: unknown }): TxStructured {
@@ -176,5 +183,112 @@ describe('vault_transaction frontmatter_update on invalid YAML frontmatter', () 
     expect(text(ok)).toBe('---\ntype: note\n---\nbody\n');
     const brokenRead = await h.call('vault_read', { path: 'tx/broken.md' });
     expect(text(brokenRead)).toBe(broken);
+  });
+});
+
+describe('vault_transaction — append into a section, unique', () => {
+  const person =
+    '---\ntype: person\n---\n# P\n\n## Related\n- Instructor of [[Old]]\n\n## Timeline\n- 2025-01-01 [[t1|t]] — x\n';
+
+  it('inserts inside the heading and skips a unique duplicate, reporting it as skipped', async () => {
+    await seed('tx/person.md', person);
+    const result = await h.call('vault_transaction', {
+      ops: [
+        {
+          op: 'append',
+          path: 'tx/person.md',
+          content: '- Instructor of [[New Retreat]]',
+          heading: 'Related',
+          unique: true,
+        },
+        {
+          op: 'append',
+          path: 'tx/person.md',
+          content: '- Instructor of [[New Retreat|alias]]',
+          heading: 'Related',
+          unique: true,
+        },
+        {
+          op: 'append',
+          path: 'tx/person.md',
+          content: '- 2025-02-02 [[t2|t]] — y',
+          heading: 'Timeline',
+          unique: true,
+        },
+        {
+          op: 'append',
+          path: 'tx/person.md',
+          content: '- 2025-01-01 [[t1|other]] — dup',
+          heading: 'Timeline',
+          unique: true,
+        },
+      ],
+    });
+    expect(result.isError, text(result)).toBeFalsy();
+    const s = structured(result);
+    expect(s.applied).toBe(true);
+    expect(s.results.map((r) => r.skipped === true)).toEqual([false, true, false, true]);
+    expect(s.results.every((r) => r.ok)).toBe(true);
+    const after = await fs.readFile(path.join(h.root, 'tx', 'person.md'), 'utf8');
+    expect(after).toBe(
+      '---\ntype: person\n---\n# P\n\n## Related\n- Instructor of [[Old]]\n- Instructor of [[New Retreat]]\n\n## Timeline\n- 2025-01-01 [[t1|t]] — x\n- 2025-02-02 [[t2|t]] — y\n',
+    );
+  });
+
+  it('fails the whole transaction when the heading does not exist, writing nothing', async () => {
+    await seed('tx/h.md', '## A\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        { op: 'append', path: 'tx/h.md', content: 'x' },
+        { op: 'append', path: 'tx/h.md', content: '- y', heading: 'Nope' },
+      ],
+    });
+    const s = structured(result);
+    expect(s.applied).toBe(false);
+    expect(s.results[1]?.error).toMatch(/NOT_FOUND/);
+    expect(await fs.readFile(path.join(h.root, 'tx', 'h.md'), 'utf8')).toBe('## A\n');
+  });
+
+  it('unique without a heading checks the whole file', async () => {
+    await seed('tx/u.md', '- [[Z|first]]\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        { op: 'append', path: 'tx/u.md', content: '- [[Z]] again', unique: true },
+        { op: 'append', path: 'tx/u.md', content: '- [[Y]]', unique: true },
+      ],
+    });
+    const s = structured(result);
+    expect(s.applied).toBe(true);
+    expect(s.results.map((r) => r.skipped === true)).toEqual([true, false]);
+    expect(await fs.readFile(path.join(h.root, 'tx', 'u.md'), 'utf8')).toBe(
+      '- [[Z|first]]\n- [[Y]]\n',
+    );
+  });
+});
+
+describe('vault_append — unique', () => {
+  it('skips an equivalent line inside the section and reports skipped without changing the hash', async () => {
+    await seed('ap/p.md', '# P\n\n## Related\n- Instructor of [[R]]\n');
+    const before = await h.call('vault_append', {
+      path: 'ap/p.md',
+      content: '- Instructor of [[R|alias]]',
+      heading: 'Related',
+      unique: true,
+    });
+    expect(before.isError, text(before)).toBeFalsy();
+    const body = before.structuredContent as { hash: string; skipped?: boolean };
+    expect(body.skipped).toBe(true);
+    expect(await fs.readFile(path.join(h.root, 'ap', 'p.md'), 'utf8')).toBe(
+      '# P\n\n## Related\n- Instructor of [[R]]\n',
+    );
+    const added = await h.call('vault_append', {
+      path: 'ap/p.md',
+      content: '- Instructor of [[S]]',
+      heading: 'Related',
+      unique: true,
+    });
+    const body2 = added.structuredContent as { hash: string; skipped?: boolean };
+    expect(body2.skipped).toBeUndefined();
+    expect(body2.hash).not.toBe(body.hash);
   });
 });
