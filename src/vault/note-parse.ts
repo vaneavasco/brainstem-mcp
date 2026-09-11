@@ -30,7 +30,11 @@ export interface ParsedNote {
 const FENCE = /^(`{3,}|~{3,})/;
 const INLINE_CODE = /`[^`\n]*`/g;
 const COMMENT = /%%[\s\S]*?%%|%%[\s\S]*$/g;
-const WIKI = /(!?)\[\[([^[\]\n]+?)\]\]/g;
+// The inner group allows a lone ']' that is not itself followed by another ']' — an alias like
+// "[Draft] hello" (a single, unpaired bracket) must not terminate the match before the real "]]",
+// which would otherwise leave the whole wikilink unrecognised (see sections.ts's LINK_TARGETS,
+// which has the same fix for the same reason).
+const WIKI = /(!?)\[\[((?:[^\]\n]|\](?!\]))+?)\]\]/g;
 // [text](target) or [text](<target with spaces>); embeds have a leading '!'
 const MD = /(!?)\[([^\]\n]*)\]\((?:<([^>\n]+)>|([^()\s]+))\)/g;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;

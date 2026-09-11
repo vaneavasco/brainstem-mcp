@@ -46,10 +46,10 @@ const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
       .optional()
       .describe('Where inside the section, when "heading" is given. Default "end".'),
     unique: z
-      .boolean()
+      .union([z.boolean(), z.literal('line')])
       .optional()
       .describe(
-        'Skip the op (reported as skipped, not an error) when the section — or the whole file without "heading" — already has a line linking to the same [[target]] (alias/anchor ignored), or an identical line when content has no wikilink. Use it for reciprocal bullets so retries and parallel writers never duplicate them.',
+        'true: skip the op (reported as skipped, not an error) when the section — or the whole file without "heading" — already has a line linking to the same [[target]] (alias/anchor ignored; different wikilink forms of the same note all count), or an identical line when content has no wikilink. "line": skip only when an identical trimmed line already exists, ignoring links entirely — for event-log bullets that legitimately link the same note more than once. Use it for reciprocal bullets so retries and parallel writers never duplicate them.',
       ),
     expectedHash: ExpectedHashArg,
   }),
@@ -150,9 +150,9 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
     },
     ({ ops, dryRun }) =>
       guarded(tc.log, async (): Promise<CallToolResult> => {
-        const { adapter, gate, paths, now } = tc.runtime;
+        const { adapter, gate, paths, now, graph } = tc.runtime;
         const result = await runTransaction(
-          { adapter, gate, vaultRoot: paths.vaultRoot, stateDir: paths.stateDir, now },
+          { adapter, gate, vaultRoot: paths.vaultRoot, stateDir: paths.stateDir, now, graph },
           ops,
           { dryRun: dryRun ?? false },
         );
