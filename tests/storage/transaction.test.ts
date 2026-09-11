@@ -479,3 +479,56 @@ describe('classifyJournal', () => {
     expect(classifyJournal(null).id).toBeNull();
   });
 });
+
+describe('runTransaction append — unique: "line"', () => {
+  it('skips only an identical trimmed line, unlike unique: true which compares link targets', async () => {
+    await seed('log.md', '- 2026-03-01 — away, covered by [[Bob Jones]]\n');
+
+    const lineMode = await runTransaction(
+      deps,
+      [
+        {
+          op: 'append',
+          path: 'log.md',
+          content: '- 2026-04-02 — away, covered by [[Bob Jones]]',
+          unique: 'line',
+        },
+      ],
+      {},
+    );
+    expect(lineMode.results[0]?.skipped).toBeUndefined();
+    expect(await readText('log.md')).toBe(
+      '- 2026-03-01 — away, covered by [[Bob Jones]]\n- 2026-04-02 — away, covered by [[Bob Jones]]\n',
+    );
+
+    const exactRepeat = await runTransaction(
+      deps,
+      [
+        {
+          op: 'append',
+          path: 'log.md',
+          content: '- 2026-04-02 — away, covered by [[Bob Jones]]',
+          unique: 'line',
+        },
+      ],
+      {},
+    );
+    expect(exactRepeat.results[0]?.skipped).toBe(true);
+    expect(await readText('log.md')).toBe(
+      '- 2026-03-01 — away, covered by [[Bob Jones]]\n- 2026-04-02 — away, covered by [[Bob Jones]]\n',
+    );
+  });
+
+  it('without a graph dep, unique: true still falls back to the default canon', async () => {
+    await seed('related.md', '- Author of [[people/Alice Smith]]\n');
+    // `deps` here (module-level beforeEach) carries no `graph` — proving the plain default canon
+    // alone already recognises a full path and a bare name as the same target.
+    const result = await runTransaction(
+      deps,
+      [{ op: 'append', path: 'related.md', content: '- Author of [[Alice Smith]]', unique: true }],
+      {},
+    );
+    expect(result.results[0]?.skipped).toBe(true);
+    expect(await readText('related.md')).toBe('- Author of [[people/Alice Smith]]\n');
+  });
+});

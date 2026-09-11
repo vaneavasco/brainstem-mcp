@@ -278,30 +278,70 @@ export function insertIntoSection(
   return lines.join('\n');
 }
 
-const LINK_TARGETS = /\[\[([^[\]|#\n]*)(?:[#|][^\]\n]*)?\]\]/g;
+// The alias/anchor part (after '#' or '|') allows a lone ']' that is not itself followed by
+// another ']' — so an alias like "[Draft] hello" (a single, unpaired bracket) doesn't terminate
+// the match early and leave the whole wikilink unrecognised. Only a real "]]" closes the link.
+const LINK_TARGETS = /\[\[([^[\]|#\n]*)(?:[#|](?:[^\]\n]|\](?!\]))*)?\]\]/g;
 
 function linkTargets(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(LINK_TARGETS)) {
-    const t = (m[1] ?? '').trim().toLowerCase();
+    const t = (m[1] ?? '').trim();
     if (t !== '') out.push(t);
   }
   return out;
 }
 
 /**
- * Whether `region` already holds a line equivalent to `text`. When `text` contains a wikilink, a
- * line linking to the same target counts (alias and anchor ignored, case-insensitive); otherwise
- * only an identical line (trimmed) does. Powers `unique` on appends, so a retried or concurrent
- * "reciprocal bullet" never lands twice.
+ * Default target canonicalisation for `unique` link comparisons: case-insensitive, a trailing
+ * `.md` stripped, and only the last path segment kept — so `[[people/Alice Smith]]`, `[[Alice
+ * Smith]]`, `[[Alice Smith.md]]` and `[[Alice Smith|Ali]]` all canonicalise to the same value.
+ * Callers that have the vault graph pass a smarter `canon` (resolving through it instead) so two
+ * different notes that merely share a basename are not conflated; this is the fallback for those
+ * that don't, and what a graph-backed canon itself falls back to when a target doesn't resolve.
  */
-export function hasEquivalentLine(region: string, text: string): boolean {
-  const wanted = linkTargets(text);
+export function defaultCanon(target: string): string {
+  const lower = target.trim().toLowerCase();
+  const stripped = lower.endsWith('.md') ? lower.slice(0, -3) : lower;
+  const segments = stripped.split('/');
+  return segments[segments.length - 1] ?? stripped;
+}
+
+/**
+ * Whether `region` already holds a line identical to `text` (trimmed), ignoring any wikilinks it
+ * may contain. Powers `unique: "line"` on appends: an event-log bullet that legitimately links
+ * the same note twice (different dates, same `[[target]]`) is only a duplicate when the whole
+ * line repeats.
+ */
+export function hasIdenticalLine(region: string, text: string): boolean {
+  const needle = text.trim();
+  if (needle === '') return false;
+  const lines = splitLines(region).map(stripCr);
+  return lines.some((line) => line.trim() === needle);
+}
+
+/**
+ * Whether `region` already holds a line equivalent to `text`. When `text` contains a wikilink, a
+ * line linking to the same target counts (alias and anchor ignored, case-insensitive by default —
+ * see `canon`); otherwise only an identical line (trimmed) does. Powers `unique` on appends, so a
+ * retried or concurrent "reciprocal bullet" never lands twice.
+ *
+ * `canon` canonicalises a raw link target before comparison; it defaults to `defaultCanon`. A
+ * caller with the vault graph can pass one that resolves each target relative to the note's own
+ * path, so two different-looking wikilinks that Obsidian would resolve to the same note (or two
+ * same-looking ones that resolve to *different* notes because they merely share a basename) are
+ * told apart correctly.
+ */
+export function hasEquivalentLine(
+  region: string,
+  text: string,
+  canon: (target: string) => string = defaultCanon,
+): boolean {
+  const wanted = linkTargets(text).map(canon);
   const lines = splitLines(region).map(stripCr);
   if (wanted.length > 0) {
     const first = wanted[0] as string;
-    return lines.some((line) => linkTargets(line).includes(first));
+    return lines.some((line) => linkTargets(line).map(canon).includes(first));
   }
-  const needle = text.trim();
-  return needle !== '' && lines.some((line) => line.trim() === needle);
+  return hasIdenticalLine(region, text);
 }

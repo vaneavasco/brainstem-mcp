@@ -133,11 +133,11 @@ Every read (`vault_read`, `vault_batch_read`, `vault_outline`) returns a content
 
 ### Query your notes
 
-`vault_query` runs Bases-style structured filters (`where`, `tags`, `pathPrefix`, `sort`, `groupBy`) over the in-memory index, with no disk reads. `vault_recent` lists notes by modification time. `vault_tags` lists every tag with counts, or every note carrying one (nested tags included). `vault_links` returns a note's outgoing links, backlinks and embeds.
+`vault_query` runs Bases-style structured filters (`where`, `tags`, `pathPrefix`, `sort`, `groupBy`) over the in-memory index, with no disk reads. `vault_recent` lists notes by modification time. `vault_tags` lists every tag with counts, or every note carrying one (nested tags included). `vault_links` returns a note's outgoing links, backlinks and embeds; `filter: { pathPrefix }` keeps only backlinks/embeds/unlinked mentions whose source path starts with it (applied before the result caps), so a heavily-linked note can still be checked one folder at a time — `total` reports the filtered counts.
 
 ### Sections
 
-`vault_read { section: "Heading > Sub-heading" }` returns just that heading's text instead of the whole note; `vault_append { heading, position }` writes inside a section instead of at the end of the file, and `unique: true` makes it a no-op (reported as `skipped`) when the section already has a line linking to the same `[[target]]` — the `append` op of `vault_transaction` takes the same three fields, so a note and the reciprocal bullets on the notes it links to go in as one unit. Wikilinks inside frontmatter values count as links (backlinks, graph, rename), as in Obsidian.
+`vault_read { section: "Heading > Sub-heading" }` returns just that heading's text instead of the whole note; `vault_append { heading, position }` writes inside a section instead of at the end of the file, and `unique: true` makes it a no-op (reported as `skipped`) when the section already has a line linking to the same `[[target]]` — different wikilink forms of the same note (a full path, a bare name, a `.md` suffix, an alias) all count as one target — or `unique: "line"` to skip only an identical trimmed line, ignoring links entirely, for bullets that legitimately link the same note more than once. The `append` op of `vault_transaction` takes the same fields, so a note and the reciprocal bullets on the notes it links to go in as one unit. Wikilinks inside frontmatter values count as links (backlinks, graph, rename), as in Obsidian.
 
 ### Attachments and file types
 
