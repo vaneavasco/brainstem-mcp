@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",
-    "@inquirer/prompts": "8.7.0",
+    "@inquirer/prompts": "8.7.2",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/express": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
