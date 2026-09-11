@@ -10,3 +10,6 @@ coverage/
 vault-dev/
 *dev-tokens*.json
 .worktrees/
+
+# IDE
+.idea/
