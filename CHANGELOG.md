@@ -19,6 +19,9 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- Frontmatter parsing no longer emits a Node process warning for every note whose
+  YAML holds an unquoted `{{placeholder}}` (template notes such as `created: {{date}}`);
+  the server log stayed noisy at each index pass.
 - Wikilinks inside frontmatter values (`author: "[[Alice]]"`, list items) are now
   part of the link index, as they are in Obsidian: they count as backlinks in
   `vault_links`, in `vault_analytics_*` and in the graph, and `vault_move` rewrites

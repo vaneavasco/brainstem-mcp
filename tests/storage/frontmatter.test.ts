@@ -86,3 +86,23 @@ describe('frontmatterProblem', () => {
     expect(frontmatterProblem('---\n- a\n- b\n---\nbody\n')).toMatch(/mapping/);
   });
 });
+
+describe('splitFrontmatter: template placeholders', () => {
+  it('parses unquoted {{placeholders}} without emitting a process warning', () => {
+    const warnings: unknown[] = [];
+    const original = process.emitWarning;
+    process.emitWarning = ((warning: unknown) => {
+      warnings.push(warning);
+    }) as typeof process.emitWarning;
+    try {
+      const result = splitFrontmatter(
+        '---\ntitle: "{{title}}"\ncreated: {{date}}\nmembers: {{members}}\n---\nbody\n',
+      );
+      expect(result.hasFrontmatter).toBe(true);
+      expect(result.frontmatter.title).toBe('{{title}}');
+      expect(warnings).toEqual([]);
+    } finally {
+      process.emitWarning = original;
+    }
+  });
+});

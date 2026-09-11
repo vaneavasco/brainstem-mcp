@@ -28,7 +28,11 @@ export function splitFrontmatter(text: string): SplitResult {
   let parsed: unknown;
   try {
     // schema 'core' keeps timestamps as strings; yaml's default 'core' does not coerce dates.
-    parsed = yamlText.trim() === '' ? {} : parse(yamlText, { schema: 'core' });
+    // logLevel 'error' (not 'silent', which would also swallow parse errors): template notes
+    // carry unquoted placeholders such as `created: {{date}}`, which YAML reads as a mapping
+    // used as a key and reports through process.emitWarning on every index pass; the value is
+    // still a valid mapping, so nothing is lost by not warning.
+    parsed = yamlText.trim() === '' ? {} : parse(yamlText, { schema: 'core', logLevel: 'error' });
   } catch (error) {
     throw new VaultError(
       'INVALID_INPUT',
