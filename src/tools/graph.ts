@@ -101,8 +101,21 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     'vault_links',
     {
       title: 'Note links',
-      description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) to also find plain-text mentions of the note's basename or aliases in notes that do not already link to it. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions.`,
-      inputSchema: z.object({ path: DetailedPathArg, include: z.array(LinkInclude).optional() }),
+      description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) for plain-text mentions of the note's basename or aliases in notes that don't already link to it. "filter.pathPrefix" (vault-relative, case-sensitive) keeps only backlinks/embeds/unlinkedMentions whose source starts with it, applied before the caps — so a note with hundreds of backlinks can still be checked one folder at a time; "total" reports the filtered, pre-cap counts. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions.`,
+      inputSchema: z.object({
+        path: DetailedPathArg,
+        include: z.array(LinkInclude).optional(),
+        filter: z
+          .object({
+            pathPrefix: z
+              .string()
+              .optional()
+              .describe(
+                'Vault-relative, case-sensitive prefix (e.g. "projects/") applied to the source path of backlinks, embeds and unlinked mentions before the caps.',
+              ),
+          })
+          .optional(),
+      }),
       outputSchema: z.object({
         path: z.string(),
         outgoing: z.array(OutgoingLink),
@@ -115,27 +128,36 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           embeds: z.boolean(),
           unlinkedMentions: z.boolean(),
         }),
+        total: z.object({
+          outgoing: z.number(),
+          backlinks: z.number(),
+          embeds: z.number(),
+          unlinkedMentions: z.number(),
+        }),
       }),
       annotations: READ_ONLY,
     },
-    ({ path, include }) =>
+    ({ path, include, filter }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
         const entry = index.get(p);
         if (!entry) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
         const want = new Set<LinkIncludeT>(include ?? DEFAULT_INCLUDE);
+        const pathPrefix = filter?.pathPrefix;
+        const bySource = (b: Backlink): boolean =>
+          pathPrefix === undefined || b.source.startsWith(pathPrefix);
 
         const outgoingAll = want.has('outgoing') ? graph.outgoing(p).map(toOutgoingLink) : [];
         const outgoingTruncated = outgoingAll.length > MAX_GRAPH_ITEMS;
         const outgoing = outgoingTruncated ? outgoingAll.slice(0, MAX_GRAPH_ITEMS) : outgoingAll;
 
-        const backlinksAll = want.has('backlinks') ? graph.backlinks(p) : [];
+        const backlinksAll = want.has('backlinks') ? graph.backlinks(p).filter(bySource) : [];
         const backlinksTruncated = backlinksAll.length > MAX_GRAPH_ITEMS;
         const backlinksCapped = backlinksTruncated
           ? backlinksAll.slice(0, MAX_GRAPH_ITEMS)
           : backlinksAll;
 
-        const embedsAll = want.has('embeds') ? graph.embedsOf(p) : [];
+        const embedsAll = want.has('embeds') ? graph.embedsOf(p).filter(bySource) : [];
         const embedsTruncated = embedsAll.length > MAX_GRAPH_ITEMS;
         const embedsCapped = embedsTruncated ? embedsAll.slice(0, MAX_GRAPH_ITEMS) : embedsAll;
 
@@ -149,11 +171,16 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
 
         let unlinkedMentions: { path: string; line: number; context: string }[] = [];
         let unlinkedTruncated = false;
+        let unlinkedTotal = 0;
         if (want.has('unlinkedMentions')) {
+          // Which notes "already link" is unaffected by the filter — only which results are shown.
           const backlinkSources = new Set(graph.backlinks(p).map((b) => b.source));
-          const found = await findUnlinkedMentions(adapter, p, entry.frontmatter, backlinkSources);
+          const found = await findUnlinkedMentions(adapter, p, entry.frontmatter, backlinkSources, {
+            pathPrefix,
+          });
           unlinkedMentions = found.mentions;
           unlinkedTruncated = found.truncated;
+          unlinkedTotal = found.total;
         }
 
         return okJson({
@@ -167,6 +194,12 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
             backlinks: backlinksTruncated,
             embeds: embedsTruncated,
             unlinkedMentions: unlinkedTruncated,
+          },
+          total: {
+            outgoing: outgoingAll.length,
+            backlinks: backlinksAll.length,
+            embeds: embedsAll.length,
+            unlinkedMentions: unlinkedTotal,
           },
         });
       }),

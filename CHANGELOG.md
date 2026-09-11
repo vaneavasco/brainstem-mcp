@@ -16,9 +16,34 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   `vault_append` already did, so a note and every reciprocal bullet on the notes it
   links to can be written as one all-or-nothing unit, with retries and parallel
   writers unable to duplicate a bullet.
+- `unique` on `vault_append` and the transaction `append` op now also accepts
+  `"line"`: skip only when an identical trimmed line already exists, ignoring
+  links entirely — for event-log bullets that legitimately link the same note
+  more than once (e.g. "away, covered by [[Bob Jones]]" on two different
+  dates), which `unique: true`'s same-target rule used to drop.
+- `vault_links` takes `filter: { pathPrefix }` (vault-relative, case-sensitive):
+  only backlinks, embeds and unlinked mentions whose source path starts with it
+  are returned, applied before the result caps, so a note with hundreds of
+  backlinks can still be checked one folder at a time. A new `total` object
+  reports the outgoing/backlinks/embeds/unlinkedMentions counts after
+  filtering and before capping.
 
 ### Fixed
 
+- A wikilink whose alias (or heading/block anchor) contains a lone `]` — e.g.
+  `[[Alice Smith|[Draft] hello]]` — is now recognised, matching Obsidian, which
+  resolves it to a link to "Alice Smith". Before, both the link index (so it
+  never showed up as a resolved outgoing link or backlink) and `unique` on
+  appends stopped parsing at that first `]`, so a `unique` append next to such
+  a line could land a duplicate bullet.
+- `unique: true` on `vault_append` and the transaction `append` op now
+  canonicalises link targets before comparing them, so `[[people/Alice
+  Smith]]`, `[[Alice Smith]]`, `[[Alice Smith.md]]` and `[[Alice Smith|Ali]]`
+  are recognised as the same target instead of only an exact (lowercased)
+  text match. `vault_append` and `vault_transaction` resolve each target
+  through the vault graph relative to the note's own path, so two different
+  notes that merely share a basename (e.g. `projects/Chart.md` and
+  `archive/Chart.md`) are still told apart correctly.
 - Wikilinks inside frontmatter values (`author: "[[Alice]]"`, list items) are now
   part of the link index, as they are in Obsidian: they count as backlinks in
   `vault_links`, in `vault_analytics_*` and in the graph, and `vault_move` rewrites

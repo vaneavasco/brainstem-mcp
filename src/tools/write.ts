@@ -4,10 +4,13 @@ import { BINARY_MIME_ALLOWLIST, MAX_BATCH, MAX_FILE_BYTES } from '../storage/lim
 import { normalizedOrRaw, normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { assertExpectedHash } from '../storage/write-gate.ts';
+import type { VaultGraph } from '../vault/graph.ts';
 import {
+  defaultCanon,
   describeUnknownHeading,
   findSection,
   hasEquivalentLine,
+  hasIdenticalLine,
   insertIntoSection,
   sliceSection,
 } from '../vault/sections.ts';
@@ -15,6 +18,39 @@ import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
 import { ExpectedHashArg, PathArg } from './args.ts';
 import { applyNote, locked, type ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
+
+const UniqueArg = z
+  .union([z.boolean(), z.literal('line')])
+  .optional()
+  .describe(
+    'true: skip when the section (or file) already has a line linking to the same [[target]] ' +
+      '(alias/anchor ignored), or an identical line when the content has no wikilink. ' +
+      '"line": skip only when an identical trimmed line already exists, ignoring links entirely — ' +
+      'for event-log bullets that legitimately link the same note more than once.',
+  );
+
+/** A canon that resolves `target` relative to `fromPath` through the vault graph, falling back to
+ *  `defaultCanon` when it does not resolve — so two different notes that merely share a basename
+ *  are not conflated, while every textual form of the same note still canonicalises together. */
+function graphCanon(graph: VaultGraph, fromPath: string): (target: string) => string {
+  return (target: string) => {
+    const resolution = graph.resolve(target, fromPath);
+    return resolution.status === 'resolved' ? resolution.path : defaultCanon(target);
+  };
+}
+
+/** Whether `region` already holds a line the incoming `content` should be deduplicated against,
+ *  per the `unique` mode (`true`: same link target; `"line"`: identical trimmed line). */
+function isDuplicateLine(
+  unique: boolean | 'line' | undefined,
+  region: string,
+  content: string,
+  canon: (target: string) => string,
+): boolean {
+  if (unique === true) return hasEquivalentLine(region, content, canon);
+  if (unique === 'line') return hasIdenticalLine(region, content);
+  return false;
+}
 
 function decodeBase64Strict(input: string): Uint8Array {
   const cleaned = input.replace(/\s+/g, '');
@@ -144,7 +180,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Append to note',
       description:
-        'Append text to the end of a file (newline-terminated; the file is created when missing). Cheaper than vault_write for adding to existing notes. With "heading" (a heading path like "Heading" or "H1 > H2"), inserts inside that section instead — at its end (default) or its start ("position"). With "unique", writes nothing (reports skipped) when the section — or the file, without "heading" — already has a line linking to the same [[target]] (alias/anchor ignored), or an identical line when the content has no wikilink.',
+        'Append text to the end of a file (newline-terminated; created if missing). Cheaper than vault_write for adding to existing notes. With "heading" (e.g. "H1 > H2"), inserts inside that section — at its end (default) or start ("position"). "unique: true" skips (reports skipped) when the section/file already links the same [[target]] (alias/anchor ignored; any wikilink form of one note counts), or has an identical line with no link. "unique: \'line\'" skips only an identical trimmed line, ignoring links — for bullets that legitimately repeat a link.',
       inputSchema: z.object({
         path: PathArg,
         content: z.string().min(1),
@@ -156,12 +192,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .enum(['start', 'end'])
           .optional()
           .describe('Where inside the section to insert, when "heading" is given. Default "end".'),
-        unique: z
-          .boolean()
-          .optional()
-          .describe(
-            'Skip when an equivalent line (same [[target]], or identical text) is already in the target section / file.',
-          ),
+        unique: UniqueArg,
         expectedHash: ExpectedHashArg,
       }),
       outputSchema: z.object({
@@ -175,6 +206,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     ({ path, content, heading, position, unique, expectedHash }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
+        const canon = graphCanon(tc.runtime.graph, p);
         return locked(tc, [p], async () => {
           if (heading !== undefined) {
             const note = await adapter.read(p);
@@ -182,7 +214,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
             if (!range) {
               throw new VaultError('NOT_FOUND', describeUnknownHeading(note.content, heading));
             }
-            if (unique === true && hasEquivalentLine(sliceSection(note.content, range), content)) {
+            if (isDuplicateLine(unique, sliceSection(note.content, range), content, canon)) {
               assertExpectedHash(p, note.hash, expectedHash);
               return okJson(
                 { path: note.path, bytes: note.meta.size, hash: note.hash, skipped: true },
@@ -197,14 +229,14 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
               `Inserted into "${heading}" in ${after.path} (now ${after.meta.size} bytes).`,
             );
           }
-          if (unique === true) {
+          if (unique === true || unique === 'line') {
             let current: Awaited<ReturnType<typeof adapter.read>> | null = null;
             try {
               current = await adapter.read(p);
             } catch (error) {
               if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
             }
-            if (current !== null && hasEquivalentLine(current.content, content)) {
+            if (current !== null && isDuplicateLine(unique, current.content, content, canon)) {
               assertExpectedHash(p, current.hash, expectedHash);
               return okJson(
                 { path: current.path, bytes: current.meta.size, hash: current.hash, skipped: true },

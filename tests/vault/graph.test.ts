@@ -89,6 +89,26 @@ describe('outgoing', () => {
   });
 });
 
+describe('resolve — wikilink alias containing a lone "]"', () => {
+  it('resolves through the index parser to the real target instead of being invisible', () => {
+    // A single, unpaired ']' inside the alias used to stop note-parse.ts's WIKI regex before the
+    // real closing "]]", so the link was never even parsed — it showed up neither as a resolved
+    // outgoing link nor as a backlink.
+    index.upsert(entry('people/Alice Smith.md', 'x'));
+    index.upsert(entry('notes/mentions.md', '[[people/Alice Smith|[Draft] hello]]'));
+    graph = new VaultGraph(index);
+
+    const out = graph.outgoing('notes/mentions.md');
+    expect(out).toHaveLength(1);
+    expect(out[0]?.link).toMatchObject({ target: 'people/Alice Smith', alias: '[Draft] hello' });
+    expect(out[0]?.resolution).toEqual({ status: 'resolved', path: 'people/Alice Smith.md' });
+
+    const back = graph.backlinks('people/Alice Smith.md');
+    expect(back).toHaveLength(1);
+    expect(back[0]?.source).toBe('notes/mentions.md');
+  });
+});
+
 describe('backlinks, embeds and hubs', () => {
   it('inverts every resolved outgoing link (one entry per link, not per source note)', () => {
     const back = graph.backlinks('b.md');

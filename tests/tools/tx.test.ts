@@ -292,3 +292,137 @@ describe('vault_append — unique', () => {
     expect(body2.hash).not.toBe(body.hash);
   });
 });
+
+describe('vault_transaction — append, unique: "line"', () => {
+  it('skips only an identical trimmed line, allowing a legitimate repeat link on a different line', async () => {
+    await seed('tx/log.md', '## Log\n- 2026-03-01 — away, covered by [[Bob Jones]]\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        {
+          op: 'append',
+          path: 'tx/log.md',
+          content: '- 2026-03-01 — away, covered by [[Bob Jones]]',
+          heading: 'Log',
+          unique: 'line',
+        },
+        {
+          op: 'append',
+          path: 'tx/log.md',
+          content: '- 2026-04-02 — away, covered by [[Bob Jones]]',
+          heading: 'Log',
+          unique: 'line',
+        },
+      ],
+    });
+    expect(result.isError, text(result)).toBeFalsy();
+    const s = structured(result);
+    expect(s.applied).toBe(true);
+    // First op is an exact repeat of the existing line, so it's skipped; the second links the
+    // same [[Bob Jones]] but on a different line, so "line" mode (unlike "true") keeps it.
+    expect(s.results.map((r) => r.skipped === true)).toEqual([true, false]);
+    expect(await fs.readFile(path.join(h.root, 'tx', 'log.md'), 'utf8')).toBe(
+      '## Log\n- 2026-03-01 — away, covered by [[Bob Jones]]\n- 2026-04-02 — away, covered by [[Bob Jones]]\n',
+    );
+  });
+});
+
+describe('vault_transaction — append, unique canonicalises via the graph', () => {
+  it('does not conflate two different notes that merely share a basename', async () => {
+    await seed('projects/Chart.md', 'x');
+    await seed('archive/Chart.md', 'x');
+    await seed('tx/report.md', '## Related\n- See [[projects/Chart]]\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        {
+          op: 'append',
+          path: 'tx/report.md',
+          content: '- See [[archive/Chart]]',
+          heading: 'Related',
+          unique: true,
+        },
+      ],
+    });
+    expect(result.isError, text(result)).toBeFalsy();
+    const s = structured(result);
+    expect(s.results[0]?.skipped).toBeUndefined();
+    expect(await fs.readFile(path.join(h.root, 'tx', 'report.md'), 'utf8')).toBe(
+      '## Related\n- See [[projects/Chart]]\n- See [[archive/Chart]]\n',
+    );
+  });
+
+  it('treats a bare name and a full vault path to the same note as the same target', async () => {
+    await seed('people/Alice Smith.md', 'x');
+    await seed('tx/report2.md', '## Related\n- Author of [[people/Alice Smith]]\n');
+    const result = await h.call('vault_transaction', {
+      ops: [
+        {
+          op: 'append',
+          path: 'tx/report2.md',
+          content: '- Author of [[Alice Smith]]',
+          heading: 'Related',
+          unique: true,
+        },
+      ],
+    });
+    expect(result.isError, text(result)).toBeFalsy();
+    const s = structured(result);
+    expect(s.results[0]?.skipped).toBe(true);
+    expect(await fs.readFile(path.join(h.root, 'tx', 'report2.md'), 'utf8')).toBe(
+      '## Related\n- Author of [[people/Alice Smith]]\n',
+    );
+  });
+});
+
+describe('vault_append — unique: "line"', () => {
+  it('skips only an identical trimmed line, ignoring a shared link target', async () => {
+    await seed('ap/log.md', '## Log\n- 2026-03-01 — away, covered by [[Bob Jones]]\n');
+    const dup = await h.call('vault_append', {
+      path: 'ap/log.md',
+      content: '- 2026-03-01 — away, covered by [[Bob Jones]]',
+      heading: 'Log',
+      unique: 'line',
+    });
+    expect((dup.structuredContent as { skipped?: boolean }).skipped).toBe(true);
+
+    const added = await h.call('vault_append', {
+      path: 'ap/log.md',
+      content: '- 2026-04-02 — away, covered by [[Bob Jones]]',
+      heading: 'Log',
+      unique: 'line',
+    });
+    expect((added.structuredContent as { skipped?: boolean }).skipped).toBeUndefined();
+    expect(await fs.readFile(path.join(h.root, 'ap', 'log.md'), 'utf8')).toBe(
+      '## Log\n- 2026-03-01 — away, covered by [[Bob Jones]]\n- 2026-04-02 — away, covered by [[Bob Jones]]\n',
+    );
+  });
+});
+
+describe('vault_append — unique canonicalises via the graph', () => {
+  it('does not conflate two different notes that merely share a basename', async () => {
+    await seed('projects/Report.md', 'x');
+    await seed('archive/Report.md', 'x');
+    await seed('ap/related.md', '## Related\n- See [[projects/Report]]\n');
+    const r = await h.call('vault_append', {
+      path: 'ap/related.md',
+      content: '- See [[archive/Report]]',
+      heading: 'Related',
+      unique: true,
+    });
+    expect((r.structuredContent as { skipped?: boolean }).skipped).toBeUndefined();
+    expect(await fs.readFile(path.join(h.root, 'ap', 'related.md'), 'utf8')).toBe(
+      '## Related\n- See [[projects/Report]]\n- See [[archive/Report]]\n',
+    );
+  });
+
+  it('treats a bare name, a full path and a .md-suffixed target as the same note', async () => {
+    await seed('people/Bob Jones.md', 'x');
+    await seed('ap/related2.md', '## Related\n- Author of [[people/Bob Jones]]\n');
+    const r = await h.call('vault_append', {
+      path: 'ap/related2.md',
+      content: '- Author of [[Bob Jones.md]]',
+      heading: 'Related',
+      unique: true,
+    });
+    expect((r.structuredContent as { skipped?: boolean }).skipped).toBe(true);
+  });
+});

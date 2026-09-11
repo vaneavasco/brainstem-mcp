@@ -38,13 +38,20 @@ export async function contextByLine(
 /**
  * Plain-text occurrences of the note's basename or any alias, whole-word and case-insensitive,
  * in notes that do not already link to it. `adapter.search` is literal and already case-insensitive.
+ * With `pathPrefix`, only mentions whose source path starts with it are kept — applied before the
+ * `MAX_UNLINKED_MENTIONS` cap, so `total` reflects the filtered count, not the unfiltered one.
  */
 export async function findUnlinkedMentions(
   adapter: StorageAdapter,
   notePath: string,
   frontmatter: Record<string, unknown>,
   backlinkSources: ReadonlySet<string>,
-): Promise<{ mentions: { path: string; line: number; context: string }[]; truncated: boolean }> {
+  opts: { pathPrefix?: string } = {},
+): Promise<{
+  mentions: { path: string; line: number; context: string }[];
+  truncated: boolean;
+  total: number;
+}> {
   const base = baseName(notePath).replace(/\.md$/i, '');
   const candidates = [...new Set([base, ...aliasCandidates(frontmatter)])].filter(
     (c) => c.trim() !== '',
@@ -60,6 +67,7 @@ export async function findUnlinkedMentions(
     for (const m of matches) {
       if (m.path === notePath) continue;
       if (backlinkSources.has(m.path)) continue;
+      if (opts.pathPrefix !== undefined && !m.path.startsWith(opts.pathPrefix)) continue;
       if (!regex.test(m.text)) continue;
       const key = `${m.path}:${m.line}`;
       if (seen.has(key)) continue;
@@ -68,6 +76,11 @@ export async function findUnlinkedMentions(
       mentions.push({ path: m.path, line: m.line, context: m.text });
     }
   }
-  const truncated = mentions.length > MAX_UNLINKED_MENTIONS;
-  return { mentions: truncated ? mentions.slice(0, MAX_UNLINKED_MENTIONS) : mentions, truncated };
+  const total = mentions.length;
+  const truncated = total > MAX_UNLINKED_MENTIONS;
+  return {
+    mentions: truncated ? mentions.slice(0, MAX_UNLINKED_MENTIONS) : mentions,
+    truncated,
+    total,
+  };
 }

@@ -116,6 +116,23 @@ describe('parseNote links', () => {
     const { links } = parse('[[ ]] [[   ]] [[#Heading]]');
     expect(links.map((l) => [l.target, l.heading])).toEqual([['', 'Heading']]);
   });
+
+  it('parses a wikilink whose alias contains a lone "]"', () => {
+    // A single, unpaired ']' inside the alias must not stop the match before the real closing
+    // "]]" (Obsidian itself resolves this to a link to "Alice Smith" with that literal alias).
+    const { links } = parse('See [[Alice Smith|[Draft] hello]] for more.');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ target: 'Alice Smith', alias: '[Draft] hello' });
+  });
+
+  it('still stops at the nearest real "]]" with several links and a bracketed alias in between', () => {
+    const { links } = parse('[[A]] text [[Bob Jones|note [x] end]] and [[C]]');
+    expect(links.map((l) => [l.target, l.alias])).toEqual([
+      ['A', undefined],
+      ['Bob Jones', 'note [x] end'],
+      ['C', undefined],
+    ]);
+  });
 });
 
 describe('parseNote tags', () => {

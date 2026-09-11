@@ -2,10 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs, constants as fsConstants, type Stats } from 'node:fs';
 import path from 'node:path';
 import { sha256hex } from '../auth/hash.ts';
+import type { VaultGraph } from '../vault/graph.ts';
 import {
+  defaultCanon,
   describeUnknownHeading,
   findSection,
   hasEquivalentLine,
+  hasIdenticalLine,
   insertIntoSection,
   sliceSection,
 } from '../vault/sections.ts';
@@ -44,8 +47,9 @@ export type TxOp =
       heading?: string;
       position?: 'start' | 'end';
       /** Skip (not fail) when the section — or the file, without `heading` — already holds an
-       *  equivalent line: same `[[target]]`, or the identical line when content has no link. */
-      unique?: boolean;
+       *  equivalent line: `true` = same `[[target]]` (or the identical line when content has no
+       *  link); `'line'` = only an identical trimmed line, ignoring links entirely. */
+      unique?: boolean | 'line';
       expectedHash?: string;
     }
   | {
@@ -93,6 +97,10 @@ export interface TxDeps {
   /** Absolute path of the reserved state directory (`<vault>/_brainstem`); journals live in `tx/`. */
   stateDir: string;
   now?: () => Date;
+  /** When given, a `unique: true` append canonicalises link targets by resolving them through the
+   *  vault graph (falling back to `defaultCanon` when a target doesn't resolve) instead of the
+   *  plain default canon, so notes that merely share a basename are not conflated. */
+  graph?: VaultGraph;
 }
 
 interface JournalEntry {
@@ -188,17 +196,46 @@ interface Plan {
 
 type AppendOp = Extract<TxOp, { op: 'append' }>;
 
+/** A canon that resolves `target` relative to `fromPath` through `graph`, falling back to
+ *  `defaultCanon` when it does not resolve, or `undefined` when there is no graph at all. */
+function canonFor(
+  graph: VaultGraph | undefined,
+  fromPath: string,
+): ((target: string) => string) | undefined {
+  if (!graph) return undefined;
+  return (target: string) => {
+    const resolution = graph.resolve(target, fromPath);
+    return resolution.status === 'resolved' ? resolution.path : defaultCanon(target);
+  };
+}
+
+/** Whether `region` already holds a line the incoming op's content should be deduplicated
+ *  against, per its `unique` mode (`true`: same link target; `'line'`: identical trimmed line). */
+function isDuplicateLine(
+  op: AppendOp,
+  region: string,
+  canon: ((target: string) => string) | undefined,
+): boolean {
+  if (op.unique === true) return hasEquivalentLine(region, op.content, canon);
+  if (op.unique === 'line') return hasIdenticalLine(region, op.content);
+  return false;
+}
+
 /**
  * The text an append op produces over `existing` (null = file does not exist), shared by
  * pre-flight and apply so both see exactly the same result. `skipped` is a `unique` append whose
- * line is already there.
+ * line is already there. `canon` (from `canonFor`) canonicalises link targets for `unique: true`.
  */
-function planAppend(existing: string | null, op: AppendOp): { next: string; skipped: boolean } {
+function planAppend(
+  existing: string | null,
+  op: AppendOp,
+  canon?: (target: string) => string,
+): { next: string; skipped: boolean } {
   if (op.heading !== undefined) {
     if (existing === null) throw new VaultError('NOT_FOUND', `${op.path} does not exist.`);
     const range = findSection(existing, op.heading);
     if (!range) throw new VaultError('NOT_FOUND', describeUnknownHeading(existing, op.heading));
-    if (op.unique === true && hasEquivalentLine(sliceSection(existing, range), op.content)) {
+    if (isDuplicateLine(op, sliceSection(existing, range), canon)) {
       return { next: existing, skipped: true };
     }
     return {
@@ -207,8 +244,7 @@ function planAppend(existing: string | null, op: AppendOp): { next: string; skip
     };
   }
   const base = existing ?? '';
-  if (op.unique === true && hasEquivalentLine(base, op.content))
-    return { next: base, skipped: true };
+  if (isDuplicateLine(op, base, canon)) return { next: base, skipped: true };
   const separator = base.length === 0 || base.endsWith('\n') ? '' : '\n';
   const suffix = op.content.endsWith('\n') ? '' : '\n';
   return { next: `${base}${separator}${op.content}${suffix}`, skipped: false };
@@ -302,7 +338,7 @@ export async function runTransaction(
   ops: TxOp[],
   opts: { dryRun?: boolean } = {},
 ): Promise<TxResult> {
-  const { adapter, gate, vaultRoot, stateDir } = deps;
+  const { adapter, gate, vaultRoot, stateDir, graph } = deps;
   const now = deps.now ?? ((): Date => new Date());
   const dryRun = opts.dryRun === true;
 
@@ -417,7 +453,7 @@ export async function runTransaction(
             throw new VaultError('ENCODING', `${p} is not valid UTF-8 text.`);
           }
           assertExpectedHash(p, cur.hash, op.expectedHash);
-          const { next, skipped } = planAppend(cur.content, op);
+          const { next, skipped } = planAppend(cur.content, op, canonFor(graph, p));
           if (skipped) return { diff: '', hash: cur.hash, skipped: true };
           assertWithinSize(byteLen(next), 'Appended content');
           return produce(p, cur.content, next);
@@ -490,7 +526,7 @@ export async function runTransaction(
           return;
         case 'append': {
           const p = normalizeVaultPath(op.path);
-          if (op.heading === undefined && op.unique !== true) {
+          if (op.heading === undefined && op.unique !== true && op.unique !== 'line') {
             await adapter.append(p, op.content);
             return;
           }
@@ -500,7 +536,7 @@ export async function runTransaction(
           } catch (error) {
             if (!(error instanceof VaultError && error.code === 'NOT_FOUND')) throw error;
           }
-          const { next, skipped } = planAppend(existing, op);
+          const { next, skipped } = planAppend(existing, op, canonFor(graph, p));
           if (!skipped) await adapter.write(p, next);
           return;
         }

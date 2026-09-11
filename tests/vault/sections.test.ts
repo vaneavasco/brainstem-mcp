@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  defaultCanon,
   findSection,
   hasEquivalentLine,
+  hasIdenticalLine,
   insertIntoSection,
   listHeadingPaths,
   type SectionRange,
@@ -366,5 +368,60 @@ describe('hasEquivalentLine', () => {
     expect(hasEquivalentLine(region, '  - plain line ')).toBe(true);
     expect(hasEquivalentLine(region, '- other line')).toBe(false);
     expect(hasEquivalentLine(region, '   ')).toBe(false);
+  });
+
+  it('recognises a wikilink whose alias contains a lone "]"', () => {
+    // A single, unpaired ']' inside the alias must not stop the target match before the real
+    // closing "]]" — otherwise the whole line is invisible to hasEquivalentLine and a "unique"
+    // append lands a duplicate bullet.
+    const withBracketAlias = '## Related\n- Author of [[Alice Smith|[Draft] hello]]\n';
+    expect(hasEquivalentLine(withBracketAlias, '- Also by [[Alice Smith]]')).toBe(true);
+    // And the other way round: the *candidate* text is the one with the bracket alias.
+    const plain = '## Related\n- Author of [[Alice Smith]]\n';
+    expect(hasEquivalentLine(plain, '- Also by [[Alice Smith|[Draft] hello]]')).toBe(true);
+  });
+});
+
+describe('defaultCanon', () => {
+  it('lowercases, strips a trailing .md and keeps only the last path segment', () => {
+    expect(defaultCanon('People/Alice Smith.MD')).toBe('alice smith');
+    expect(defaultCanon('Alice Smith')).toBe('alice smith');
+    expect(defaultCanon('Alice Smith.md')).toBe('alice smith');
+    expect(defaultCanon('people/alice smith')).toBe('alice smith');
+  });
+});
+
+describe('hasEquivalentLine — default canon treats path/bare/.md/alias forms as one target', () => {
+  const region = '## Related\n- Author of [[people/Alice Smith]]\n';
+  it('matches a bare name, a .md-suffixed name and an aliased link to the same note', () => {
+    expect(hasEquivalentLine(region, '- Also by [[Alice Smith]]')).toBe(true);
+    expect(hasEquivalentLine(region, '- Also by [[Alice Smith.md]]')).toBe(true);
+    expect(hasEquivalentLine(region, '- Also by [[Alice Smith|Ali]]')).toBe(true);
+  });
+  it('still tells apart a genuinely different target', () => {
+    expect(hasEquivalentLine(region, '- Also by [[Bob Jones]]')).toBe(false);
+  });
+});
+
+describe('hasEquivalentLine — custom canon', () => {
+  it('uses the caller-supplied canon instead of the default (case-sensitive here)', () => {
+    const identity = (t: string) => t;
+    expect(hasEquivalentLine('- [[A]]\n', '- [[a]]', identity)).toBe(false);
+    expect(hasEquivalentLine('- [[A]]\n', '- [[A]]', identity)).toBe(true);
+  });
+});
+
+describe('hasIdenticalLine', () => {
+  it('matches only an identical trimmed line, ignoring links entirely', () => {
+    const region = '## Log\n- 2026-03-01 — away, covered by [[Bob Jones]]\n';
+    expect(hasIdenticalLine(region, '- 2026-03-01 — away, covered by [[Bob Jones]]')).toBe(true);
+    // A different date is not a duplicate, even though it links to the same [[Bob Jones]].
+    expect(hasIdenticalLine(region, '- 2026-04-02 — away, covered by [[Bob Jones]]')).toBe(false);
+  });
+  it('trims surrounding whitespace before comparing', () => {
+    expect(hasIdenticalLine('  - x  \n', '- x')).toBe(true);
+  });
+  it('never matches an empty or whitespace-only candidate', () => {
+    expect(hasIdenticalLine('\n\n', '   ')).toBe(false);
   });
 });

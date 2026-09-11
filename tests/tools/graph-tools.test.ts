@@ -26,6 +26,7 @@ interface LinksResult {
   embeds: ContextHit[];
   unlinkedMentions: ContextHit[];
   truncated: { outgoing: boolean; backlinks: boolean; embeds: boolean; unlinkedMentions: boolean };
+  total: { outgoing: number; backlinks: number; embeds: number; unlinkedMentions: number };
 }
 
 interface TagsListResult {
@@ -183,6 +184,93 @@ describe('vault_links', () => {
     const r = await h.call('vault_links', { path: 'nope.md' });
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/^NOT_FOUND: /);
+  });
+
+  it('reports total counts for outgoing/backlinks/embeds/unlinkedMentions', async () => {
+    const r = await h.call('vault_links', {
+      path: 'a.md',
+      include: ['outgoing', 'backlinks', 'embeds', 'unlinkedMentions'],
+    });
+    expect(r.isError, text(r)).toBeFalsy();
+    const body = r.structuredContent as LinksResult;
+    expect(body.total).toEqual({
+      outgoing: body.outgoing.length,
+      backlinks: body.backlinks.length,
+      embeds: body.embeds.length,
+      unlinkedMentions: body.unlinkedMentions.length,
+    });
+  });
+});
+
+describe('vault_links — filter.pathPrefix', () => {
+  it('keeps only backlinks, embeds and unlinked mentions whose source starts with the prefix, and reports the filtered total', async () => {
+    await h.call('vault_write', { path: 'target.md', content: 'Target note.' });
+    await h.call('vault_write', { path: 'projects/alpha.md', content: '[[target]]' });
+    await h.call('vault_write', { path: 'archive/alpha.md', content: '[[target]]' });
+    await h.call('vault_write', { path: 'projects/beta.md', content: '![[target]]' });
+    await h.call('vault_write', { path: 'archive/beta.md', content: '![[target]]' });
+    await h.call('vault_write', {
+      path: 'projects/gamma.md',
+      content: 'mentions target in passing',
+    });
+    await h.call('vault_write', {
+      path: 'archive/gamma.md',
+      content: 'mentions target in passing',
+    });
+
+    const r = await h.call('vault_links', {
+      path: 'target.md',
+      include: ['outgoing', 'backlinks', 'embeds', 'unlinkedMentions'],
+      filter: { pathPrefix: 'projects/' },
+    });
+    expect(r.isError, text(r)).toBeFalsy();
+    const body = r.structuredContent as LinksResult;
+    // backlinks includes every resolved link (embeds too — see the "separates embeds from plain
+    // backlinks" test above), so both projects/ notes show up there; embeds is the embed subset.
+    expect(body.backlinks.map((b) => b.path).sort()).toEqual([
+      'projects/alpha.md',
+      'projects/beta.md',
+    ]);
+    expect(body.embeds.map((b) => b.path)).toEqual(['projects/beta.md']);
+    expect(body.unlinkedMentions.map((m) => m.path)).toEqual(['projects/gamma.md']);
+    expect(body.total).toEqual({ outgoing: 0, backlinks: 2, embeds: 1, unlinkedMentions: 1 });
+  });
+
+  it('is case-sensitive', async () => {
+    await h.call('vault_write', { path: 'target.md', content: 'Target note.' });
+    await h.call('vault_write', { path: 'projects/alpha.md', content: '[[target]]' });
+
+    const r = await h.call('vault_links', {
+      path: 'target.md',
+      include: ['backlinks'],
+      filter: { pathPrefix: 'Projects/' },
+    });
+    const body = r.structuredContent as LinksResult;
+    expect(body.backlinks).toEqual([]);
+    expect(body.total.backlinks).toBe(0);
+  });
+
+  it('applies the filter before the MAX_GRAPH_ITEMS cap, not after', async () => {
+    await h.call('vault_write', { path: 'target.md', content: 'Target note.' });
+    const total = MAX_GRAPH_ITEMS + 1;
+    const inPrefix = Array.from({ length: total }, (_, i) => `projects/n-${i}.md`);
+    await Promise.all(inPrefix.map((p) => h.runtime.adapter.write(p, '[[target]]')));
+    await Promise.all(inPrefix.map((p) => h.runtime.index.refreshPath(h.runtime.adapter, p)));
+    // A note outside the prefix too — a naive "cap first, filter second" implementation would
+    // show fewer than MAX_GRAPH_ITEMS results even though the prefix alone already has more.
+    await h.runtime.adapter.write('other/o.md', '[[target]]');
+    await h.runtime.index.refreshPath(h.runtime.adapter, 'other/o.md');
+
+    const r = await h.call('vault_links', {
+      path: 'target.md',
+      include: ['backlinks'],
+      filter: { pathPrefix: 'projects/' },
+    });
+    expect(r.isError, text(r)).toBeFalsy();
+    const body = r.structuredContent as LinksResult;
+    expect(body.backlinks).toHaveLength(MAX_GRAPH_ITEMS);
+    expect(body.truncated.backlinks).toBe(true);
+    expect(body.total.backlinks).toBe(total);
   });
 });
 
