@@ -30,6 +30,9 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- Frontmatter parsing no longer emits a Node process warning for every note whose
+  YAML holds an unquoted `{{placeholder}}` (template notes such as `created: {{date}}`);
+  the server log stayed noisy at each index pass.
 - A wikilink whose alias (or heading/block anchor) contains a lone `]` — e.g.
   `[[Alice Smith|[Draft] hello]]` — is now recognised, matching Obsidian, which
   resolves it to a link to "Alice Smith". Before, both the link index (so it
