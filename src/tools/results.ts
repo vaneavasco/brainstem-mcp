@@ -3,6 +3,10 @@ import { ZodError } from 'zod';
 import { MAX_RESULT_CHARS } from '../storage/limits.ts';
 import { VaultError } from '../storage/types.ts';
 
+/** Travels with every truncated read, so the model knows the text is partial and how to get the rest. */
+export const TRUNCATED_HINT =
+  'Truncated: the text is incomplete. Use vault_outline to list the headings, then vault_read with "section" or "sections" — and never write truncated text back.';
+
 export function okText(text: string): CallToolResult {
   return { content: [{ type: 'text', text }] };
 }

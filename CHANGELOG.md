@@ -8,6 +8,15 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Added
 
+- `vault_read` takes `sections` (1–10 heading paths): the sections come back in
+  document order, joined by a blank line, with `sectionRanges` — one call where a
+  reader needed one per heading. Two paths that resolve to the same section return
+  it once; an unknown path fails with `NOT_FOUND` and the list of headings, as
+  `section` does. `section` and `sections` cannot be combined.
+- A truncated `vault_read` or `vault_batch_read` result carries a `hint` that says
+  the text is incomplete and how to read the rest (`vault_outline`, then `section` /
+  `sections`). The connection instructions now say the same in one line: a
+  truncated text is read by section and never written back.
 - `vault_append` and the `append` op of `vault_transaction` take `unique`: when the
   target section (or the file, without `heading`) already has a line linking to the
   same `[[target]]` — alias and anchor ignored — or an identical line when the text

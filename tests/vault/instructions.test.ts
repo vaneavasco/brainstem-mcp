@@ -31,6 +31,11 @@ describe('DEFAULT_INSTRUCTIONS', () => {
     expect(DEFAULT_INSTRUCTIONS.length).toBeLessThan(2_000);
   });
 
+  it('says what to do with a truncated result', () => {
+    expect(DEFAULT_INSTRUCTIONS).toContain('truncated');
+    expect(DEFAULT_INSTRUCTIONS).toContain('`sections`');
+  });
+
   it('only names tools that are actually registered', async () => {
     const h = await startHarness();
     try {

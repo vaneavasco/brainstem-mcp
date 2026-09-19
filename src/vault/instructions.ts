@@ -6,17 +6,18 @@ import path from 'node:path';
  * call — the MCP `instructions` field of the initialize result. Kept short: it
  * is sent on every connection and competes with the conversation for context.
  */
-export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access to the owner's personal Obsidian vault (markdown notes, canvases, bases, attachments).
+export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access to the owner's personal Obsidian vault (notes, canvases, bases, attachments).
 - Paths are vault-relative, forward slashes, with extension (\`projects/alpha.md\`).
-- Find, don't scan: vault_search / vault_search_frontmatter, vault_query for structured filters over frontmatter, vault_recent for what changed lately, vault_tags for tag lookups, vault_links for a note's backlinks and outgoing links.
-- Understand before you edit: vault_outline for headings/tags/word count, vault_read with a \`section\` for just one heading. vault_batch_read reads several notes at once.
+- Find, don't scan: vault_search, vault_query for structured filters over frontmatter, vault_recent for what changed lately, vault_tags for tag lookups, vault_links for a note's backlinks and outgoing links.
+- Understand before you edit: vault_outline for headings/tags/word count, vault_read with \`section\` / \`sections\` for just those headings. vault_batch_read reads several notes at once.
+- \`truncated: true\` means the text was cut: read by section instead; never write it back.
 - Edit surgically: vault_edit (exact text replacement) or vault_append (optionally at a \`heading\`) instead of rewriting with vault_write; vault_frontmatter_update and vault_batch_frontmatter_update change metadata only.
-- Concurrency: reads return a \`hash\`. Pass it back as \`expectedHash\` on the write; a stale hash fails with CONFLICT (and the current hash) instead of overwriting silently, so re-read and retry. Changing several notes together: vault_transaction applies every op, or none.
+- Concurrency: reads return a \`hash\`. Pass it back as \`expectedHash\` on the write; a stale hash fails with CONFLICT (and the current hash) instead of overwriting silently, so re-read and retry. Several notes together: vault_transaction applies every op, or none.
 - Notes start with YAML frontmatter; keep existing keys. Link with [[wikilinks]]. vault_move rewrites every link that points at the moved note, by default.
-- \`.base\` and \`.canvas\` files are plain YAML/JSON; edit \`.canvas\` structurally with vault_canvas_read, vault_canvas_add_node, vault_canvas_update_node, vault_canvas_remove; edit \`.base\` as text.
+- \`.base\` and \`.canvas\` files are plain YAML/JSON; edit \`.canvas\` structurally with vault_canvas_read and its add_node / update_node / remove siblings; edit \`.base\` as text.
 - vault_create_from_template renders {{title}}/{{date}}/{{time}}/{{var}} placeholders into a new note.
-- Daily notes: vault_daily_note_read and vault_daily_note_append (vault_daily_note_path for the file name).
-- Deleting needs confirm=true and only moves the note to .trash/ — say so when you do it.
+- Daily notes: vault_daily_note_read, vault_daily_note_append, vault_daily_note_path.
+- Deleting needs confirm=true and only moves the note to .trash/ — say so when you do.
 - _brainstem/ is the server's own folder and is invisible to every tool; never try to write there.
 - Owner instructions below, if any, describe how this particular vault is organised — follow them over general habits.`;
 

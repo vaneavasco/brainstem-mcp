@@ -6,6 +6,8 @@ export const MAX_FILE_BYTES = 1_048_576;
  *  Text writes always stay at `MAX_FILE_BYTES` regardless of this value. */
 export const MAX_BINARY_BYTES = 8 * 1024 * 1024;
 export const MAX_BATCH = 20;
+/** Heading paths one `vault_read` may ask for in `sections`. */
+export const MAX_READ_SECTIONS = 10;
 export const MAX_SEARCH_RESULTS = 50;
 export const MAX_RESULT_CHARS = 120_000;
 export const MAX_ANALYTICS_FILES = 2000;
