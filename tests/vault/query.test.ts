@@ -1069,6 +1069,7 @@ describe('fourth review of sum', () => {
     const r = run({ pathPrefix: 'huge', sum: ['v'], groupBy: 'g', countOnly: true });
     expect(r.hint).toBeUndefined();
     expect(r.sums?.v).toBeCloseTo(1.7e308, -294);
-    expect((r.groups?.[0] as { sums?: { v?: number } }).sums?.v).toBeCloseTo(1.7e308, -294);
+    const first = (r.groups ?? [])[0] as { sums?: { v?: number } } | undefined;
+    expect(first?.sums?.v).toBeCloseTo(1.7e308, -294);
   });
 });
