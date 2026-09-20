@@ -5,7 +5,7 @@ import type { Cond, Query } from '../vault/query.ts';
  * Shared Zod input-schema fragments for the vault tools.
  *
  * This module is a **leaf**: it imports only Zod and types from pure vault modules — never a
- * tool module. Tool modules read these at *module scope* (inside `z.looseObject({...})` literals), so
+ * tool module. Tool modules read these at *module scope* (inside `z.strictObject({...})` literals), so
  * they must be fully initialized by the time any tool module is evaluated. When they lived in
  * `register.ts` — which imports every tool module, and is imported back by `tx.ts` for
  * `ToolContext`/`touch` — a module-scope read hit the import cycle's temporal dead zone and
