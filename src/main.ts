@@ -103,6 +103,14 @@ async function main(): Promise<void> {
     watchPollMs: config.watchPollMs,
     stateDir,
     maxBinaryBytes: config.maxBinaryBytes,
+    reconcileMs: config.reconcileMs,
+    onReconcile: (result) => {
+      // Only a reconcile that actually changed something is worth a line — never paths, just
+      // what moved and how long the sweep took.
+      if (result.refreshed > 0 || result.removed > 0 || result.added > 0) {
+        logger.info(result, 'index reconciled');
+      }
+    },
   });
   logger.info(
     { vaultPath: config.storage.vaultPath, indexed: runtime.index.size() },

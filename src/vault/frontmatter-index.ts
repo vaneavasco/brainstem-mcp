@@ -29,6 +29,16 @@ export interface FrontmatterHit {
   value: unknown;
 }
 
+export interface ReconcileResult {
+  /** Markdown notes that had an index entry but whose size/modifiedAt differed — re-read. */
+  refreshed: number;
+  /** Notes or assets whose index entry no longer has a file on disk — dropped. */
+  removed: number;
+  /** Notes or assets found on disk with no prior index entry — added. */
+  added: number;
+  durationMs: number;
+}
+
 /** True for a path that must never be tracked as an asset: reserved (`_brainstem/`) or dot-segmented. */
 function isDotOrReservedPath(p: string): boolean {
   return isReservedPath(p) || p.split('/').some((segment) => segment.startsWith('.'));
@@ -72,9 +82,15 @@ export class FrontmatterIndex {
   private readonly assetPaths = new Set<string>();
   private bytes = 0;
   private overBudgetLogged = false;
+  private _reconciledAt: Date | null = null;
 
   private constructor() {
     this.builtAt = new Date();
+  }
+
+  /** null until reconcile() has run at least once. */
+  get reconciledAt(): Date | null {
+    return this._reconciledAt;
   }
 
   get version(): number {
@@ -247,7 +263,77 @@ export class FrontmatterIndex {
     }
   }
 
-  attach(adapter: StorageAdapter): Unsubscribe {
+  /**
+   * Re-derives the index from a fresh directory listing, to recover from watcher events an
+   * external process outran or an OS event queue silently dropped (inotify overflow and
+   * similar). Compares the adapter's own listing — which already carries size/modifiedAt, no
+   * extra stat calls — against what the index holds: a markdown path missing from the index, or
+   * whose size/modifiedAt differ, is re-read; an index entry with no matching file on disk is
+   * dropped; assets (non-markdown paths) are added/removed the same way, without a read (the
+   * index never stores their content). `adapter.list()` already excludes the reserved folder and
+   * hidden paths, so reconcile can never surface either.
+   *
+   * Safe to call while tools are writing: every mutation goes through the same
+   * upsert/remove/addAsset/removeAsset the live watcher path uses, and a single file that fails
+   * to read (raced away between the listing and the read) is skipped, never thrown — the
+   * counters simply don't credit it.
+   */
+  async reconcile(adapter: StorageAdapter): Promise<ReconcileResult> {
+    const start = Date.now();
+    const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
+    const seenNotes = new Set<string>();
+    const seenAssets = new Set<string>();
+    let refreshed = 0;
+    let added = 0;
+    let removed = 0;
+
+    for (const file of files) {
+      if (isMarkdownPath(file.path)) {
+        seenNotes.add(file.path);
+        const existing = this.entries.get(file.path);
+        if (existing && existing.size === file.size && existing.modifiedAt === file.modifiedAt) {
+          continue;
+        }
+        try {
+          await this.refreshPath(adapter, file.path);
+        } catch {
+          continue; // one unreadable file must never abort the whole reconcile pass
+        }
+        // refreshPath silently removes on a race (NOT_FOUND/ENCODING) instead of adding — only
+        // credit refreshed/added when an entry actually landed.
+        if (this.entries.has(file.path)) {
+          if (existing) refreshed += 1;
+          else added += 1;
+        }
+      } else {
+        seenAssets.add(file.path);
+        if (!this.assetPaths.has(file.path)) {
+          this.addAsset(file.path);
+          added += 1;
+        }
+      }
+    }
+
+    for (const p of [...this.entries.keys()]) {
+      if (!seenNotes.has(p)) {
+        this.remove(p);
+        removed += 1;
+      }
+    }
+    for (const p of [...this.assetPaths]) {
+      if (!seenAssets.has(p)) {
+        this.removeAsset(p);
+        removed += 1;
+      }
+    }
+
+    this._reconciledAt = new Date();
+    return { refreshed, removed, added, durationMs: Date.now() - start };
+  }
+
+  /** `onError` (the adapter watcher's own `error` event, e.g. an inotify overflow) is optional so
+   *  callers/tests that don't care about it are unaffected. */
+  attach(adapter: StorageAdapter, onError?: (error: unknown) => void): Unsubscribe {
     if (!adapter.capabilities().watch || !adapter.watch) return () => {};
     return adapter.watch((event) => {
       if (!isMarkdownPath(event.path)) {
@@ -262,6 +348,6 @@ export class FrontmatterIndex {
       void this.refreshPath(adapter, event.path).catch(() => {
         /* a transient read failure leaves the previous entry in place; the next event or TTL rebuild fixes it */
       });
-    });
+    }, onError);
   }
 }

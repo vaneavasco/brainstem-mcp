@@ -103,6 +103,7 @@ describe('v2 variables', () => {
     expect(cfg.stateDir).toBeNull();
     expect(cfg.tunnelMode).toBe('none');
     expect(cfg.storage).toEqual({ backend: 'localfs', vaultPath: '/tmp/unused' });
+    expect(cfg.reconcileMs).toBe(300_000);
     expect('databaseUrl' in cfg).toBe(false);
   });
   it('parses the knobs', () => {
@@ -112,6 +113,7 @@ describe('v2 variables', () => {
         ACCESS_TOKEN_TTL_S: '600',
         REFRESH_TOKEN_TTL_S: '86400',
         VAULT_WATCH_POLL_MS: '2000',
+        VAULT_RECONCILE_MS: '60000',
         PUBLIC_URL_FILE: '/vault/_brainstem/public-url',
         STATE_DIR: '/tmp/state',
         TUNNEL_MODE: 'quick',
@@ -121,12 +123,17 @@ describe('v2 variables', () => {
     expect(cfg.accessTokenTtlS).toBe(600);
     expect(cfg.refreshTokenTtlS).toBe(86400);
     expect(cfg.watchPollMs).toBe(2000);
+    expect(cfg.reconcileMs).toBe(60_000);
     expect(cfg.publicUrlFile).toBe('/vault/_brainstem/public-url');
     expect(cfg.stateDir).toBe('/tmp/state');
     expect(cfg.tunnelMode).toBe('quick');
   });
+  it('VAULT_RECONCILE_MS=0 disables the background reconcile timer', () => {
+    expect(loadConfig(baseEnv({ VAULT_RECONCILE_MS: '0' })).reconcileMs).toBe(0);
+  });
   it('rejects nonsense knobs by name', () => {
     expect(() => loadConfig(baseEnv({ VAULT_WATCH_POLL_MS: '-5' }))).toThrow(/VAULT_WATCH_POLL_MS/);
+    expect(() => loadConfig(baseEnv({ VAULT_RECONCILE_MS: '-5' }))).toThrow(/VAULT_RECONCILE_MS/);
     expect(() => loadConfig(baseEnv({ TUNNEL_MODE: 'ngrok' }))).toThrow(/TUNNEL_MODE/);
     expect(() => loadConfig(baseEnv({ CIMD_ALLOWED_HOSTS: 'https://claude.ai' }))).toThrow(
       /CIMD_ALLOWED_HOSTS/,

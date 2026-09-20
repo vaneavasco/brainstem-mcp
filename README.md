@@ -154,6 +154,7 @@ The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the 
 - **Obsidian Sync:** enable *Sync all other types* in the sync settings — plain JSON files are not synced by default, and `_brainstem/state.json` needs to travel.
 - **Syncthing / git / Dropbox:** nothing to configure; they sync everything already.
 - Run brainstem-mcp on **one machine at a time**. Two instances writing to the same synced vault concurrently is unsupported (the app logs a warning if it detects another live instance, but doesn't prevent it).
+- The in-memory index self-heals: a background sweep (`VAULT_RECONCILE_MS` in `.env`, default 5 minutes; `0` disables it) re-reads any note whose size or modified time drifted from what the index has, and also runs once whenever the filesystem watcher itself reports an error — recovering from watcher events an OS-level queue silently dropped (e.g. thousands of files rewritten in one minute by another tool). `brainstem_ping` reports `index.reconciledAt` so you can see how fresh it is.
 
 ## Security model
 

@@ -799,7 +799,7 @@ export class LocalFSAdapter implements StorageAdapter {
 
   // ---- watch ---------------------------------------------------------------
 
-  watch(onChange: (event: ChangeEvent) => void): Unsubscribe {
+  watch(onChange: (event: ChangeEvent) => void, onError?: (error: unknown) => void): Unsubscribe {
     const watcher = chokidarWatch(this.root, {
       ignoreInitial: true,
       ignored: (absPath: string) => {
@@ -815,6 +815,9 @@ export class LocalFSAdapter implements StorageAdapter {
     watcher.on('add', (abs) => onChange({ type: 'create', path: this.rel(abs) }));
     watcher.on('change', (abs) => onChange({ type: 'update', path: this.rel(abs) }));
     watcher.on('unlink', (abs) => onChange({ type: 'delete', path: this.rel(abs) }));
+    // chokidar's own inotify/fsevents/polling backend surfaces a queue overflow or similar here —
+    // never thrown, so an unhandled listener is silent unless a caller wires this in.
+    if (onError) watcher.on('error', onError);
     return () => {
       void watcher.close();
     };

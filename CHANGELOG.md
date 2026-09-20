@@ -8,6 +8,14 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Added
 
+- The in-memory index reconciles itself in the background: `FrontmatterIndex.reconcile()`
+  re-reads any note whose size or modified time drifted from what the index has, drops entries
+  for files that are gone, and adds ones that appeared — recovering from a watcher event the
+  OS silently dropped (e.g. thousands of files rewritten in one minute by another tool, which
+  can overflow an inotify queue without warning). Runs on a timer (`VAULT_RECONCILE_MS`,
+  default 5 min, `0` disables it) and once more whenever the filesystem watcher itself reports
+  an error; a tick is skipped while the previous one is still running. `brainstem_ping` now
+  reports `index: { notes, builtAt, reconciledAt }` so an owner can see how fresh it is.
 - `vault_batch_read` takes `sections` and `maxChars`, as `vault_read` does: the named sections
   of every note in one call. A note that lacks one of the sections still answers and lists it in
   `missingSections`, so a batch over notes of mixed shape never fails. Found by running

@@ -161,6 +161,8 @@ export interface StorageAdapter {
   hashOf(path: string): Promise<string | null>;
   /** Unlinks a file outright, bypassing .trash. Internal use only (transaction rollback). */
   hardDelete(path: string): Promise<void>;
-  watch?(onChange: (e: ChangeEvent) => void): Unsubscribe;
+  /** `onError` surfaces the underlying watcher's own error event (e.g. an inotify overflow);
+   *  optional so adapters/tests that don't wire it stay valid. */
+  watch?(onChange: (e: ChangeEvent) => void, onError?: (error: unknown) => void): Unsubscribe;
   capabilities(): Caps;
 }

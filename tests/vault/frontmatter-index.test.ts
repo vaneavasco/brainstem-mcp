@@ -236,3 +236,89 @@ describe('applyNote', () => {
     expect(index.assets().has('img/applied.png')).toBe(true);
   });
 });
+
+describe('reconcile', () => {
+  it('is null until the first call, and set after — regardless of whether anything changed', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    expect(index.reconciledAt).toBeNull();
+    const result = await index.reconcile(vault);
+    expect(index.reconciledAt).toBeInstanceOf(Date);
+    expect(result).toEqual({ refreshed: 0, removed: 0, added: 0, durationMs: expect.any(Number) });
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('refreshes a note whose frontmatter changed behind the index (no watcher attached)', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    expect(index.get('a.md')?.frontmatter).toMatchObject({ status: 'active' });
+    // Bypasses the index entirely — simulates a lost/overflowed watcher event.
+    await vault.write('a.md', '---\ntype: project\nstatus: DONE\n---\nA');
+    expect(index.get('a.md')?.frontmatter).toMatchObject({ status: 'active' }); // still stale
+
+    const result = await index.reconcile(vault);
+    expect(index.get('a.md')?.frontmatter).toMatchObject({ status: 'DONE' });
+    expect(result.refreshed).toBe(1);
+    expect(result.added).toBe(0);
+    expect(result.removed).toBe(0);
+  });
+
+  it('drops the entry for a file deleted behind the index', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    expect(index.get('sub/b.md')).toBeDefined();
+    await fs.rm(path.join(root, 'sub/b.md'));
+
+    const result = await index.reconcile(vault);
+    expect(index.get('sub/b.md')).toBeUndefined();
+    expect(result.removed).toBe(1);
+    expect(result.refreshed).toBe(0);
+    expect(result.added).toBe(0);
+  });
+
+  it('adds a note and an asset created behind the index', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    await vault.write('new/note.md', '---\nk: 1\n---\nNew');
+    await vault.writeBinary('new/img.png', PNG_BYTES, 'image/png');
+
+    const result = await index.reconcile(vault);
+    expect(index.get('new/note.md')?.frontmatter).toEqual({ k: 1 });
+    expect(index.assets().has('new/img.png')).toBe(true);
+    expect(result.added).toBe(2);
+  });
+
+  it('reports zero work for an unchanged vault', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    const result = await index.reconcile(vault);
+    expect(result).toMatchObject({ refreshed: 0, removed: 0, added: 0 });
+  });
+
+  it('never indexes the reserved folder or hidden paths, even if files appear there on disk', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    const before = index.size();
+    // Written directly on disk, bypassing the adapter (which itself refuses these paths) — this
+    // is exactly what reconcile must never surface, since adapter.list() already hides them.
+    await fs.mkdir(path.join(root, '_brainstem'), { recursive: true });
+    await fs.writeFile(path.join(root, '_brainstem', 'rogue.md'), '---\nx: 1\n---\n');
+    await fs.mkdir(path.join(root, '.obsidian'), { recursive: true });
+    await fs.writeFile(path.join(root, '.obsidian', 'hidden.md'), '---\nx: 1\n---\n');
+
+    const result = await index.reconcile(vault);
+    expect(index.get('_brainstem/rogue.md')).toBeUndefined();
+    expect(index.get('.obsidian/hidden.md')).toBeUndefined();
+    expect(index.size()).toBe(before);
+    expect(result.added).toBe(0);
+  });
+
+  it('never throws when one file fails to read, and still processes the rest', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    await vault.write('good.md', '---\nk: 1\n---\nGood');
+    const originalRead = vault.read.bind(vault);
+    vault.read = (async (p: string) => {
+      if (p === 'good.md') throw new Error('simulated read failure');
+      return originalRead(p);
+    }) as typeof vault.read;
+    await vault.write('a.md', '---\ntype: project\nstatus: DONE\n---\nA');
+
+    await expect(index.reconcile(vault)).resolves.toBeDefined();
+    expect(index.get('good.md')).toBeUndefined(); // failed read: left un-added, never throws
+    expect(index.get('a.md')?.frontmatter).toMatchObject({ status: 'DONE' }); // other files still refresh
+  });
+});
