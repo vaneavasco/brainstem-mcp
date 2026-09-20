@@ -97,6 +97,10 @@ The owner secret lives in `.env`. Show it any time with:
 | `./brainstem doctor` | Check prerequisites and configuration; explain how to fix any issues | `./brainstem doctor` |
 | `./brainstem revoke-all` | Revoke all OAuth tokens — every connected client must reconnect | `./brainstem revoke-all` |
 
+### After an update
+
+A release can add tools or arguments. A connected client keeps the tool list it fetched earlier: the server lets it be cached for five minutes, and some clients keep it for their whole session. If Claude does not seem to know an argument the changelog mentions, reconnect the connector (Claude Code: `/mcp` → the connector → Reconnect; claude.ai: Settings → Connectors). Nothing breaks in the meantime: the arguments the client already knows keep working, and results may carry new fields without being rejected.
+
 ## Stable URL (recommended)
 
 A quick tunnel's URL changes every time the stack restarts (see below), so for anything beyond trying it out, get a Cloudflare *named* tunnel — free, no domain purchase required if you use a Cloudflare-provided hostname:

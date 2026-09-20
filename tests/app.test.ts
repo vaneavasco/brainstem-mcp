@@ -130,7 +130,28 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
     }
   });
 
-  it('advertises tools/list cache hints (ttlMs 1h, public) on a raw modern request', async () => {
+  it('does not promise list-changed notifications it has no channel to send', async () => {
+    // A server built per request has nowhere to push `notifications/tools/list_changed` from. A
+    // client that believes the promise has no reason to ask for the list again: after a release
+    // that added tool arguments, a connector kept serving the previous list for hours.
+    const client = new Client(
+      { name: 'test-capabilities', version: '0.0.0' },
+      { versionNegotiation: { mode: 'auto' } },
+    );
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+        authProvider: { token: async () => token },
+      }),
+    );
+    try {
+      expect(client.getServerCapabilities()?.tools?.listChanged ?? false).toBe(false);
+      expect(client.getServerCapabilities()?.tools).toBeDefined();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('advertises tools/list cache hints (ttlMs 5 min, public) on a raw modern request', async () => {
     const res = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: {
@@ -155,7 +176,9 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { ttlMs?: number; cacheScope?: string } };
-    expect(body.result.ttlMs).toBe(3_600_000);
+    // five minutes: long enough to spare a client the list on every turn, short enough that a
+    // release reaches it the same morning
+    expect(body.result.ttlMs).toBe(300_000);
     expect(body.result.cacheScope).toBe('public');
   });
 

@@ -118,6 +118,14 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- The server promised tool-list change notifications (`tools.listChanged: true`, the SDK's
+  default) that a server built per request has no channel to send, and told clients the list
+  could be cached for an hour. After a release that added tool arguments, a connector kept
+  serving the previous list for more than three hours: readers could not see the new arguments,
+  and a call that used one anyway was refused. The capability is now declared `false`, the
+  cache hint is five minutes, and the server version changes with every release so a client
+  that keys its cache on it sees the change. After an upgrade, reconnect the connector if the
+  new arguments do not show up.
 - The index no longer keeps the text of the whole vault in memory. Every string it stored (a
   link target, a heading, a frontmatter value) was a piece cut out of the note it came from, and
   in V8 such a piece keeps the whole note alive. Measured on a 37,000-note vault: heap after
