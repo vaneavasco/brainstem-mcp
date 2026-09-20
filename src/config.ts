@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import { MAX_BINARY_BYTES } from './storage/limits.ts';
+import { DEFAULT_RECONCILE_MS, MAX_BINARY_BYTES } from './storage/limits.ts';
 import { normalizeVaultPath } from './storage/path-policy.ts';
 import { resolveDailyNotePath } from './vault/daily-notes.ts';
-import { DEFAULT_RECONCILE_MS } from './vault/runtime.ts';
 
 export type LegacyMode = 'stateless' | 'reject';
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';

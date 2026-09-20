@@ -36,6 +36,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   default 5 min, `0` disables it) and once more whenever the filesystem watcher itself reports
   an error; a tick is skipped while the previous one is still running. `brainstem_ping` now
   reports `index: { notes, builtAt, reconciledAt }` so an owner can see how fresh it is.
+- `vault_query` also budgets its `groups`: when hundreds of groups with their example paths
+  outgrow 60,000 characters the paths are left out (the counts stay) and a `hint` says so.
 - `vault_batch_read` takes `sections` and `maxChars`, as `vault_read` does: the named sections
   of every note in one call. A note that lacks one of the sections still answers and lists it in
   `missingSections`, so a batch over notes of mixed shape never fails. Found by running

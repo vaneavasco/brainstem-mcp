@@ -1,4 +1,8 @@
-import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS } from '../storage/limits.ts';
+import {
+  MAX_QUERY_GROUPS_CHARS,
+  MAX_QUERY_RESULT_CHARS,
+  MAX_QUERY_ROWS,
+} from '../storage/limits.ts';
 import { baseName, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import type { IndexEntry } from './frontmatter-index.ts';
@@ -63,6 +67,13 @@ export interface QueryResult {
   columns?: string[];
   /** "columns" format only: one array per note, aligned with "columns", in the same order "rows" would have been. */
   values?: unknown[][];
+}
+
+export const GROUP_PATHS_DROPPED_HINT =
+  'Example paths were left out of "groups" to keep the result small; filter on one group key to list its notes.';
+
+function joinHints(a: string | undefined, b: string): string {
+  return a ? `${a} ${b}` : b;
 }
 
 export const OVERLAPPING_GROUPS_HINT =
@@ -530,13 +541,22 @@ export function evaluateQuery(
   if (payload.columns) result.columns = payload.columns;
   if (payload.values) result.values = payload.values;
   if (payload.hint) result.hint = payload.hint;
-  if (q.groupBy !== undefined) result.groups = buildGroups(matched, graph, q.groupBy);
+  if (q.groupBy !== undefined) {
+    const groups = buildGroups(matched, graph, q.groupBy);
+    // Hundreds of groups with 20 example paths each outgrow what a client accepts: the counts are
+    // the answer, the paths are a convenience — they go first.
+    if (JSON.stringify(groups).length > MAX_QUERY_GROUPS_CHARS) {
+      result.groups = groups.map((g) => ({ ...g, paths: [] }));
+      result.hint = joinHints(result.hint, GROUP_PATHS_DROPPED_HINT);
+    } else {
+      result.groups = groups;
+    }
+  }
   return withGroupsHint(result);
 }
 
 function withGroupsHint(result: QueryResult): QueryResult {
   const sum = result.groups?.reduce((n, g) => n + g.count, 0) ?? 0;
   if (sum <= result.total) return result;
-  const hint = result.hint ? `${result.hint} ${OVERLAPPING_GROUPS_HINT}` : OVERLAPPING_GROUPS_HINT;
-  return { ...result, hint };
+  return { ...result, hint: joinHints(result.hint, OVERLAPPING_GROUPS_HINT) };
 }

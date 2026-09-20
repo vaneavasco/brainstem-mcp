@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { McpRequestContext } from '@modelcontextprotocol/server';
-import { MAX_BINARY_BYTES } from '../storage/limits.ts';
+import { DEFAULT_RECONCILE_MS, MAX_BINARY_BYTES } from '../storage/limits.ts';
 import { LocalFSAdapter } from '../storage/local-fs.ts';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
 import type { StorageAdapter, Unsubscribe } from '../storage/types.ts';
@@ -9,10 +9,6 @@ import type { AnalyticsReport } from './analytics.ts';
 import { type DailyNoteSettings, DEFAULT_DAILY_NOTE_SETTINGS } from './daily-notes.ts';
 import { FrontmatterIndex, type ReconcileResult } from './frontmatter-index.ts';
 import { VaultGraph } from './graph.ts';
-
-/** Default interval for the background FrontmatterIndex.reconcile() sweep (see
- *  LocalRuntimeOptions.reconcileMs); mirrored by VAULT_RECONCILE_MS's default in src/config.ts. */
-export const DEFAULT_RECONCILE_MS = 300_000;
 
 export interface VaultSettings {
   dailyNotes: DailyNoteSettings;

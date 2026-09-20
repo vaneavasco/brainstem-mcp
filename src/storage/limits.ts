@@ -24,6 +24,10 @@ export const MAX_QUERY_ROWS = 500;
  *  "columns" format) — independent of `limit`, since a handful of wide selected fields across a
  *  few hundred rows can still blow past what a client will accept. */
 export const MAX_QUERY_RESULT_CHARS = 60_000;
+/** Same budget for the "groups" array: example paths are dropped first when it is exceeded. */
+export const MAX_QUERY_GROUPS_CHARS = 60_000;
+/** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
+export const DEFAULT_RECONCILE_MS = 300_000;
 export const MAX_RECENT = 200;
 /** Regex search patterns run only through ripgrep; capped like the query engine's regex op. */
 export const MAX_SEARCH_PATTERN_CHARS = 200;

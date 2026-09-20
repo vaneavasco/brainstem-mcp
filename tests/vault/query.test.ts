@@ -555,6 +555,27 @@ describe('evaluateQuery — MAX_QUERY_RESULT_CHARS budget', () => {
   });
 });
 
+describe('evaluateQuery — groups budget', () => {
+  it('drops the example paths, never the counts, when hundreds of groups outgrow the budget', () => {
+    const long = 'a-rather-long-folder-name-for-a-note/'.repeat(3);
+    for (let g = 0; g < 120; g += 1) {
+      for (let i = 0; i < 12; i += 1) {
+        index.upsert(entry(`${long}g${g}-n${i}.md`, `---\nbucket: b${g}\n---\nbody`));
+      }
+    }
+    const r = run({ pathPrefix: long.slice(0, -1).split('/')[0], groupBy: 'bucket', limit: 1 });
+    expect(r.groups).toHaveLength(120);
+    expect(r.groups?.every((g) => g.count === 12 && g.paths.length === 0)).toBe(true);
+    expect(r.hint).toContain('Example paths were left out');
+  });
+
+  it('keeps example paths on an ordinary grouping', () => {
+    const r = run({ groupBy: 'owners' });
+    expect(r.groups?.some((g) => g.paths.length > 0)).toBe(true);
+    expect(r.hint ?? '').not.toContain('Example paths');
+  });
+});
+
 describe('evaluateQuery — groupBy', () => {
   it('groups by scalar and array values, with "(none)" for a missing field; rows are still returned', () => {
     const r = run({ groupBy: 'owners' });
