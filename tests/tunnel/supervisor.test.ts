@@ -27,6 +27,22 @@ class FakeChild extends EventEmitter implements ChildLike {
 
 const tick = () => new Promise((r) => setTimeout(r, 20));
 
+/** Waits for a condition instead of for a fixed 20 ms: the supervisor writes a file and spawns a
+ *  child asynchronously, and on a loaded machine (the full suite, CI) 20 ms is sometimes not
+ *  enough. Fails with the last error after 5 s. */
+async function until(check: () => Promise<void> | void): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      await check();
+      return;
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
+      await tick();
+    }
+  }
+}
+
 function at<T>(arr: T[], index: number): T {
   const value = arr[index];
   if (value === undefined) throw new Error(`expected children[${index}] to exist`);
@@ -159,18 +175,18 @@ describe('runSupervisor', () => {
 
     await tick();
     at(children, 0).stderr.write('INF |  https://one.trycloudflare.com  |\n');
-    await tick();
-    expect((await fs.readFile(file, 'utf8')).trim()).toBe('https://one.trycloudflare.com');
+    await until(async () =>
+      expect((await fs.readFile(file, 'utf8')).trim()).toBe('https://one.trycloudflare.com'),
+    );
 
     at(children, 0).exit(1);
-    await tick();
-    await tick();
-    expect(children).toHaveLength(2);
+    await until(() => expect(children).toHaveLength(2));
     expect(sleeps[0]).toBe(1_000);
 
     at(children, 1).stderr.write('INF |  https://two.trycloudflare.com  |\n');
-    await tick();
-    expect((await fs.readFile(file, 'utf8')).trim()).toBe('https://two.trycloudflare.com');
+    await until(async () =>
+      expect((await fs.readFile(file, 'utf8')).trim()).toBe('https://two.trycloudflare.com'),
+    );
 
     ac.abort();
     at(children, 1).exit(0);

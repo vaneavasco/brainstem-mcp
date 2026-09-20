@@ -15,11 +15,15 @@ import { type Harness, startHarness } from '../tools/harness.ts';
  * of notes. This run gives CI a vault of that shape: 40,000 notes of ~3.5 KB in 200 folders,
  * a dozen frontmatter fields, 3,000 tags, six links each and one hub that every note links to.
  *
- * It asserts what was measured on the real vault, with headroom for a slower machine:
- *   memory   ~6.7 KB of heap per note for the index, ~9.9 KB with the graph  → under 14 KB
- *   index    ~3.5 KB serialized per note                                      → under 6 KB
- *   build    ~27 s                                                            → under 240 s
- *   idle reconcile pass ~1 s, re-reads nothing                                → under 30 s, 0 changes
+ * It asserts what this seed measures, with about 1.4x of headroom on memory (time bounds are loose:
+ * a CI runner is several times slower than a workstation):
+ *   index    ~2.0 KB serialized per note                          → under 2.8 KB
+ *   memory   ~3.4 KB of heap per note, ~5.8 KB with the graph     → under 4.8 KB and 8 KB
+ *   heap / serialized ~1.7                                        → under 2.5
+ *   build    17–28 s                                              → under 240 s
+ *   idle reconcile pass 2–5 s, re-reads nothing                   → under 30 s, 0 changes
+ * A second review showed the first version of this run passing with the retention bug put back:
+ * its names were under 13 characters (V8 copies those) and its scalars quoted (already copies).
  *   every list-shaped tool result fits the strictest client (CLIENT_SAFE_RESULT_CHARS)
  * The numbers are logged on every run, so drift shows long before a bound trips.
  */
@@ -28,7 +32,8 @@ const FOLDERS = 200;
 const TAGS = 3_000;
 const BODY_CHARS = 3_000;
 
-const name = (i: number): string => `note-${String(i).padStart(5, '0')}`;
+// 18 characters: V8 copies a substring under 13, and a copy cannot show a retention bug
+const name = (i: number): string => `working-note-${String(i).padStart(5, '0')}`;
 const folder = (i: number): string => `area-${String(i % FOLDERS).padStart(3, '0')}`;
 const notePath = (i: number): string => `${folder(i)}/${name(i)}.md`;
 
@@ -52,12 +57,13 @@ function noteText(i: number, rand: () => number): string {
   const day = `2026-${String(1 + pick(12)).padStart(2, '0')}-${String(1 + pick(28)).padStart(2, '0')}`;
   const frontmatter = [
     '---',
-    `title: "${name(i)}: a title of ordinary length for a working note"`,
+    // unquoted on purpose: a plain scalar is a slice of the note, a quoted one is already a copy
+    `title: ${name(i)} with a title of ordinary length for a working note`,
     `status: ${status}`,
     `date: ${day}`,
     `owner: person-${pick(40)}`,
     `priority: ${1 + pick(5)}`,
-    `summary: "what this note is about, in one sentence of the usual length, number ${i}"`,
+    `summary: what this note is about in one sentence of the usual length and number ${i}`,
     `related:\n  - "[[${name(pick(NOTES))}]]"\n  - "[[${name(pick(NOTES))}]]"`,
     `tags:\n${tags.map((t) => `  - ${t}`).join('\n')}`,
     `estimate: ${pick(100)}`,
@@ -67,7 +73,7 @@ function noteText(i: number, rand: () => number): string {
   const paragraph = `Paragraph of note ${i} with ordinary words in it, neither short nor long. `;
   const sections = ['Context', 'Notes', 'Decisions', 'Next'].map(
     (h, k) =>
-      `## ${h}\n\n${paragraph.repeat(Math.ceil(BODY_CHARS / 4 / paragraph.length))}\n` +
+      `## ${h} of ${name(i)}\n\n${paragraph.repeat(Math.ceil(BODY_CHARS / 4 / paragraph.length))}\n` +
       `See ${links[k]} and [[hub]].\n`,
   );
   return `${frontmatter}\n\n# ${name(i)}\n\n${sections.join('\n')}\nAlso ${links[4]}. #inline-${pick(50)}\n`;
@@ -147,8 +153,13 @@ describe(`a vault of ${NOTES} notes`, () => {
     );
     expect(m.notes).toBe(NOTES + 1);
     expect(m.buildMs).toBeLessThan(240_000);
-    expect(perNote(m.indexBytes)).toBeLessThan(6_000);
-    expect(perNote(m.withGraphHeap)).toBeLessThan(14_000);
+    // Bounds sit about 1.4x above what this seed measures (2.0 KB serialized, 3.4 KB and 5.8 KB
+    // of heap). With the copy in FrontmatterIndex.fromNote disabled the same seed measures
+    // 11.4 KB and 13.9 KB, so the retention bug fails all three heap assertions.
+    expect(perNote(m.indexBytes)).toBeLessThan(2_800);
+    expect(perNote(m.indexHeap)).toBeLessThan(4_800);
+    expect(perNote(m.withGraphHeap)).toBeLessThan(8_000);
+    expect(m.indexHeap / m.indexBytes).toBeLessThan(2.5);
     expect(m.pass).toMatchObject({ refreshed: 0, removed: 0, added: 0 });
     expect(m.pass.durationMs).toBeLessThan(30_000);
   });

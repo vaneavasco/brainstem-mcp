@@ -9,5 +9,8 @@ export default defineConfig({
     testTimeout: 600_000,
     hookTimeout: 600_000,
     fileParallelism: false,
+    // the measurements are the point of the run: print them when it passes too
+    reporters: ['verbose'],
+    silent: false,
   },
 });
