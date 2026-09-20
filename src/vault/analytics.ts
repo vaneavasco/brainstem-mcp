@@ -81,7 +81,9 @@ export async function analyzeVault(
           detail: 'no YAML frontmatter block',
         });
       }
-      const missingKeys = required.filter((key) => note.frontmatter[key] === undefined);
+      const missingKeys = required.filter(
+        (key) => !Object.hasOwn(note.frontmatter, key) || note.frontmatter[key] === undefined,
+      );
       if (missingKeys.length > 0) {
         findings.push({
           category: 'required_frontmatter_missing',

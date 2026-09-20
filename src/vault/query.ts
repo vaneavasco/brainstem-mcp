@@ -2,7 +2,7 @@ import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS } from '../storage/limits.ts';
 import { baseName, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import { fitWithinBudget } from './budget.ts';
-import type { IndexEntry } from './frontmatter-index.ts';
+import { getPath, type IndexEntry } from './frontmatter-index.ts';
 import type { VaultGraph } from './graph.ts';
 import { compileSafePattern, type SafeMatcher } from './safe-regex.ts';
 import { isTagOrDescendant } from './tags.ts';
@@ -99,18 +99,6 @@ function isIsoDateString(v: unknown): v is string {
   return typeof v === 'string' && ISO_DATE_RE.test(v);
 }
 
-/** Dot-path traversal over frontmatter, mirroring FrontmatterIndex's private getPath(). */
-function getFrontmatterPath(obj: Record<string, unknown>, dotted: string): unknown {
-  let current: unknown = obj;
-  for (const key of dotted.split('.')) {
-    if (typeof current !== 'object' || current === null || Array.isArray(current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
 /** Unique, sorted target paths this entry resolves to (embeds and repeats collapsed). */
 function resolvedOutgoingPaths(entry: IndexEntry, graph: VaultGraph): string[] {
   return [
@@ -135,7 +123,7 @@ function resolvedOutgoingPaths(entry: IndexEntry, graph: VaultGraph): string[] {
  * for membership queries like `backlinkPaths contains 'x.md'`.
  */
 export function fieldValue(entry: IndexEntry, graph: VaultGraph, field: string): unknown {
-  if (!VIRTUAL_FIELDS.has(field)) return getFrontmatterPath(entry.frontmatter, field);
+  if (!VIRTUAL_FIELDS.has(field)) return getPath(entry.frontmatter, field);
   switch (field) {
     case 'path':
       return entry.path;

@@ -739,3 +739,14 @@ describe('evaluateQuery — groupBy', () => {
     expect(r.groups?.[0]?.paths).toHaveLength(20);
   });
 });
+
+describe('a field name that every object inherits', () => {
+  it('matches no note: only what the frontmatter itself holds is a field', () => {
+    for (const field of ['constructor', 'toString', '__proto__', 'status.constructor']) {
+      expect(run({ where: [{ field, op: 'exists' }] }).total, field).toBe(0);
+      expect(run({ where: [{ field, op: 'nonEmpty' }] }).total, field).toBe(0);
+    }
+    expect(index.query({ field: 'constructor', exists: true })).toEqual([]);
+    expect(index.query({ field: 'status', exists: true }).length).toBeGreaterThan(0);
+  });
+});

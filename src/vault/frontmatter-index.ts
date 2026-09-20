@@ -44,10 +44,13 @@ function isDotOrReservedPath(p: string): boolean {
   return isReservedPath(p) || p.split('/').some((segment) => segment.startsWith('.'));
 }
 
-function getPath(obj: Record<string, unknown>, dotted: string): unknown {
+/** Dot-path lookup over frontmatter. Own properties only: `constructor` or `toString` is a field
+ *  of no note, though every object inherits one. */
+export function getPath(obj: Record<string, unknown>, dotted: string): unknown {
   let current: unknown = obj;
   for (const key of dotted.split('.')) {
     if (typeof current !== 'object' || current === null || Array.isArray(current)) return undefined;
+    if (!Object.hasOwn(current, key)) return undefined;
     current = (current as Record<string, unknown>)[key];
   }
   return current;
@@ -91,7 +94,16 @@ export function detached<T>(value: T): T {
     Object.getPrototypeOf(value) === Object.prototype
   ) {
     const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) out[detached(key)] = detached(item);
+    for (const [key, item] of Object.entries(value)) {
+      // defineProperty, not `out[key] =`: YAML may hold a `__proto__` key, and assigning it would
+      // set the copy's prototype, dropping the key and making its content answer as fields.
+      Object.defineProperty(out, detached(key), {
+        value: detached(item),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
     return out as T;
   }
   return value;
@@ -136,7 +148,7 @@ export class FrontmatterIndex {
   }
 
   private entrySize(entry: IndexEntry): number {
-    return JSON.stringify(entry).length;
+    return Buffer.byteLength(JSON.stringify(entry));
   }
 
   get budgetBytes(): number {
@@ -149,6 +161,10 @@ export class FrontmatterIndex {
    *  has been back under the budget). The budget is a warning line, not a limit: nothing is
    *  evicted or refused, because an index that silently forgets notes is worse than a large one. */
   watchBudget(budgetBytes: number, onOver?: (state: IndexBudgetState) => void): void {
+    if (!Number.isFinite(budgetBytes)) {
+      // NaN would silently never warn, and neither survives JSON into brainstem_ping's output
+      throw new RangeError('the index budget must be a finite number of bytes');
+    }
     this._budgetBytes = budgetBytes;
     this.onOverBudget = onOver;
     this.overBudgetLogged = false;

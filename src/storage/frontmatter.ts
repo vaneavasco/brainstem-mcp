@@ -14,6 +14,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** True when a value contains itself. An alias used twice is not a cycle: only ancestors count. */
+function refersToItself(value: unknown, ancestors: Set<object> = new Set()): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  if (ancestors.has(value)) return true;
+  ancestors.add(value);
+  const children =
+    value instanceof Map ? [...value.keys(), ...value.values()] : Object.values(value);
+  const found = children.some((child) => refersToItself(child, ancestors));
+  ancestors.delete(value);
+  return found;
+}
+
 export function splitFrontmatter(text: string): SplitResult {
   const open = OPEN.exec(text);
   if (!open) return { frontmatter: {}, body: text, hasFrontmatter: false };
@@ -42,6 +54,12 @@ export function splitFrontmatter(text: string): SplitResult {
   if (parsed === null || parsed === undefined) parsed = {};
   if (!isPlainObject(parsed)) {
     throw new VaultError('INVALID_INPUT', 'Frontmatter must be a YAML mapping (key: value pairs).');
+  }
+  if (refersToItself(parsed)) {
+    // YAML allows it (`a: &x {b: *x}`); JSON, the index and every tool result do not. Refused
+    // here, the one place frontmatter enters, so such a note reads as body-only with a reason
+    // instead of overflowing the stack of whoever walks it (one such note stopped the boot).
+    throw new VaultError('INVALID_INPUT', 'Frontmatter refers to itself (a YAML alias cycle).');
   }
   return { frontmatter: parsed, body, hasFrontmatter: true };
 }

@@ -106,3 +106,15 @@ describe('splitFrontmatter: template placeholders', () => {
     }
   });
 });
+
+describe('frontmatter that refers to itself', () => {
+  it('is refused like any other frontmatter that cannot be represented', () => {
+    expect(() => splitFrontmatter('---\na: &x\n  b: *x\n---\nbody')).toThrow(/refers to itself/);
+    expect(frontmatterProblem('---\na: &x\n  b: *x\n---\nbody')).toMatch(/refers to itself/);
+  });
+
+  it('still accepts an alias used twice, which is not a cycle', () => {
+    const { frontmatter } = splitFrontmatter('---\nbase: &b\n  k: v\none: *b\ntwo: *b\n---\n');
+    expect(frontmatter).toMatchObject({ one: { k: 'v' }, two: { k: 'v' } });
+  });
+});
