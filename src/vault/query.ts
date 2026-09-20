@@ -4,6 +4,7 @@ import { VaultError } from '../storage/types.ts';
 import { fitWithinBudget } from './budget.ts';
 import { getPath, type IndexEntry } from './frontmatter-index.ts';
 import type { VaultGraph } from './graph.ts';
+import { type LinkKey, linkKey, sameLinkKey } from './note-parse.ts';
 import { compileSafePattern, type SafeMatcher } from './safe-regex.ts';
 import { isTagOrDescendant } from './tags.ts';
 
@@ -41,6 +42,11 @@ export interface Query {
   /** Counts only: no rows, no example paths in groups — the cheap answer to "how many". */
   countOnly?: boolean;
   groupBy?: string;
+  /** With groupBy: keep only group keys that start with this. Refused without groupBy. */
+  groupPrefix?: string;
+  /** Field names (dot paths allowed) to total over every match, not only the rows a result can
+   *  carry — the way to get an exact number without adding up a possibly-cut "rows". */
+  sum?: string[];
   /** "rows" (default): one object per note. "columns": a "columns" name list (path first) plus
    *  one "values" array per note in the same order — cheaper to transmit than repeating every
    *  field name on every row. Either way "rows" is subject to the same MAX_QUERY_RESULT_CHARS
@@ -53,17 +59,31 @@ export interface QueryRow {
   [field: string]: unknown;
 }
 
+export interface QueryGroup {
+  key: string;
+  count: number;
+  paths: string[];
+  /** Present only when "sum" was asked for: totals over this group's own matches. */
+  sums?: Record<string, number>;
+  sumCounted?: Record<string, number>;
+}
+
 export interface QueryResult {
   rows: QueryRow[];
   total: number;
   truncated: boolean;
-  groups?: { key: string; count: number; paths: string[] }[];
+  groups?: QueryGroup[];
   /** Set when notes landed in several groups, so nobody adds the group counts up to "total". */
   hint?: string;
   /** "columns" format only: field names, "path" first. */
   columns?: string[];
   /** "columns" format only: one array per note, aligned with "columns", in the same order "rows" would have been. */
   values?: unknown[][];
+  /** Present only when "sum" was asked for: totals over EVERY match (not only the rows returned). */
+  sums?: Record<string, number>;
+  /** Present only when "sum" was asked for: how many matches had a numeric value per field, so a
+   *  reader can tell "0" from "no data". */
+  sumCounted?: Record<string, number>;
 }
 
 export const GROUP_PATHS_DROPPED_HINT =
@@ -176,24 +196,47 @@ function asArray(v: unknown): unknown[] | null {
   return Array.isArray(v) ? v : null;
 }
 
-function matchesEq(fieldVal: unknown, value: unknown): boolean {
+/** The query side of an eq / in, prepared once per condition rather than once per note: over
+ *  40,000 notes and fifty values, parsing both sides at every comparison cost five times the
+ *  plain comparison. */
+interface Wanted {
+  value: unknown;
+  key: LinkKey | null;
+}
+
+function wanted(value: unknown): Wanted {
+  return { value, key: linkKey(value) };
+}
+
+/** One field element against the prepared query values. The element is parsed as a link at most
+ *  once, and only when a link is in play: its text starts one, or a query value is one. */
+function elementMatches(fieldEl: unknown, ws: Wanted[], anyLinkWanted: boolean): boolean {
+  for (const w of ws) if (typedCompare(fieldEl, w.value) === 0) return true;
+  const fieldMayBeLink = typeof fieldEl === 'string' && fieldEl.trimStart().startsWith('[[');
+  if (!fieldMayBeLink && !anyLinkWanted) return false;
+  const key = linkKey(fieldEl);
+  return key !== null && ws.some((w) => sameLinkKey(key, w.key));
+}
+
+function matchesEq(fieldVal: unknown, w: Wanted): boolean {
   // A missing field equals nothing (not even the text "undefined"); "exists: false" finds it.
   if (fieldVal === undefined) return false;
   // A null field equals null and nothing else (not the text "null").
-  if (fieldVal === null || value === null) return fieldVal === value;
+  if (fieldVal === null || w.value === null) return fieldVal === w.value;
+  const link = w.key?.isLink === true;
   const arr = asArray(fieldVal);
-  if (arr) return arr.some((el) => typedCompare(el, value) === 0);
-  return typedCompare(fieldVal, value) === 0;
+  if (arr) return arr.some((el) => elementMatches(el, [w], link));
+  return elementMatches(fieldVal, [w], link);
 }
 
 /** Membership check for the "in" op. `value` is guaranteed to be an array by compileCond's
  *  up-front check before this ever runs — see the comment there. */
-function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
+function matchesIn(fieldVal: unknown, ws: Wanted[], anyLink: boolean): boolean {
   if (fieldVal === undefined) return false;
-  if (fieldVal === null) return value.includes(null);
+  if (fieldVal === null) return ws.some((w) => w.value === null);
   const arr = asArray(fieldVal);
-  if (arr) return arr.some((el) => value.some((v) => typedCompare(el, v) === 0));
-  return value.some((v) => typedCompare(fieldVal, v) === 0);
+  if (arr) return arr.some((el) => elementMatches(el, ws, anyLink));
+  return elementMatches(fieldVal, ws, anyLink);
 }
 
 function matchesOneContains(fieldVal: unknown, needleValue: unknown): boolean {
@@ -310,13 +353,16 @@ function compileCond(cond: Cond): CompiledCond {
       );
     }
   }
+  const one = wanted(cond.value);
+  const many = cond.op === 'in' ? (cond.value as unknown[]).map(wanted) : [];
+  const anyLink = many.some((w) => w.key?.isLink === true);
   return (entry, graph) => {
     const fv = fieldValue(entry, graph, cond.field);
     switch (cond.op) {
       case 'eq':
-        return matchesEq(fv, cond.value);
+        return matchesEq(fv, one);
       case 'neq':
-        return !matchesEq(fv, cond.value);
+        return !matchesEq(fv, one);
       case 'contains':
         return matchesContains(fv, cond.value);
       case 'startsWith':
@@ -331,7 +377,7 @@ function compileCond(cond: Cond): CompiledCond {
       case 'lte':
         return matchesOrder(fv, cond.value, cond.op);
       case 'in':
-        return matchesIn(fv, cond.value as unknown[]);
+        return matchesIn(fv, many, anyLink);
       default:
         return false;
     }
@@ -386,9 +432,81 @@ function selectedColumns(select?: string[]): string[] {
 function budgetHint(kept: number, asked: number): string {
   return (
     `${kept} of the ${asked} rows asked for fit the ${MAX_QUERY_RESULT_CHARS}-character result ` +
-    'budget. For the same rows in fewer characters: fewer select fields or format: "columns". ' +
-    'For the rest: sort, then filter on the sort key past the last row returned.'
+    'budget: anything you add up over just "rows" is incomplete. For counts: countOnly with ' +
+    'groupBy. For totals: sum. For the same rows in fewer characters: fewer select fields or ' +
+    'format: "columns". For the rest: sort, then filter on the sort key past the last row returned.'
   );
+}
+
+/** Sums (and how many matches had a numeric value) for `fields`, over every entry in `entries` —
+ *  never only a page of it. Only finite numbers count: a numeric string, a boolean, null and
+ *  undefined are all excluded, so a field that is never numeric totals 0 rather than throwing or
+ *  being left out. Built via Map -> Object.fromEntries, never `obj[field] =`, so a field literally
+ *  named "__proto__" becomes an ordinary own key instead of silently reassigning the prototype
+ *  (the same hazard `buildRow` guards against for selected columns). */
+const SCALE = 2 ** -32;
+
+/** A running total that is plain addition whenever plain addition can hold it, so the result is
+ *  exactly what adding the values gives. Only when the plain total has gone non-finite is the
+ *  scaled total used: every value times 2^-32 (a power of two, so exact except for subnormals),
+ *  which cannot overflow below four thousand million addends, scaled back at the end. So
+ *  1.7e308 three times and -1.7e308 twice is 1.7e308, not an overflow, while a total that truly
+ *  does not fit a number still comes out non-finite and is reported as such. */
+class Total {
+  private plain = 0;
+  private scaled = 0; // addends of magnitude 1 and above, times 2^-32
+  private small = 0; // the rest, as they are: scaling them down would push them into subnormals
+  add(v: number): void {
+    this.plain += v;
+    if (Math.abs(v) >= 1) this.scaled += v * SCALE;
+    else this.small += v;
+  }
+  value(): number {
+    return Number.isFinite(this.plain) ? this.plain : this.scaled / SCALE + this.small;
+  }
+}
+
+/** Totals over every match. A total that stops being a finite number (two values of 1e308) is
+ *  left out of `sums` and named in `overflowed`: JSON has no Infinity, and a result that fails
+ *  its own schema answers nothing. `sumCounted` still says how many values there were. */
+function computeSums(
+  entries: IndexEntry[],
+  graph: VaultGraph,
+  fields: string[],
+): { sums: Record<string, number>; sumCounted: Record<string, number>; overflowed: string[] } {
+  const totals = new Map<string, Total>(fields.map((f) => [f, new Total()]));
+  const counted = new Map<string, number>(fields.map((f) => [f, 0]));
+  for (const entry of entries) {
+    for (const field of fields) {
+      const v = fieldValue(entry, graph, field);
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        totals.get(field)?.add(v);
+        counted.set(field, (counted.get(field) ?? 0) + 1);
+      }
+    }
+  }
+  const sums = new Map<string, number>(fields.map((f) => [f, totals.get(f)?.value() ?? 0]));
+  const overflowed = fields.filter((f) => !Number.isFinite(sums.get(f) ?? 0));
+  for (const f of overflowed) sums.delete(f);
+  return {
+    sums: Object.fromEntries(sums),
+    sumCounted: Object.fromEntries(counted),
+    overflowed,
+  };
+}
+
+function overflowHint(top: string[], inGroups: string[]): string {
+  const names = (fields: string[]) => fields.map((f) => `"${f}"`).join(', ');
+  const said: string[] = [];
+  if (top.length > 0) {
+    said.push(`Adding up ${names(top)} overflowed what a number can hold; left out of "sums".`);
+  }
+  if (inGroups.length > 0) {
+    said.push(
+      `Adding up ${names(inGroups)} overflowed inside a group; left out of the "sums" of a group.`,
+    );
+  }
+  return said.join(' ');
 }
 
 interface QueryPayload {
@@ -439,13 +557,19 @@ function groupKeyForValue(v: unknown): string {
 }
 
 /** One group per distinct value; an array field contributes one group per element (a note can
- *  land in several groups), and a missing/empty value groups under "(none)". */
+ *  land in several groups), and a missing/empty value groups under "(none)". With `sumFields`,
+ *  every group also carries `sums`/`sumCounted` over only the matches that landed in it (an entry
+ *  that lands in several groups contributes to each one's sums, same as it does to each count). */
 function buildGroups(
   entries: IndexEntry[],
   graph: VaultGraph,
   field: string,
-): { key: string; count: number; paths: string[] }[] {
-  const groups = new Map<string, { count: number; paths: string[] }>();
+  sumFields: string[] = [],
+): QueryGroup[] {
+  const groups = new Map<
+    string,
+    { count: number; paths: string[]; sums: Map<string, Total>; sumCounted: Map<string, number> }
+  >();
   for (const entry of entries) {
     const v = fieldValue(entry, graph, field);
     const arr = asArray(v);
@@ -455,19 +579,56 @@ function buildGroups(
     let keys: string[];
     if (arr) keys = arr.length > 0 ? [...new Set(arr.map(groupKeyForValue))] : [NONE_GROUP_KEY];
     else keys = [groupKeyForValue(v)];
+    // Computed once per entry, reused for every group it lands in.
+    const contributions = sumFields.map((f) => {
+      const fv = fieldValue(entry, graph, f);
+      return typeof fv === 'number' && Number.isFinite(fv) ? fv : undefined;
+    });
     for (const key of keys) {
       let g = groups.get(key);
       if (!g) {
-        g = { count: 0, paths: [] };
+        g = {
+          count: 0,
+          paths: [],
+          sums: new Map(sumFields.map((f) => [f, new Total()])),
+          sumCounted: new Map(sumFields.map((f) => [f, 0])),
+        };
         groups.set(key, g);
       }
       g.count += 1;
       if (g.paths.length < MAX_GROUP_PATHS) g.paths.push(entry.path);
+      sumFields.forEach((f, i) => {
+        const val = contributions[i];
+        if (val !== undefined) {
+          g.sums.get(f)?.add(val);
+          g.sumCounted.set(f, (g.sumCounted.get(f) ?? 0) + 1);
+        }
+      });
     }
   }
   return [...groups.entries()]
-    .map(([key, g]) => ({ key, count: g.count, paths: g.paths }))
+    .map(([key, g]) => ({
+      key,
+      count: g.count,
+      paths: g.paths,
+      ...(sumFields.length > 0
+        ? {
+            // a total that is no longer a finite number is left out, as at the top level
+            sums: Object.fromEntries(
+              [...g.sums]
+                .map(([f, t]): [string, number] => [f, t.value()])
+                .filter(([, v]) => Number.isFinite(v)),
+            ),
+            sumCounted: Object.fromEntries(g.sumCounted),
+          }
+        : {}),
+    }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+/** With groupPrefix: only the group keys that start with it. */
+function applyGroupPrefix(groups: QueryGroup[], prefix?: string): QueryGroup[] {
+  return prefix === undefined ? groups : groups.filter((g) => g.key.startsWith(prefix));
 }
 
 /** Sort comparator for one sort key; a missing value always sorts before any present value,
@@ -529,27 +690,42 @@ export function evaluateQuery(
   graph: VaultGraph,
   q: Query,
 ): QueryResult {
+  if (q.groupPrefix !== undefined && q.groupBy === undefined) {
+    throw new VaultError('INVALID_INPUT', '"groupPrefix" requires "groupBy".');
+  }
   const matched = matchEntries(entries, graph, q);
 
   const total = matched.length;
   const limit = Math.min(Math.max(q.limit ?? 100, 0), MAX_QUERY_ROWS);
   const limitTruncated = total > limit;
   const limited = limitTruncated ? matched.slice(0, limit) : matched;
+  const sumFields = [...new Set(q.sum ?? [])]; // a name listed twice is one total, not two
+  // Over EVERY match, never only the rows a result can carry — the whole reason "sum" exists.
+  const summed = sumFields.length === 0 ? undefined : computeSums(matched, graph, sumFields);
 
   // One budget for the whole result: the groups take what they need first (at most half when rows
   // are wanted too), the rows get the rest. Two independent budgets would add up to twice what a
   // client accepts.
   const room = Math.max(MAX_QUERY_RESULT_CHARS - wrapperChars(q, total), 0);
   const groupsBudget = q.countOnly ? room : Math.floor(room / 2);
+  const allGroups =
+    q.groupBy === undefined
+      ? []
+      : applyGroupPrefix(buildGroups(matched, graph, q.groupBy, sumFields), q.groupPrefix);
+  // A group total can overflow while the overall one does not (and the other way round).
+  const groupOverflowed = sumFields.filter((f) =>
+    allGroups.some((g) => (g.sumCounted?.[f] ?? 0) > 0 && g.sums !== undefined && !(f in g.sums)),
+  );
+  const sumHint = (): string | undefined => {
+    const top = summed?.overflowed ?? [];
+    return top.length + groupOverflowed.length === 0
+      ? undefined
+      : overflowHint(top, groupOverflowed);
+  };
   const fitted =
     q.groupBy === undefined
       ? undefined
-      : fitGroups(
-          buildGroups(matched, graph, q.groupBy),
-          groupsBudget,
-          q.countOnly === true,
-          total,
-        );
+      : fitGroups(allGroups, groupsBudget, q.countOnly === true, total);
 
   if (q.countOnly) {
     const counted: QueryResult = { rows: [], total, truncated: false };
@@ -557,6 +733,12 @@ export function evaluateQuery(
       counted.groups = fitted.groups;
       counted.truncated = fitted.cut;
       if (fitted.hint) counted.hint = fitted.hint;
+    }
+    if (summed) {
+      counted.sums = summed.sums;
+      counted.sumCounted = summed.sumCounted;
+      const said = sumHint();
+      if (said) counted.hint = joinHints(counted.hint, said);
     }
     return withGroupsHint(counted, fitted?.overlapping ?? false);
   }
@@ -584,10 +766,14 @@ export function evaluateQuery(
     result.groups = fitted.groups;
     if (fitted.hint) result.hint = joinHints(result.hint, fitted.hint);
   }
+  if (summed) {
+    result.sums = summed.sums;
+    result.sumCounted = summed.sumCounted;
+    const said = sumHint();
+    if (said) result.hint = joinHints(result.hint, said);
+  }
   return withGroupsHint(result, fitted?.overlapping ?? false);
 }
-
-type Group = { key: string; count: number; paths: string[] };
 
 function groupsTookHint(chars: number): string {
   return `The groups took ${chars} characters of it: drop groupBy, or ask for the counts alone with countOnly.`;
@@ -600,7 +786,11 @@ function groupsShownHint(shown: number, all: number): string {
 /**
  * What the result costs besides its rows and groups: the keys, `total`, the column names, and
  * the longest hint this call could carry. Measured, not reserved: a caller may select fifty
- * long field names, and the hints together run to several hundred characters.
+ * long field names, and the hints together run to several hundred characters. When "sum" is
+ * given, `sums`/`sumCounted` are weighed too, at the widest a finite JS number can serialize to
+ * (`-Number.MAX_VALUE`'s exponential form) for the total and `Number.MAX_SAFE_INTEGER` for the
+ * count — real sums are always finite (non-finite values are excluded from the sum itself) so
+ * neither is ever wider than this.
  */
 function wrapperChars(q: Query, total: number): number {
   const widest = Number.MAX_SAFE_INTEGER;
@@ -610,13 +800,25 @@ function wrapperChars(q: Query, total: number): number {
     GROUP_PATHS_DROPPED_HINT,
     groupsShownHint(widest, widest),
     OVERLAPPING_GROUPS_HINT,
+    ...((q.sum ?? []).length === 0
+      ? []
+      : [overflowHint([...new Set(q.sum ?? [])], [...new Set(q.sum ?? [])])]),
   ].join(' ');
+  const sumFields = [...new Set(q.sum ?? [])];
+  const sumsPlaceholder =
+    sumFields.length === 0
+      ? {}
+      : {
+          sums: Object.fromEntries(sumFields.map((f) => [f, -Number.MAX_VALUE])),
+          sumCounted: Object.fromEntries(sumFields.map((f) => [f, widest])),
+        };
   return JSON.stringify({
     rows: [],
     total,
     truncated: true,
     ...(q.format === 'columns' ? { columns: selectedColumns(q.select), values: [] } : {}),
     ...(q.groupBy === undefined ? {} : { groups: [] }),
+    ...sumsPlaceholder,
     hint,
   }).length;
 }
@@ -628,11 +830,11 @@ function wrapperChars(q: Query, total: number): number {
  * `overlapping` is decided on the full list, before anything is dropped.
  */
 function fitGroups(
-  all: Group[],
+  all: QueryGroup[],
   budget: number,
   countsOnly: boolean,
   total: number,
-): { groups: Group[]; hint?: string; overlapping: boolean; cut: boolean } {
+): { groups: QueryGroup[]; hint?: string; overlapping: boolean; cut: boolean } {
   // A note with several values sits in several groups: only then do the counts exceed the total.
   const overlapping = all.reduce((n, g) => n + g.count, 0) > total;
   let groups = countsOnly ? all.map((g) => ({ ...g, paths: [] })) : all;

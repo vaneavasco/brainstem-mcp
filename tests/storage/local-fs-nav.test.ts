@@ -299,7 +299,9 @@ describe('watch', () => {
     await vault.write('watched/new.md', 'v1');
     await vault.write('watched/new.md', 'v2');
     await fs.rm(path.join(root, 'watched/new.md'));
-    const deadline = Date.now() + 5000;
+    // 20 s, not 5: on a machine busy writing thousands of fixture files for other suites the
+    // watcher's events arrive late, and this test is about what arrives, not how fast.
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline && !events.some((e) => e.type === 'delete')) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -307,7 +309,7 @@ describe('watch', () => {
     const types = events.filter((e) => e.path === 'watched/new.md').map((e) => e.type);
     expect(types[0]).toBe('create');
     expect(types.at(-1)).toBe('delete');
-  });
+  }, 45_000);
 
   it('watch() honours watchPollMs by using chokidar polling', async () => {
     const polled = await LocalFSAdapter.create(root, { ripgrepPath: null, watchPollMs: 300 });

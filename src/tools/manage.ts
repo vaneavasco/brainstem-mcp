@@ -1,7 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { CLIENT_SAFE_RESULT_CHARS, MAX_GLOB_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
-import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
+import {
+  CLIENT_SAFE_RESULT_CHARS,
+  MAX_DEEP_LIST_ENTRIES,
+  MAX_GLOB_CHARS,
+  MAX_LIST_ENTRIES,
+} from '../storage/limits.ts';
+import { isMarkdownPath, normalizeVaultPath, parentDir } from '../storage/path-policy.ts';
 import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
@@ -41,7 +46,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters. A listing deeper than one level, over 200 entries, with sub-folders and no glob shows its shape instead (shallowest entries, files per folder in "folders"); a glob returns the paths. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
       inputSchema: z.strictObject({
         path: z.string().optional(),
@@ -60,6 +65,10 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
             modifiedAt: z.string().optional(),
           }),
         ),
+        /** Only when the listing shows its shape instead of every path (cut by the budget, or a
+         *  long deep listing without a glob): every note and attachment under each listed
+         *  folder, at any depth, counted from the index, whatever depth or glob was asked. */
+        folders: z.array(z.looseObject({ path: z.string(), files: z.number() })).optional(),
         truncated: z.boolean(),
         hint: z.string().optional(),
       }),
@@ -74,19 +83,101 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           ...(includeFiles !== undefined ? { includeFiles } : {}),
           ...(includeDirs !== undefined ? { includeDirs } : {}),
         });
-        const hintFor = (shown: number) =>
+
+        // The plain form first: DFS order, no "folders". It is what a listing that fits returns,
+        // unless it is a long deep one without a glob (see `shapeFirst` below).
+        const plainHintFor = (shown: number) =>
           `${shown} of ${entries.length} entries shown: narrow with path, glob or depth; to count or size a folder use vault_query { pathPrefix, countOnly: true }.`;
-        const room = roomBeside(
-          { path: base, entries: [], truncated: true, hint: hintFor(entries.length) },
+        const plainRoom = roomBeside(
+          { path: base, entries: [], truncated: true, hint: plainHintFor(entries.length) },
           CLIENT_SAFE_RESULT_CHARS,
         );
-        const { kept, cut } = fitWithinBudget(entries.slice(0, MAX_LIST_ENTRIES), room);
-        const truncated = cut || entries.length > MAX_LIST_ENTRIES;
+        const capped =
+          entries.length > MAX_LIST_ENTRIES ? entries.slice(0, MAX_LIST_ENTRIES) : entries;
+        const plainFit = fitWithinBudget(capped, plainRoom);
+        const wouldTruncate = plainFit.cut || entries.length > MAX_LIST_ENTRIES;
+        // A deep listing that fits is still not an answer to "what is in here": a folder of 600
+        // generated pages listed at depth 2 fits the budget at 45,000 characters, and 8 of 16
+        // readers paid that to learn the names of three sub-folders. Deeper than one level, with
+        // no glob, a long listing shows its shape first; a glob asks for the paths themselves.
+        // Only where there is a shape to show: in a flat folder the shape form would return fewer
+        // paths than a shallow listing and nothing in exchange.
+        const shapeFirst =
+          (depth ?? 1) > 1 &&
+          glob === undefined &&
+          entries.length > MAX_DEEP_LIST_ENTRIES &&
+          entries.some((e) => e.kind === 'dir');
+
+        if (!wouldTruncate && !shapeFirst) {
+          return okJson({ path: base, entries: plainFit.kept, truncated: false });
+        }
+
+        // Truncated: shallowest first (depth, then path) so every top-level entry survives before
+        // any deep one, plus a per-folder file count so the reader learns the shape of what did
+        // not fit, instead of just the contents of the first big folder in DFS order.
+        const depthOf = (p: string): number => {
+          const rel = base === '' ? p : p.slice(base.length + 1);
+          return rel.split('/').length - 1;
+        };
+        const ordered = [...entries].sort((a, b) => {
+          const d = depthOf(a.path) - depthOf(b.path);
+          return d !== 0 ? d : a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+        });
+        const cap = shapeFirst ? MAX_DEEP_LIST_ENTRIES : MAX_LIST_ENTRIES;
+        const orderedCapped = ordered.length > cap ? ordered.slice(0, cap) : ordered;
+
+        // Counted from the index, not from this listing: a folder at the depth limit, a listing
+        // without files, or a glob would otherwise report 0 files for a folder that holds
+        // hundreds. `files` is every note and attachment under the folder, at any depth.
+        const filesUnder = new Map<string, number>();
+        const countUp = (filePath: string): void => {
+          for (let dir = parentDir(filePath); dir !== ''; dir = parentDir(dir)) {
+            filesUnder.set(dir, (filesUnder.get(dir) ?? 0) + 1);
+          }
+        };
+        for (const e of index.all()) countUp(e.path);
+        for (const asset of index.assets()) countUp(asset);
+        const allFolders = entries
+          .filter((e) => e.kind === 'dir')
+          .map((e) => ({ path: e.path, files: filesUnder.get(e.path) ?? 0 }))
+          .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+        const hintFor = (shown: number, foldersCut: boolean) =>
+          `${shown} of ${entries.length} entries shown, shallowest first` +
+          (allFolders.length === 0
+            ? ''
+            : `; "folders" counts every file under each listed folder, at any depth, whatever glob or depth was asked${foldersCut ? ' (itself truncated too)' : ''}`) +
+          `: ${allFolders.length === 0 ? 'narrow with path' : 'list one folder'}` +
+          // A glob brings the paths back only when the shape rule withheld them; when the budget
+          // cut the listing, a glob over the same files is cut at the same place.
+          `${shapeFirst && !wouldTruncate ? ', pass glob (e.g. "**/*") for the paths themselves' : ', or a narrower glob'}` +
+          ', or count with vault_query { pathPrefix, countOnly: true }.';
+        // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
+        // for entries/folders never overshoots what the final, possibly-shorter hint leaves.
+        const longestHint = hintFor(entries.length, true);
+        const baseRoom = roomBeside(
+          { path: base, entries: [], folders: [], truncated: true, hint: longestHint },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const foldersFit = fitWithinBudget(allFolders, Math.floor(baseRoom / 4));
+        const entriesRoom = roomBeside(
+          {
+            path: base,
+            entries: [],
+            ...(allFolders.length === 0 ? {} : { folders: foldersFit.kept }),
+            truncated: true,
+            hint: longestHint,
+          },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const entriesFit = fitWithinBudget(orderedCapped, entriesRoom);
+
         return okJson({
           path: base,
-          entries: kept,
-          truncated,
-          ...(truncated ? { hint: hintFor(kept.length) } : {}),
+          entries: entriesFit.kept,
+          ...(allFolders.length === 0 ? {} : { folders: foldersFit.kept }),
+          truncated: true,
+          hint: hintFor(entriesFit.kept.length, foldersFit.cut),
         });
       }),
   );

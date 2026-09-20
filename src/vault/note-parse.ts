@@ -96,7 +96,7 @@ export function frontmatterTags(frontmatter: Record<string, unknown>): string[] 
     .filter((t) => t !== '' && /[^\d/]/.test(t));
 }
 
-function splitWikiInner(
+export function splitWikiInner(
   inner: string,
 ): Omit<LinkRef, 'embed' | 'kind' | 'angle' | 'line' | 'start' | 'end'> {
   const pipe = inner.indexOf('|');
@@ -217,4 +217,62 @@ export function parseNote(
 
   const wordCount = body.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
   return { links, tags, headings, blockIds, wordCount };
+}
+
+/** Matches a string that is, in its entirety, one wikilink — "[[target]]", optionally with
+ *  "|alias", "#heading" or "^block" — the same inner grammar `WIKI` uses for note bodies, but
+ *  anchored to the whole (trimmed) value: "text [[x]] more" has brackets only in the middle and
+ *  is never mistaken for a link. */
+const WHOLE_WIKILINK = /^\[\[((?:[^\]\n]|\](?!\]))+?)\]\]$/;
+
+/** `s`, parsed as a whole wikilink; `null` when `s` (trimmed) is not exactly one. */
+export function parseWholeWikilink(
+  s: string,
+): Omit<LinkRef, 'embed' | 'kind' | 'angle' | 'line' | 'start' | 'end'> | null {
+  const m = WHOLE_WIKILINK.exec(s.trim());
+  if (!m) return null;
+  const parts = splitWikiInner(m[1] ?? '');
+  return parts.target === '' ? null : parts;
+}
+
+/** What a link-aware comparison looks at: the target without a trailing `.md`, lower-cased, and
+ *  its last path segment. `isLink` says whether the text was one whole wikilink. */
+export interface LinkKey {
+  full: string;
+  base: string;
+  hasFolder: boolean;
+  isLink: boolean;
+}
+
+/** The key of a string or number; `null` for anything else (a list, a boolean, null). */
+export function linkKey(value: unknown): LinkKey | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const text = String(value);
+  const link = typeof value === 'string' && text.includes('[[') ? parseWholeWikilink(text) : null;
+  const target = (link ? link.target : text).trim().replace(/\.md$/i, '').toLowerCase();
+  const slash = target.lastIndexOf('/');
+  return {
+    full: target,
+    base: slash === -1 ? target : target.slice(slash + 1),
+    hasFolder: slash !== -1,
+    isLink: link !== null,
+  };
+}
+
+/** Whether two keys name the same note. Only when at least one side is a wikilink: two plain
+ *  texts are the business of ordinary equality ("Open" is not "open"). With a folder on both
+ *  sides the whole target decides (`[[a/Name]]` is not `[[b/Name]]`); otherwise the name does. */
+export function sameLinkKey(a: LinkKey | null, b: LinkKey | null): boolean {
+  if (!a || !b || (!a.isLink && !b.isLink)) return false;
+  return a.hasFolder && b.hasFolder ? a.full === b.full : a.base === b.base;
+}
+
+/**
+ * A frontmatter value that is one whole wikilink (`[[Alpha Person]]`, `[[people/Alpha Person]]`,
+ * `[[Alpha Person|Alpha]]`, `[[Alpha Person#Heading]]`, `[[Alpha Person.md]]`) equals the plain
+ * name, the full target, and another link to the same note. "contains" and "startsWith" never
+ * come here: they stay substring and prefix operations on the raw text.
+ */
+export function linkAwareEquals(a: unknown, b: unknown): boolean {
+  return sameLinkKey(linkKey(a), linkKey(b));
 }

@@ -23,6 +23,9 @@ export const CLIENT_SAFE_RESULT_CHARS = 48_000;
 export const MAX_SECTION_NAME_CHARS = 200;
 export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
+/** A listing deeper than one level, without a glob, shows its shape (shallowest entries, files
+ *  per folder) instead of every path once it holds more entries than this. */
+export const MAX_DEEP_LIST_ENTRIES = 200;
 export const MAX_FRONTMATTER_HITS = 500;
 export const MAX_MATCH_TEXT_CHARS = 400;
 /** Serialized size of the frontmatter index above which the server warns (a log line at boot or

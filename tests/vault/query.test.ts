@@ -608,6 +608,121 @@ describe('evaluateQuery — contains/startsWith on what is not there', () => {
   });
 });
 
+describe('evaluateQuery — the row-truncation hint (B1)', () => {
+  it('warns that a sum/count over "rows" is incomplete and names sum/countOnly+groupBy', () => {
+    const filler = 'x'.repeat(400);
+    for (let i = 0; i < 400; i += 1) {
+      index.upsert(
+        entry(`hintwide/n${String(i).padStart(4, '0')}.md`, `---\nblurb: "${filler}"\n---\nbody`),
+      );
+    }
+    const r = run({ pathPrefix: 'hintwide', select: ['blurb'], limit: 400 });
+    expect(r.truncated).toBe(true);
+    // The existing "N of the M rows asked for" / budget-size wording is preserved...
+    expect(r.hint).toMatch(new RegExp(`of the 400 rows asked for.*${MAX_QUERY_RESULT_CHARS}`));
+    // ...and now also explains that adding up "rows" is incomplete, naming the way out.
+    expect(r.hint).toMatch(/incomplete/);
+    expect(r.hint).toContain('countOnly');
+    expect(r.hint).toContain('groupBy');
+    expect(r.hint).toContain('sum');
+  });
+});
+
+describe('evaluateQuery — sum (B2)', () => {
+  it('totals are exact over every match, not only the rows that fit the budget', () => {
+    const filler = 'x'.repeat(400);
+    let expected = 0;
+    for (let i = 0; i < 300; i += 1) {
+      expected += i;
+      index.upsert(
+        entry(
+          `sumwide/n${String(i).padStart(4, '0')}.md`,
+          `---\nblurb: "${filler}"\namount: ${i}\n---\nbody`,
+        ),
+      );
+    }
+    const r = run({ pathPrefix: 'sumwide', select: ['blurb'], limit: 300, sum: ['amount'] });
+    expect(r.rows.length).toBeLessThan(300);
+    expect(r.truncated).toBe(true);
+    expect(r.sums?.amount).toBe(expected);
+    expect(r.sumCounted?.amount).toBe(300);
+  });
+
+  it('a numeric string is not summed; a field that is never numeric yields 0', () => {
+    index.upsert(entry('sumstr/a.md', '---\namount: "12"\n---\nx'));
+    index.upsert(entry('sumstr/b.md', '---\namount: 5\n---\nx'));
+    const r = run({ pathPrefix: 'sumstr', sum: ['amount', 'nope'] });
+    expect(r.sums?.amount).toBe(5);
+    expect(r.sumCounted?.amount).toBe(1);
+    expect(r.sums?.nope).toBe(0);
+    expect(r.sumCounted?.nope).toBe(0);
+  });
+
+  it('a boolean does not count as a number', () => {
+    index.upsert(entry('sumbool/a.md', '---\nflag: true\n---\nx'));
+    const r = run({ pathPrefix: 'sumbool', sum: ['flag'] });
+    expect(r.sums?.flag).toBe(0);
+    expect(r.sumCounted?.flag).toBe(0);
+  });
+
+  it('works with countOnly: sums are still exact even though no rows are built', () => {
+    index.upsert(entry('sumco/a.md', '---\namount: 4\n---\nx'));
+    index.upsert(entry('sumco/b.md', '---\namount: 6\n---\nx'));
+    const r = run({ pathPrefix: 'sumco', sum: ['amount'], countOnly: true });
+    expect(r.rows).toEqual([]);
+    expect(r.sums?.amount).toBe(10);
+    expect(r.sumCounted?.amount).toBe(2);
+  });
+
+  it('with groupBy, every group also carries its own sums, over only its own matches', () => {
+    index.upsert(entry('sumgrp/a.md', '---\ncat: x\namount: 3\n---\n'));
+    index.upsert(entry('sumgrp/b.md', '---\ncat: x\namount: 7\n---\n'));
+    index.upsert(entry('sumgrp/c.md', '---\ncat: y\namount: 100\n---\n'));
+    const r = run({ pathPrefix: 'sumgrp', groupBy: 'cat', sum: ['amount'] });
+    const byKey = new Map((r.groups ?? []).map((g) => [g.key, g]));
+    expect(byKey.get('x')?.sums?.amount).toBe(10);
+    expect(byKey.get('x')?.sumCounted?.amount).toBe(2);
+    expect(byKey.get('y')?.sums?.amount).toBe(100);
+    expect(byKey.get('y')?.sumCounted?.amount).toBe(1);
+    expect(r.sums?.amount).toBe(110); // the top-level total is over ALL matches
+  });
+
+  it('stays within budget with 10 sum fields and groupBy over 2,000 keys', () => {
+    for (let i = 0; i < 2_000; i += 1) {
+      index.upsert(entry(`sumbig/n${i}.md`, `---\nbucket: b${i}\namount: ${i}\n---\nx`));
+    }
+    const sumFields = Array.from({ length: 10 }, (_, i) => `field${i}`);
+    const r = run({ pathPrefix: 'sumbig', groupBy: 'bucket', sum: sumFields });
+    expect(JSON.stringify(r).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+    expect(r.sums).toBeDefined();
+  });
+});
+
+describe('evaluateQuery — groupPrefix (B3)', () => {
+  beforeEach(() => {
+    index.upsert(entry('gp/a.md', '---\ncat: topic/a\n---\nx'));
+    index.upsert(entry('gp/b.md', '---\ncat: topic/b\n---\nx'));
+    index.upsert(entry('gp/c.md', '---\ncat: other\n---\nx'));
+  });
+
+  it('keeps only group keys that start with it; total is unaffected', () => {
+    const r = run({ pathPrefix: 'gp', groupBy: 'cat', groupPrefix: 'topic/' });
+    expect((r.groups ?? []).map((g) => g.key).sort()).toEqual(['topic/a', 'topic/b']);
+    expect(r.total).toBe(3);
+  });
+
+  it('is refused without groupBy, with INVALID_INPUT', () => {
+    expect(() => run({ pathPrefix: 'gp', groupPrefix: 'topic/' })).toThrow(VaultError);
+    try {
+      run({ pathPrefix: 'gp', groupPrefix: 'topic/' });
+      expect.unreachable('expected evaluateQuery to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(VaultError);
+      expect((error as VaultError).code).toBe('INVALID_INPUT');
+    }
+  });
+});
+
 describe('evaluateQuery — groups budget', () => {
   it('bounds the groups themselves: thousands of keys keep the largest groups and say so', () => {
     for (let i = 0; i < 4000; i += 1) {
@@ -748,5 +863,222 @@ describe('a field name that every object inherits', () => {
     }
     expect(index.query({ field: 'constructor', exists: true })).toEqual([]);
     expect(index.query({ field: 'status', exists: true }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('evaluateQuery — link-aware equality (a wikilink value matches its plain name and full target)', () => {
+  beforeEach(() => {
+    index.upsert(entry('links/plain-bracket.md', '---\nowner: "[[Alpha Person]]"\n---\nx'));
+    index.upsert(entry('links/full-target.md', '---\nowner: "[[people/Alpha Person]]"\n---\nx'));
+    index.upsert(entry('links/alias.md', '---\nowner: "[[Alpha Person|Alpha]]"\n---\nx'));
+    index.upsert(entry('links/heading.md', '---\nowner: "[[Alpha Person#Bio]]"\n---\nx'));
+    index.upsert(entry('links/other.md', '---\nowner: "[[Beta Person]]"\n---\nx'));
+    index.upsert(
+      entry('links/mid-brackets.md', '---\nowner: "notes [[Alpha Person]] here"\n---\nx'),
+    );
+    index.upsert(
+      entry('links/list.md', '---\nowners:\n  - "[[Alpha Person]]"\n  - "[[Beta Person]]"\n---\nx'),
+    );
+  });
+
+  it('eq: the plain name matches every wikilink form pointing at it', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'Alpha Person' }],
+    });
+    expect(paths(r)).toEqual([
+      'links/alias.md',
+      'links/full-target.md',
+      'links/heading.md',
+      'links/plain-bracket.md',
+    ]);
+  });
+
+  it('eq: the full target (folder + name) matches too', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'people/Alpha Person' }],
+    });
+    // A link without a folder may well point at people/Alpha Person (that is how short links
+    // resolve), so it matches; only a link into ANOTHER folder is a different note.
+    expect(paths(r)).toContain('links/full-target.md');
+    expect(paths(r).length).toBeGreaterThan(1);
+  });
+
+  it('eq: the exact bracketed string still matches as before', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: '[[Alpha Person]]' }],
+    });
+    expect(paths(r)).toContain('links/plain-bracket.md');
+  });
+
+  it('eq: a different name does not match', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'Beta Person' }],
+    });
+    expect(paths(r)).toEqual(['links/other.md']);
+  });
+
+  it('eq: brackets only in the middle of a value are not a link', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'Alpha Person' }],
+    });
+    expect(paths(r)).not.toContain('links/mid-brackets.md');
+  });
+
+  it('in: matches a plain name against any wikilink form in a list of candidates', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'in', value: ['Alpha Person'] }],
+    });
+    expect(paths(r)).toEqual(
+      expect.arrayContaining([
+        'links/alias.md',
+        'links/full-target.md',
+        'links/heading.md',
+        'links/plain-bracket.md',
+      ]),
+    );
+  });
+
+  it('list fields: a wikilink element matches the plain name', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owners', op: 'eq', value: 'Beta Person' }],
+    });
+    expect(paths(r)).toEqual(['links/list.md']);
+  });
+});
+
+describe('review of sum and link-aware equality', () => {
+  it('a name listed twice in "sum" is summed once', () => {
+    index.upsert(entry('dup/a.md', '---\nn: 1\n---\nx'));
+    index.upsert(entry('dup/b.md', '---\nn: 2\n---\nx'));
+    const r = run({ pathPrefix: 'dup', sum: ['n', 'n'] });
+    expect(r.sums?.n).toBe(3);
+    expect(r.sumCounted?.n).toBe(2);
+  });
+
+  it('a total too large for a number is left out and said, never emitted as Infinity', () => {
+    index.upsert(entry('big/a.md', '---\nbig: 1e308\nok: 1\n---\nx'));
+    index.upsert(entry('big/b.md', '---\nbig: 1e308\nok: 2\n---\nx'));
+    const r = run({ pathPrefix: 'big', sum: ['big', 'ok'], groupBy: 'ok', countOnly: true });
+    expect(r.sums).toEqual({ ok: 3 });
+    expect(r.sumCounted).toEqual({ big: 2, ok: 2 });
+    expect(r.hint).toMatch(/overflowed/);
+    expect(JSON.stringify(r)).not.toContain('null');
+    for (const g of r.groups ?? [])
+      expect(Number.isFinite((g as { sums: { big?: number } }).sums.big ?? 0)).toBe(true);
+  });
+
+  it('two links to the same name in different folders are different', () => {
+    index.upsert(entry('lk/a.md', '---\nowner: "[[other/Alpha Person]]"\n---\nx'));
+    const hit = (value: unknown) =>
+      run({ pathPrefix: 'lk', where: [{ field: 'owner', op: 'eq', value }] }).total;
+    expect(hit('[[people/Alpha Person]]')).toBe(0);
+    expect(hit('people/Alpha Person')).toBe(0);
+    expect(hit('[[other/Alpha Person]]')).toBe(1);
+    expect(hit('other/Alpha Person')).toBe(1);
+    expect(hit('Alpha Person')).toBe(1);
+    expect(hit('[[Alpha Person]]')).toBe(1);
+  });
+
+  it('a link written with .md equals the name, and a numeric name equals the number', () => {
+    index.upsert(
+      entry('lk2/a.md', '---\nowner: "[[people/Alpha Person.md]]"\nyear: "[[2024]]"\n---\nx'),
+    );
+    const hit = (field: string, value: unknown) =>
+      run({ pathPrefix: 'lk2', where: [{ field, op: 'eq', value }] }).total;
+    expect(hit('owner', 'Alpha Person')).toBe(1);
+    expect(hit('year', 2024)).toBe(1);
+    expect(
+      run({ pathPrefix: 'lk2', where: [{ field: 'year', op: 'in', value: [2023, 2024] }] }).total,
+    ).toBe(1);
+  });
+
+  it('"in" with fifty values over many notes stays fast', () => {
+    for (let i = 0; i < 20_000; i += 1)
+      index.upsert(entry(`perf/n${i}.md`, `---\nowner: "[[people/Person ${i}]]"\n---\nx`));
+    const value = Array.from({ length: 50 }, (_, i) => `Nobody ${i}`);
+    const started = performance.now();
+    expect(
+      run({ pathPrefix: 'perf', where: [{ field: 'owner', op: 'in', value }], countOnly: true })
+        .total,
+    ).toBe(0);
+    // measured ~30 ms after precomputing the query side once; ~150 ms before. One second tells
+    // a per-comparison regex apart from a precomputed key on any machine.
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('second review of sum', () => {
+  it('says so when only a group total overflowed, and never calls a finite total too large', () => {
+    index.upsert(entry('ov/a.md', '---\ng: alpha\nv: 1e308\n---\nx'));
+    index.upsert(entry('ov/b.md', '---\ng: beta\nv: -1e308\n---\nx'));
+    index.upsert(entry('ov/c.md', '---\ng: alpha\nv: 1e308\n---\nx'));
+    index.upsert(entry('ov/d.md', '---\ng: beta\nv: -1e308\n---\nx'));
+    const r = run({ pathPrefix: 'ov', sum: ['v'], groupBy: 'g', countOnly: true });
+    expect(r.sums).toEqual({ v: 0 });
+    expect(r.hint).toMatch(/overflowed/);
+    expect(r.hint).toMatch(/group/);
+  });
+
+  it('adds [1e308, 1e308, -1e308] up to the finite total it has', () => {
+    index.upsert(entry('ord/a.md', '---\nw: 1e308\n---\nx'));
+    index.upsert(entry('ord/b.md', '---\nw: 1e308\n---\nx'));
+    index.upsert(entry('ord/c.md', '---\nw: -1e308\n---\nx'));
+    const r = run({ pathPrefix: 'ord', sum: ['w'], countOnly: true });
+    expect(r.sums?.w).toBe(1e308);
+    expect(r.hint).toBeUndefined();
+  });
+});
+
+describe('third review of sum', () => {
+  it('a total that plain addition can hold is exactly what plain addition gives, subnormals too', () => {
+    for (const [i, v] of ['5e-324', '5e-324', '5e-324'].entries()) {
+      index.upsert(entry(`tiny/n${i}.md`, `---\nv: ${v}\n---\nx`));
+    }
+    expect(run({ pathPrefix: 'tiny', sum: ['v'], countOnly: true }).sums?.v).toBe(
+      5e-324 + 5e-324 + 5e-324,
+    );
+  });
+
+  it('says where each field overflowed, not one place for all', () => {
+    // x: two groups of 1e308 each (finite per group, the total overflows)
+    // y: one group holds 1e308 twice (overflows there), the other -1e308 twice: the total is 0
+    index.upsert(entry('two/a.md', '---\ng: alpha\nx: 1e308\ny: 1e308\n---\nx'));
+    index.upsert(entry('two/b.md', '---\ng: alpha\ny: 1e308\n---\nx'));
+    index.upsert(entry('two/c.md', '---\ng: beta\nx: 1e308\ny: -1e308\n---\nx'));
+    index.upsert(entry('two/d.md', '---\ng: beta\ny: -1e308\n---\nx'));
+    const r = run({ pathPrefix: 'two', sum: ['x', 'y'], groupBy: 'g', countOnly: true });
+    expect(r.sums).toEqual({ y: 0 });
+    expect(r.hint).toMatch(/"x"[^.]*left out of "sums"\./);
+    expect(r.hint).toMatch(/"y"[^.]*of a group/);
+    expect(r.hint).not.toMatch(/"x", "y"/);
+  });
+});
+
+describe('fourth review of sum', () => {
+  it('a finite total is found even when the running total passes twice the largest number', () => {
+    for (const [i, v] of ['1.7e308', '1.7e308', '1.7e308', '-1.7e308', '-1.7e308'].entries()) {
+      index.upsert(entry(`huge/n${i}.md`, `---\ng: alpha\nv: ${v}\n---\nx`));
+    }
+    const r = run({ pathPrefix: 'huge', sum: ['v'], groupBy: 'g', countOnly: true });
+    expect(r.hint).toBeUndefined();
+    expect(r.sums?.v).toBeCloseTo(1.7e308, -294);
+    const first = (r.groups ?? [])[0] as { sums?: { v?: number } } | undefined;
+    expect(first?.sums?.v).toBeCloseTo(1.7e308, -294);
+  });
+});
+
+describe('fifth review of sum', () => {
+  it('keeps the small addends when the large ones made the running total overflow', () => {
+    const values = ['1.7e308', '1.7e308', '-1.7e308', '-1.7e308', '3e-320', '4e-320'];
+    for (const [i, v] of values.entries())
+      index.upsert(entry(`mix/n${i}.md`, `---\nv: ${v}\n---\nx`));
+    expect(run({ pathPrefix: 'mix', sum: ['v'], countOnly: true }).sums?.v).toBe(3e-320 + 4e-320);
   });
 });
