@@ -401,3 +401,37 @@ describe('second review of suggestions', () => {
     expect(out.suggestionsOmitted ?? 0).toBeGreaterThan(0);
   });
 });
+
+describe('third review of the shape-first listing', () => {
+  it('a flat folder has no shape to show: a deeper listing gives no less than a shallow one', async () => {
+    await fs.mkdir(path.join(h.root, 'flat'), { recursive: true });
+    await Promise.all(
+      Array.from({ length: 400 }, (_, i) =>
+        fs.writeFile(path.join(h.root, 'flat', `n${i}.md`), 'x'),
+      ),
+    );
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    type Out = { entries: unknown[]; truncated: boolean; hint?: string; folders?: unknown };
+    const shallow = (await h.call('vault_list', { path: 'flat' })).structuredContent as Out;
+    const deep = (await h.call('vault_list', { path: 'flat', depth: 2 })).structuredContent as Out;
+    expect(deep.entries.length).toBe(shallow.entries.length);
+    expect(deep.truncated).toBe(shallow.truncated);
+    expect(deep.folders).toBeUndefined();
+  });
+
+  it('does not advise a glob to a call that passed one', async () => {
+    await fs.mkdir(path.join(h.root, 'wide'), { recursive: true });
+    const long = 'a-long-file-name-segment-'.repeat(6);
+    await Promise.all(
+      Array.from({ length: 900 }, (_, i) =>
+        fs.writeFile(path.join(h.root, 'wide', `${long}${i}.md`), 'x'),
+      ),
+    );
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const r = await h.call('vault_list', { path: 'wide', depth: 2, glob: '**/*.md' });
+    const out = r.structuredContent as { truncated: boolean; hint?: string };
+    expect(out.truncated).toBe(true);
+    expect(out.hint).not.toMatch(/pass glob/);
+    expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+});

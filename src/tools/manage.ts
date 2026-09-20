@@ -46,7 +46,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters. A listing deeper than one level with no glob and over 200 entries shows its shape instead (shallowest entries, files per folder in "folders"); a glob returns the paths. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
       inputSchema: z.strictObject({
         path: z.string().optional(),
@@ -84,9 +84,8 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           ...(includeDirs !== undefined ? { includeDirs } : {}),
         });
 
-        // First, today's behaviour exactly: DFS order, no "folders". Only when even this cannot
-        // fit does the truncated branch below reorder and add "folders" — an untruncated result
-        // must stay byte-for-byte what it always was.
+        // The plain form first: DFS order, no "folders". It is what a listing that fits returns,
+        // unless it is a long deep one without a glob (see `shapeFirst` below).
         const plainHintFor = (shown: number) =>
           `${shown} of ${entries.length} entries shown: narrow with path, glob or depth; to count or size a folder use vault_query { pathPrefix, countOnly: true }.`;
         const plainRoom = roomBeside(
@@ -101,8 +100,13 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         // generated pages listed at depth 2 fits the budget at 45,000 characters, and 8 of 16
         // readers paid that to learn the names of three sub-folders. Deeper than one level, with
         // no glob, a long listing shows its shape first; a glob asks for the paths themselves.
+        // Only where there is a shape to show: in a flat folder the shape form would return fewer
+        // paths than a shallow listing and nothing in exchange.
         const shapeFirst =
-          (depth ?? 1) > 1 && glob === undefined && entries.length > MAX_DEEP_LIST_ENTRIES;
+          (depth ?? 1) > 1 &&
+          glob === undefined &&
+          entries.length > MAX_DEEP_LIST_ENTRIES &&
+          entries.some((e) => e.kind === 'dir');
 
         if (!wouldTruncate && !shapeFirst) {
           return okJson({ path: base, entries: plainFit.kept, truncated: false });
@@ -143,7 +147,9 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           (allFolders.length === 0
             ? ''
             : `; "folders" counts every file under each listed folder, at any depth, whatever glob or depth was asked${foldersCut ? ' (itself truncated too)' : ''}`) +
-          ': list one folder, pass glob (e.g. "**/*.md") for the paths themselves, or count with vault_query { pathPrefix, countOnly: true }.';
+          `: ${allFolders.length === 0 ? 'narrow with path' : 'list one folder'}` +
+          `${glob === undefined ? ', pass glob (e.g. "**/*.md") for the paths themselves' : ', or a narrower glob'}` +
+          ', or count with vault_query { pathPrefix, countOnly: true }.';
         // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
         // for entries/folders never overshoots what the final, possibly-shorter hint leaves.
         const longestHint = hintFor(entries.length, true);

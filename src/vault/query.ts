@@ -444,10 +444,22 @@ function budgetHint(kept: number, asked: number): string {
  *  being left out. Built via Map -> Object.fromEntries, never `obj[field] =`, so a field literally
  *  named "__proto__" becomes an ordinary own key instead of silently reassigning the prototype
  *  (the same hazard `buildRow` guards against for selected columns). */
-/* HALVES. Totals are accumulated as halves and doubled at the end. Halving a finite double is
- * exact (one less in the exponent), so the total is bit-for-bit what adding the values gives,
- * but a running total can no longer overflow when the true total is finite: 1e308 + 1e308 +
- * (-1e308) is 1e308, not "too large". */
+/** A running total that is plain addition whenever plain addition can hold it, so the result is
+ *  exactly what adding the values gives. Only when the plain total has gone non-finite is the
+ *  total of the halves used, doubled: 1e308 + 1e308 + (-1e308) is 1e308, not an overflow. The
+ *  halves are not used otherwise because halving a subnormal (5e-324) loses it. */
+class Total {
+  private plain = 0;
+  private halves = 0;
+  add(v: number): void {
+    this.plain += v;
+    this.halves += v / 2;
+  }
+  /** Infinity or NaN only when the true total does not fit a number. */
+  value(): number {
+    return Number.isFinite(this.plain) ? this.plain : this.halves * 2;
+  }
+}
 
 /** Totals over every match. A total that stops being a finite number (two values of 1e308) is
  *  left out of `sums` and named in `overflowed`: JSON has no Infinity, and a result that fails
@@ -457,18 +469,18 @@ function computeSums(
   graph: VaultGraph,
   fields: string[],
 ): { sums: Record<string, number>; sumCounted: Record<string, number>; overflowed: string[] } {
-  const sums = new Map<string, number>(fields.map((f) => [f, 0]));
+  const totals = new Map<string, Total>(fields.map((f) => [f, new Total()]));
   const counted = new Map<string, number>(fields.map((f) => [f, 0]));
   for (const entry of entries) {
     for (const field of fields) {
       const v = fieldValue(entry, graph, field);
       if (typeof v === 'number' && Number.isFinite(v)) {
-        sums.set(field, (sums.get(field) ?? 0) + v / 2); // halves: see HALVES below
+        totals.get(field)?.add(v);
         counted.set(field, (counted.get(field) ?? 0) + 1);
       }
     }
   }
-  for (const f of fields) sums.set(f, (sums.get(f) ?? 0) * 2);
+  const sums = new Map<string, number>(fields.map((f) => [f, totals.get(f)?.value() ?? 0]));
   const overflowed = fields.filter((f) => !Number.isFinite(sums.get(f) ?? 0));
   for (const f of overflowed) sums.delete(f);
   return {
@@ -478,15 +490,18 @@ function computeSums(
   };
 }
 
-function overflowHint(fields: string[], where: 'total' | 'group' | 'both'): string {
-  const names = fields.map((f) => `"${f}"`).join(', ');
-  const place =
-    where === 'total'
-      ? '"sums"'
-      : where === 'group'
-        ? 'the "sums" of a group'
-        : '"sums", in a group too';
-  return `Adding up ${names} overflowed what a number can hold; it was left out of ${place}.`;
+function overflowHint(top: string[], inGroups: string[]): string {
+  const names = (fields: string[]) => fields.map((f) => `"${f}"`).join(', ');
+  const said: string[] = [];
+  if (top.length > 0) {
+    said.push(`Adding up ${names(top)} overflowed what a number can hold; left out of "sums".`);
+  }
+  if (inGroups.length > 0) {
+    said.push(
+      `Adding up ${names(inGroups)} overflowed inside a group; left out of the "sums" of a group.`,
+    );
+  }
+  return said.join(' ');
 }
 
 interface QueryPayload {
@@ -548,7 +563,7 @@ function buildGroups(
 ): QueryGroup[] {
   const groups = new Map<
     string,
-    { count: number; paths: string[]; sums: Map<string, number>; sumCounted: Map<string, number> }
+    { count: number; paths: string[]; sums: Map<string, Total>; sumCounted: Map<string, number> }
   >();
   for (const entry of entries) {
     const v = fieldValue(entry, graph, field);
@@ -570,7 +585,7 @@ function buildGroups(
         g = {
           count: 0,
           paths: [],
-          sums: new Map(sumFields.map((f) => [f, 0])),
+          sums: new Map(sumFields.map((f) => [f, new Total()])),
           sumCounted: new Map(sumFields.map((f) => [f, 0])),
         };
         groups.set(key, g);
@@ -580,7 +595,7 @@ function buildGroups(
       sumFields.forEach((f, i) => {
         const val = contributions[i];
         if (val !== undefined) {
-          g.sums.set(f, (g.sums.get(f) ?? 0) + val / 2); // halves, doubled below
+          g.sums.get(f)?.add(val);
           g.sumCounted.set(f, (g.sumCounted.get(f) ?? 0) + 1);
         }
       });
@@ -596,7 +611,7 @@ function buildGroups(
             // a total that is no longer a finite number is left out, as at the top level
             sums: Object.fromEntries(
               [...g.sums]
-                .map(([f, v]): [string, number] => [f, v * 2])
+                .map(([f, t]): [string, number] => [f, t.value()])
                 .filter(([, v]) => Number.isFinite(v)),
             ),
             sumCounted: Object.fromEntries(g.sumCounted),
@@ -698,10 +713,9 @@ export function evaluateQuery(
   );
   const sumHint = (): string | undefined => {
     const top = summed?.overflowed ?? [];
-    const fields = [...new Set([...top, ...groupOverflowed])];
-    if (fields.length === 0) return undefined;
-    const where = top.length === 0 ? 'group' : groupOverflowed.length === 0 ? 'total' : 'both';
-    return overflowHint(fields, where);
+    return top.length + groupOverflowed.length === 0
+      ? undefined
+      : overflowHint(top, groupOverflowed);
   };
   const fitted =
     q.groupBy === undefined
@@ -781,7 +795,9 @@ function wrapperChars(q: Query, total: number): number {
     GROUP_PATHS_DROPPED_HINT,
     groupsShownHint(widest, widest),
     OVERLAPPING_GROUPS_HINT,
-    ...((q.sum ?? []).length === 0 ? [] : [overflowHint([...new Set(q.sum ?? [])], 'both')]),
+    ...((q.sum ?? []).length === 0
+      ? []
+      : [overflowHint([...new Set(q.sum ?? [])], [...new Set(q.sum ?? [])])]),
   ].join(' ');
   const sumFields = [...new Set(q.sum ?? [])];
   const sumsPlaceholder =

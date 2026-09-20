@@ -1035,3 +1035,28 @@ describe('second review of sum', () => {
     expect(r.hint).toBeUndefined();
   });
 });
+
+describe('third review of sum', () => {
+  it('a total that plain addition can hold is exactly what plain addition gives, subnormals too', () => {
+    for (const [i, v] of ['5e-324', '5e-324', '5e-324'].entries()) {
+      index.upsert(entry(`tiny/n${i}.md`, `---\nv: ${v}\n---\nx`));
+    }
+    expect(run({ pathPrefix: 'tiny', sum: ['v'], countOnly: true }).sums?.v).toBe(
+      5e-324 + 5e-324 + 5e-324,
+    );
+  });
+
+  it('says where each field overflowed, not one place for all', () => {
+    // x: two groups of 1e308 each (finite per group, the total overflows)
+    // y: one group holds 1e308 twice (overflows there), the other -1e308 twice: the total is 0
+    index.upsert(entry('two/a.md', '---\ng: alpha\nx: 1e308\ny: 1e308\n---\nx'));
+    index.upsert(entry('two/b.md', '---\ng: alpha\ny: 1e308\n---\nx'));
+    index.upsert(entry('two/c.md', '---\ng: beta\nx: 1e308\ny: -1e308\n---\nx'));
+    index.upsert(entry('two/d.md', '---\ng: beta\ny: -1e308\n---\nx'));
+    const r = run({ pathPrefix: 'two', sum: ['x', 'y'], groupBy: 'g', countOnly: true });
+    expect(r.sums).toEqual({ y: 0 });
+    expect(r.hint).toMatch(/"x"[^.]*left out of "sums"\./);
+    expect(r.hint).toMatch(/"y"[^.]*of a group/);
+    expect(r.hint).not.toMatch(/"x", "y"/);
+  });
+});

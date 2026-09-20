@@ -294,7 +294,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   an answer to "what is in here"; a glob asks for the paths themselves.
 - `vault_batch_read` says how many missing paths had a suggestion that did not fit
   (`suggestionsOmitted`); a `sum` that overflows only inside a group is named in the hint, and
-  totals are accumulated so that an intermediate overflow cannot hide a finite total.
+  an intermediate overflow no longer hides a finite total (the total is plain addition unless
+  that overflowed). The shape form applies only where the listing holds sub-folders.
 - `vault_batch_read` takes `frontmatter: false`: every note's `frontmatter` comes back `{}`
   (`frontmatterOmitted: true`) and the room it would have used goes to bodies instead — readers
   who only needed note text were losing several bodies per batch to long frontmatter blocks
