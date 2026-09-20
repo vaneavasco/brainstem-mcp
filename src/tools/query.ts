@@ -16,7 +16,10 @@ import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 
-const SortSchema = z.strictObject({ field: z.string().min(1), order: z.enum(['asc', 'desc']) });
+const SortSchema = z.strictObject({
+  field: z.string().min(1).max(MAX_QUERY_FIELD_CHARS),
+  order: z.enum(['asc', 'desc']),
+});
 
 /**
  * Typed `z.ZodType<Query>` (not just an untyped `z.strictObject({...})`) so this schema's inferred output is

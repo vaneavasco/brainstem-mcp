@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { CLIENT_SAFE_RESULT_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
+import { CLIENT_SAFE_RESULT_CHARS, MAX_GLOB_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
 import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
 import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
@@ -46,7 +46,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
       inputSchema: z.strictObject({
         path: z.string().optional(),
         depth: z.number().int().min(1).max(50).optional(),
-        glob: z.string().optional(),
+        glob: z.string().max(MAX_GLOB_CHARS).optional(),
         includeFiles: z.boolean().optional(),
         includeDirs: z.boolean().optional(),
       }),

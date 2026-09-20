@@ -45,6 +45,13 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   `vault_links` (its four lists share the room, short lists first), `vault_tags`,
   `vault_search_frontmatter` and `vault_analytics_findings` keep the longest prefix that fits,
   set `truncated`, and say how many of how many are shown and which narrower call to make.
+- `vault_search` is bounded like the other list results: its hits travel twice (`files` groups
+  what `matches` lists flat), so fifty long lines in long paths outgrew 48,000 characters. It
+  keeps the longest run of hits whose two renderings fit together, and sets `truncated`.
+- Arguments that are echoed back or compiled are capped where they are declared, so a caller
+  cannot make the server answer with 200,000 characters by sending them (a `tag` was echoed
+  whole; a 40,000-character `glob` ended in an internal error): a path 1,024 characters, a
+  heading path, field name or tag 200, `select` 50 names, a search string or glob 1,000.
 - `vault_query` and `vault_recent` bound the whole result, not only the rows: the result stays
   within 48,000 characters, rows (or `values`), `groups`, column names, hints and all (`select`
   takes at most 50 names of 200 characters). Groups get at most half when rows are wanted too (all of
@@ -210,8 +217,9 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   longest prefix that fits (a body that opens with line breaks, quotes or control characters is
   denser at the start than on average, so a ratio is not enough); a short note leaves its unused
   share to the long ones. A heading path may be at most 200 characters, and a batch whose paths
-  and section names alone would exceed the limit is refused with a clear error. `sections` is
-  the intended call for long notes.
+  and section names alone would exceed the limit is refused with a clear error (one bad path
+  never fails a batch). With `maxChars`, a note costs only what it may return, so capped notes
+  strand no room. `sections` is the intended call for long notes.
 - Positioning: the README intro, `llms.txt` and the GitHub description/topics
   now say what brainstem is *for* — your Obsidian vault as Claude's second brain
   (personal knowledge management, local-first, persistent memory) — before

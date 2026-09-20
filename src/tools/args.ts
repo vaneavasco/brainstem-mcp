@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_PATH_ARG_CHARS, MAX_QUERY_FIELD_CHARS } from '../storage/limits.ts';
 import type { Cond, Query } from '../vault/query.ts';
 
 /**
@@ -15,11 +16,15 @@ import type { Cond, Query } from '../vault/query.ts';
  */
 
 /** Vault-relative path. Wording only — validation happens in `normalizeVaultPath` at call time. */
-export const PathArg = z.string().describe('Vault-relative path, e.g. "00-inbox/idea.md".');
+export const PathArg = z
+  .string()
+  .max(MAX_PATH_ARG_CHARS)
+  .describe('Vault-relative path, e.g. "00-inbox/idea.md".');
 
 /** The same string argument, spelling out the path rules; used by the read/graph tools. */
 export const DetailedPathArg = z
   .string()
+  .max(MAX_PATH_ARG_CHARS)
   .describe('Vault-relative path, e.g. "01-projects/plan.md". No leading slash, no "..".');
 
 /** The `where` operator set shared by vault_query and vault_search. */
@@ -50,7 +55,7 @@ export const QueryOpSchema = z
 /** One `where` condition, shared by vault_query and vault_search (typed against the pure
  *  `Cond` interface so schema and engine cannot drift). */
 export const CondSchema: z.ZodType<Cond> = z.strictObject({
-  field: z.string().min(1),
+  field: z.string().min(1).max(MAX_QUERY_FIELD_CHARS),
   op: QueryOpSchema,
   value: z.unknown().optional(),
 });

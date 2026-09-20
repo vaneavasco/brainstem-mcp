@@ -35,6 +35,13 @@ export const MAX_QUERY_ROWS = 500;
 export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS;
 /** `select` names the fields of a row; they are echoed back (as keys, or once as "columns"). */
 export const MAX_QUERY_SELECT = 50;
+/** Free-text arguments that are echoed back or compiled: a search string, a glob, a tag. */
+export const MAX_SEARCH_QUERY_CHARS = 1_000;
+export const MAX_GLOB_CHARS = 1_000;
+export const MAX_TAG_CHARS = 200;
+/** Same number as the path policy's own limit: an argument longer than any legal path is refused
+ *  by the schema, before it can be echoed in an error. */
+export const MAX_PATH_ARG_CHARS = 1_024;
 export const MAX_QUERY_FIELD_CHARS = 200;
 /** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
 export const DEFAULT_RECONCILE_MS = 300_000;

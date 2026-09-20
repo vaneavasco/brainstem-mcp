@@ -5,20 +5,29 @@
  */
 
 /**
- * The longest prefix of `items` whose JSON array stays within `budget` characters. Exact, not an
+ * The items, in order, that fit a JSON array of at most `budget` characters. Exact, not an
  * estimate: a plain array serializes as `[` + comma-joined items + `]`, so the items' own
  * serialized lengths plus one comma each reproduce it without re-serializing every prefix.
+ * It stops at the first item that no longer fits what is left, with one exception: an item that
+ * could not fit even an empty list (one row holding a 100,000-character value) is skipped, or it
+ * would hide every item after it for good. `cut` is true when anything was left out.
  */
 export function fitWithinBudget<T>(items: T[], budget: number): { kept: T[]; cut: boolean } {
   let used = 2; // '[' + ']'
+  let cut = false;
   const kept: T[] = [];
   for (const item of items) {
-    const addition = JSON.stringify(item).length + (kept.length > 0 ? 1 : 0); // + comma
+    const own = JSON.stringify(item).length;
+    if (own + 2 > budget) {
+      cut = true; // never fits: skip it, keep looking
+      continue;
+    }
+    const addition = own + (kept.length > 0 ? 1 : 0); // + comma
     if (used + addition > budget) return { kept, cut: true };
     used += addition;
     kept.push(item);
   }
-  return { kept, cut: false };
+  return { kept, cut };
 }
 
 /**

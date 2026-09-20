@@ -105,6 +105,13 @@ describe('budget helpers', () => {
     expect(JSON.stringify([...kept, items[kept.length]]).length).toBeGreaterThan(500);
   });
 
+  it('one item too large for any result is skipped, not allowed to hide the rest', () => {
+    const items = [{ v: 'x'.repeat(5_000) }, { v: 'a' }, { v: 'b' }];
+    const { kept, cut } = fitWithinBudget(items, 500);
+    expect(kept).toEqual([{ v: 'a' }, { v: 'b' }]);
+    expect(cut).toBe(true);
+  });
+
   it('several lists share one budget: the short one is whole, the long ones split the rest', () => {
     const short = ['a', 'b'];
     const long = Array.from({ length: 400 }, (_, i) => `item-number-${i}`);

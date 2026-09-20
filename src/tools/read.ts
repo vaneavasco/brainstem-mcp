@@ -94,6 +94,9 @@ const TRUNCATION_MARKER_CHARS = JSON.stringify(
   `\n\n[truncated: showing ${MAX_RESULT_CHARS} of ${Number.MAX_SAFE_INTEGER} characters]`,
 ).length;
 
+/** Stands in for a body while the rest of the result is weighed: as long as the longest marker. */
+const MARKER_PLACEHOLDER = 'x'.repeat(TRUNCATION_MARKER_CHARS - 2);
+
 const FRONTMATTER_OMITTED_HINT =
   'Frontmatter was left out of some notes ("frontmatterOmitted") to keep the result within what clients accept: read the fields you need with vault_query select, or one note with vault_read.';
 
@@ -290,7 +293,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
             hash: note.hash,
-            body: '',
+            body: MARKER_PLACEHOLDER, // every body may end in a truncation marker: weigh it
             truncated: true,
             ...(withFrontmatter ? {} : { frontmatterOmitted: true }),
             ...(wanted[i]?.missing.length ? { missingSections: wanted[i]?.missing } : {}),
@@ -314,16 +317,19 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         }
         const fmSizes = result.notes.map((note) => JSON.stringify(note.frontmatter).length);
         const omitted = omitLargest(fmSizes, Math.floor((CLIENT_SAFE_RESULT_CHARS - bare) / 2));
-        const bodiesRoom =
-          CLIENT_SAFE_RESULT_CHARS - weigh(omitted) - result.notes.length * TRUNCATION_MARKER_CHARS;
+        const bodiesRoom = CLIENT_SAFE_RESULT_CHARS - weigh(omitted);
 
-        // A body's cost is its JSON string without the two quotes the skeleton already paid for.
-        const costs = texts.map((text) => JSON.stringify(text).length - 2);
+        // A body's cost is its JSON string without the two quotes the skeleton already paid for;
+        // with maxChars, only the part it may return, so a capped note strands no budget.
+        const usable = texts.map((text) =>
+          maxChars === undefined ? text : text.slice(0, maxChars),
+        );
+        const costs = usable.map((text) => JSON.stringify(text).length - 2);
         const shares = shareBudget(costs, Math.max(bodiesRoom, 0));
         const notes = result.notes.map((_, i) => {
           const text = texts[i] ?? '';
-          const prefix = prefixWithinSerialized(text, (shares[i] ?? 0) + 2);
-          const clamped = clampText(text, Math.min(prefix.length, maxChars ?? prefix.length));
+          const prefix = prefixWithinSerialized(usable[i] ?? '', (shares[i] ?? 0) + 2);
+          const clamped = clampText(text, prefix.length);
           return {
             ...skeleton(i, !omitted.has(i)),
             body: clamped.text,

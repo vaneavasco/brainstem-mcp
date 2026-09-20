@@ -4,9 +4,12 @@ import { z } from 'zod';
 import {
   CLIENT_SAFE_RESULT_CHARS,
   MAX_FRONTMATTER_HITS,
+  MAX_GLOB_CHARS,
+  MAX_QUERY_FIELD_CHARS,
   MAX_QUERY_ROWS,
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
+  MAX_SEARCH_QUERY_CHARS,
   MAX_SEARCH_RESULTS,
   MAX_SEARCH_SCAN,
 } from '../storage/limits.ts';
@@ -206,7 +209,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         'in "files" (prefer this); "matches" is the same hits as a flat array, kept for ' +
         `compatibility. ${GUIDE_POINTER}`,
       inputSchema: z.strictObject({
-        query: z.string().min(1),
+        query: z.string().min(1).max(MAX_SEARCH_QUERY_CHARS),
         regex: z
           .boolean()
           .optional()
@@ -223,6 +226,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           .describe('Restrict to notes matching these conditions before searching text.'),
         glob: z
           .string()
+          .max(MAX_GLOB_CHARS)
           .optional()
           .describe('Restrict candidate files to this glob, e.g. "**/*.md".'),
       }),
@@ -295,6 +299,31 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           }
         }
 
+        // The hits travel twice ("files" groups what "matches" lists flat), so fifty long lines
+        // in long paths outgrow what a client accepts: keep the longest run of hits whose two
+        // renderings fit together beside the rest of the result.
+        const room = roomBeside(
+          { query, regex: true, files: [], matches: [], total: matches.length, truncated: true },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const weight = (count: number) => {
+          const kept = matches.slice(0, count);
+          return JSON.stringify(kept).length + JSON.stringify(groupByFile(kept)).length;
+        };
+        let fit = matches.length;
+        if (weight(fit) > room) {
+          let low = 0;
+          let high = matches.length;
+          while (low < high) {
+            const mid = Math.ceil((low + high) / 2);
+            if (weight(mid) <= room) low = mid;
+            else high = mid - 1;
+          }
+          fit = low;
+          truncated = true;
+        }
+        if (fit < matches.length) matches = matches.slice(0, fit);
+
         return okJson({
           query,
           regex: regex === true,
@@ -315,7 +344,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
       title: 'Search by frontmatter',
       description: `Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported. Returns at most ${MAX_FRONTMATTER_HITS} hits; narrow the query if truncated.`,
       inputSchema: z.strictObject({
-        field: z.string().min(1),
+        field: z.string().min(1).max(MAX_QUERY_FIELD_CHARS),
         equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
         contains: z.string().optional(),
         exists: z.boolean().optional(),

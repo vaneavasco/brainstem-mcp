@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   CLIENT_SAFE_RESULT_CHARS,
   MAX_GRAPH_ITEMS,
+  MAX_TAG_CHARS,
   MAX_UNLINKED_MENTIONS,
 } from '../storage/limits.ts';
 import { normalizeVaultPath } from '../storage/path-policy.ts';
@@ -253,8 +254,8 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
       title: 'Tags',
       description: `List every tag in the vault with note counts, or the notes carrying one tag (with includeNested, default true, rolling up nested children like "project/alpha" into "project"). Filter the tag list with prefix (case-insensitive). Caps notes at ${MAX_GRAPH_ITEMS} for a given tag. Long lists are cut to what a client accepts (truncated + hint).`,
       inputSchema: z.strictObject({
-        tag: z.string().optional(),
-        prefix: z.string().optional(),
+        tag: z.string().min(1).max(MAX_TAG_CHARS).optional(),
+        prefix: z.string().max(MAX_TAG_CHARS).optional(),
         includeNested: z.boolean().optional(),
       }),
       outputSchema: z.looseObject({

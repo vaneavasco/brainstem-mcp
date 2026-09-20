@@ -63,7 +63,9 @@ export function clampText(
   max = MAX_RESULT_CHARS,
 ): { text: string; truncated: boolean; totalChars: number } {
   if (text.length <= max) return { text, truncated: false, totalChars: text.length };
-  const head = text.slice(0, max);
+  // Never end on half a surrogate pair: a lone surrogate is six characters in JSON, not one.
+  const last = text.charCodeAt(max - 1);
+  const head = text.slice(0, max > 0 && last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
   return {
     text: `${head}\n\n[truncated: showing ${max} of ${text.length} characters]`,
     truncated: true,
