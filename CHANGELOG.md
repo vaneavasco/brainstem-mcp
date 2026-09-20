@@ -6,6 +6,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-21
+
 ### Added
 
 - `vault_query` takes `format: "columns"`: a `columns` name list plus one `values` array per
@@ -476,6 +478,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.4.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.1.0...v0.2.0
