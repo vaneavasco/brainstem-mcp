@@ -1073,3 +1073,12 @@ describe('fourth review of sum', () => {
     expect(first?.sums?.v).toBeCloseTo(1.7e308, -294);
   });
 });
+
+describe('fifth review of sum', () => {
+  it('keeps the small addends when the large ones made the running total overflow', () => {
+    const values = ['1.7e308', '1.7e308', '-1.7e308', '-1.7e308', '3e-320', '4e-320'];
+    for (const [i, v] of values.entries())
+      index.upsert(entry(`mix/n${i}.md`, `---\nv: ${v}\n---\nx`));
+    expect(run({ pathPrefix: 'mix', sum: ['v'], countOnly: true }).sums?.v).toBe(3e-320 + 4e-320);
+  });
+});

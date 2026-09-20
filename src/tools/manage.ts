@@ -150,7 +150,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           `: ${allFolders.length === 0 ? 'narrow with path' : 'list one folder'}` +
           // A glob brings the paths back only when the shape rule withheld them; when the budget
           // cut the listing, a glob over the same files is cut at the same place.
-          `${shapeFirst && !wouldTruncate ? ', pass glob (e.g. "**/*.md") for the paths themselves' : ', or a narrower glob'}` +
+          `${shapeFirst && !wouldTruncate ? ', pass glob (e.g. "**/*") for the paths themselves' : ', or a narrower glob'}` +
           ', or count with vault_query { pathPrefix, countOnly: true }.';
         // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
         // for entries/folders never overshoots what the final, possibly-shorter hint leaves.

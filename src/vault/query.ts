@@ -454,13 +454,15 @@ const SCALE = 2 ** -32;
  *  does not fit a number still comes out non-finite and is reported as such. */
 class Total {
   private plain = 0;
-  private scaled = 0;
+  private scaled = 0; // addends of magnitude 1 and above, times 2^-32
+  private small = 0; // the rest, as they are: scaling them down would push them into subnormals
   add(v: number): void {
     this.plain += v;
-    this.scaled += v * SCALE;
+    if (Math.abs(v) >= 1) this.scaled += v * SCALE;
+    else this.small += v;
   }
   value(): number {
-    return Number.isFinite(this.plain) ? this.plain : this.scaled / SCALE;
+    return Number.isFinite(this.plain) ? this.plain : this.scaled / SCALE + this.small;
   }
 }
 
