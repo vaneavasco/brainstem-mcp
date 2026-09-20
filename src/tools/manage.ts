@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_LIST_ENTRIES } from '../storage/limits.ts';
+import { CLIENT_SAFE_RESULT_CHARS, MAX_GLOB_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
 import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
+import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
 import { applyLinkRewrites, planMove } from './move.ts';
@@ -40,19 +41,19 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated. ' +
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional(),
         depth: z.number().int().min(1).max(50).optional(),
-        glob: z.string().optional(),
+        glob: z.string().max(MAX_GLOB_CHARS).optional(),
         includeFiles: z.boolean().optional(),
         includeDirs: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         entries: z.array(
-          z.object({
+          z.looseObject({
             path: z.string(),
             kind: z.enum(['file', 'dir']),
             size: z.number().optional(),
@@ -60,6 +61,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           }),
         ),
         truncated: z.boolean(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -72,11 +74,19 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           ...(includeFiles !== undefined ? { includeFiles } : {}),
           ...(includeDirs !== undefined ? { includeDirs } : {}),
         });
-        const truncated = entries.length > MAX_LIST_ENTRIES;
+        const hintFor = (shown: number) =>
+          `${shown} of ${entries.length} entries shown: narrow with path, glob or depth; to count or size a folder use vault_query { pathPrefix, countOnly: true }.`;
+        const room = roomBeside(
+          { path: base, entries: [], truncated: true, hint: hintFor(entries.length) },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const { kept, cut } = fitWithinBudget(entries.slice(0, MAX_LIST_ENTRIES), room);
+        const truncated = cut || entries.length > MAX_LIST_ENTRIES;
         return okJson({
           path: base,
-          entries: truncated ? entries.slice(0, MAX_LIST_ENTRIES) : entries,
+          entries: kept,
           truncated,
+          ...(truncated ? { hint: hintFor(kept.length) } : {}),
         });
       }),
   );
@@ -92,7 +102,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         'updateLinks:false to restore the old behaviour of never rewriting them. Links whose target is ' +
         'ambiguous are reported, never guessed, and left untouched. expectedHash is only honoured when ' +
         'moving a single file (not a folder).',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         from: z.string(),
         to: z.string(),
         expectedHash: ExpectedHashArg,
@@ -105,12 +115,12 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
               'containing either; false otherwise.',
           ),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         from: z.string(),
         to: z.string(),
         hash: z.string().nullable(),
-        linksUpdated: z.array(z.object({ path: z.string(), count: z.number() })),
-        failed: z.array(z.object({ path: z.string(), error: z.string() })),
+        linksUpdated: z.array(z.looseObject({ path: z.string(), count: z.number() })),
+        failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
       }),
       annotations: MOVE_OR_DELETE,
     },
@@ -150,12 +160,12 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
       title: 'Delete (to trash)',
       description:
         "Soft-delete a file or folder by moving it into the vault's .trash/ folder. Requires confirm=true — call without it first only if you need the user to confirm. Nothing is erased permanently. expectedHash is only honoured when deleting a single file (not a folder).",
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string(),
         confirm: z.boolean(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({ path: z.string(), trashed: z.boolean() }),
+      outputSchema: z.looseObject({ path: z.string(), trashed: z.boolean() }),
       annotations: MOVE_OR_DELETE,
     },
     ({ path, confirm, expectedHash }) =>

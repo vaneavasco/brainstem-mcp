@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
 import { splitFrontmatter } from '../../src/storage/frontmatter.ts';
+import { MAX_QUERY_RESULT_CHARS } from '../../src/storage/limits.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import { VaultError } from '../../src/storage/types.ts';
 import { FrontmatterIndex, type IndexEntry } from '../../src/vault/frontmatter-index.ts';
@@ -218,6 +219,52 @@ describe('evaluateQuery — where operators by type', () => {
     ]);
   });
 
+  it('contains: an array value matches when any needle matches (scalar field)', () => {
+    expect(
+      paths(run({ where: [{ field: 'status', op: 'contains', value: ['zzz', 'ctiv'] }] })),
+    ).toEqual(['archive/d.md', 'notes/a.md', 'notes/b.md']);
+  });
+
+  it('contains: an array value against an array field — any needle, any element', () => {
+    expect(
+      paths(run({ where: [{ field: 'owners', op: 'contains', value: ['zzz', 'aro'] }] })),
+    ).toEqual(['notes/b.md']);
+  });
+
+  it('startsWith: an array value matches when any needle matches', () => {
+    expect(
+      paths(run({ where: [{ field: 'status', op: 'startsWith', value: ['zzz', 'IN'] }] })),
+    ).toEqual(['notes/b.md']);
+  });
+
+  it('contains/startsWith: an empty array value throws INVALID_INPUT', () => {
+    expect(() => run({ where: [{ field: 'status', op: 'contains', value: [] }] })).toThrow(
+      VaultError,
+    );
+    expect(() => run({ where: [{ field: 'status', op: 'startsWith', value: [] }] })).toThrow(
+      VaultError,
+    );
+  });
+
+  it('contains: more than 50 needles throws INVALID_INPUT', () => {
+    const needles = Array.from({ length: 51 }, (_, i) => `n${i}`);
+    try {
+      run({ where: [{ field: 'status', op: 'contains', value: needles }] });
+      expect.unreachable('expected evaluateQuery to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(VaultError);
+      expect((error as VaultError).code).toBe('INVALID_INPUT');
+    }
+  });
+
+  it('contains: validates the needle array up front, even when no entry would be scanned', () => {
+    index.remove('notes/a.md');
+    index.remove('notes/b.md');
+    index.remove('notes/c.md');
+    index.remove('archive/d.md');
+    expect(() => run({ where: [{ field: 'status', op: 'contains', value: [] }] })).toThrow();
+  });
+
   it('exists: true (default) requires the field to be present', () => {
     expect(paths(run({ where: [{ field: 'status', op: 'exists' }] }))).toEqual([
       'archive/d.md',
@@ -230,6 +277,23 @@ describe('evaluateQuery — where operators by type', () => {
     expect(paths(run({ where: [{ field: 'status', op: 'exists', value: false }] }))).toEqual([
       'notes/c.md',
     ]);
+  });
+
+  it('nonEmpty: true only when the field is present and not null, "" or []', () => {
+    index.upsert(entry('empty/a.md', '---\nrefs: []\n---\nx'));
+    index.upsert(entry('empty/b.md', '---\nnote: ""\n---\nx'));
+    index.upsert(entry('empty/c.md', '---\nnote: null\n---\nx'));
+    index.upsert(entry('empty/d.md', '---\nnote: hi\nrefs: [x]\n---\nx'));
+    expect(paths(run({ pathPrefix: 'empty', where: [{ field: 'note', op: 'nonEmpty' }] }))).toEqual(
+      ['empty/d.md'],
+    );
+    expect(paths(run({ pathPrefix: 'empty', where: [{ field: 'refs', op: 'nonEmpty' }] }))).toEqual(
+      ['empty/d.md'],
+    );
+  });
+
+  it('nonEmpty: false when the field is missing entirely, like exists:false', () => {
+    expect(paths(run({ where: [{ field: 'nope', op: 'nonEmpty' }] }))).toEqual([]);
   });
 
   it('gt/gte/lt/lte: numeric ordering', () => {
@@ -395,6 +459,248 @@ describe('evaluateQuery — limit/truncated/total', () => {
     const r = run({ limit: 100_000 });
     expect(r.rows.length).toBeLessThanOrEqual(500);
     expect(r.truncated).toBe(false); // only 4 fixture entries, well under the cap
+  });
+});
+
+describe('evaluateQuery — format: columns', () => {
+  it('carries the same content as rows, as columns + values, with rows empty', () => {
+    const rows = run({
+      where: [{ field: 'status', op: 'exists' }],
+      select: ['status', 'priority'],
+    });
+    const cols = run({
+      where: [{ field: 'status', op: 'exists' }],
+      select: ['status', 'priority'],
+      format: 'columns',
+    });
+    expect(cols.rows).toEqual([]);
+    expect(cols.columns).toEqual(['path', 'status', 'priority']);
+    expect(cols.total).toBe(rows.total);
+    expect(cols.truncated).toBe(rows.truncated);
+    const byPath = new Map(rows.rows.map((r) => [r.path, r]));
+    for (const value of cols.values ?? []) {
+      const [path, status, priority] = value as [string, unknown, unknown];
+      const row = byPath.get(path);
+      expect(row).toBeDefined();
+      expect(status).toEqual(row?.status);
+      expect(priority).toEqual(row?.priority);
+    }
+    expect(cols.values).toHaveLength(rows.rows.length);
+  });
+
+  it('defaults to path-only columns when select is omitted', () => {
+    const cols = run({ format: 'columns' });
+    expect(cols.columns).toEqual(['path']);
+    expect((cols.values ?? []).every((v) => v.length === 1)).toBe(true);
+  });
+
+  it('never repeats "path" in columns even if select lists it', () => {
+    const cols = run({ select: ['path', 'status'], format: 'columns' });
+    expect(cols.columns).toEqual(['path', 'status']);
+  });
+});
+
+describe('evaluateQuery — MAX_QUERY_RESULT_CHARS budget', () => {
+  function seedWide(n: number): void {
+    const filler = 'x'.repeat(400);
+    for (let i = 0; i < n; i += 1) {
+      index.upsert(
+        entry(
+          `wide/n${String(i).padStart(4, '0')}.md`,
+          `---\nblurb: "${filler}"\nrefs: [r1, r2]\n---\nbody`,
+        ),
+      );
+    }
+  }
+
+  it('leaves a small result untouched: no hint, truncated: false', () => {
+    const r = run({ pathPrefix: 'notes' });
+    expect(r.truncated).toBe(false);
+    expect(r.hint).toBeUndefined();
+  });
+
+  it('cuts a big row payload at the character budget and explains why', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', select: ['blurb'], limit: 400 });
+    expect(r.total).toBe(400);
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(r.rows.length).toBeLessThan(400);
+    expect(r.truncated).toBe(true);
+    expect(r.hint).toMatch(new RegExp(`of the 400 rows asked for.*${MAX_QUERY_RESULT_CHARS}`));
+    expect(JSON.stringify(r.rows).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+  });
+
+  it('cuts the "columns" format at the same budget, over the values payload', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', select: ['blurb'], limit: 400, format: 'columns' });
+    expect(r.truncated).toBe(true);
+    expect(r.values?.length).toBeGreaterThan(0);
+    expect(r.values?.length).toBeLessThan(400);
+    expect(JSON.stringify(r.values).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+  });
+
+  it('does not affect countOnly, which never builds rows', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', countOnly: true });
+    expect(r.total).toBe(400);
+    expect(r.truncated).toBe(false);
+    expect(r.hint).toBeUndefined();
+  });
+
+  it('joins the budget hint and the overlapping-groups hint with a space when both apply', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', select: ['blurb'], limit: 400, groupBy: 'refs' });
+    expect(r.hint).toContain(String(MAX_QUERY_RESULT_CHARS));
+    expect(r.hint).toContain('more than "total"');
+  });
+});
+
+describe('evaluateQuery — contains/startsWith on what is not there', () => {
+  it('a missing field contains nothing, not the text "undefined"', () => {
+    expect(run({ where: [{ field: 'no_such_field', op: 'contains', value: 'und' }] }).total).toBe(
+      0,
+    );
+    expect(run({ where: [{ field: 'no_such_field', op: 'startsWith', value: 'u' }] }).total).toBe(
+      0,
+    );
+  });
+
+  it('a missing field equals nothing and matches no pattern', () => {
+    expect(run({ where: [{ field: 'no_such_field', op: 'eq', value: 'undefined' }] }).total).toBe(
+      0,
+    );
+    expect(run({ where: [{ field: 'no_such_field', op: 'in', value: ['undefined'] }] }).total).toBe(
+      0,
+    );
+    expect(run({ where: [{ field: 'no_such_field', op: 'regex', value: 'undef.*' }] }).total).toBe(
+      0,
+    );
+    // "neq" stays the complement: a note without the field is not equal to anything
+    expect(run({ where: [{ field: 'no_such_field', op: 'neq', value: 'x' }] }).total).toBe(4);
+  });
+
+  it('a null field equals null, not the text "null"', () => {
+    index.upsert(entry('nulls/n.md', '---\nstart: null\nname: "null"\n---\nbody'));
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'start', op: 'eq', value: 'null' }] }).total,
+    ).toBe(0);
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'start', op: 'eq', value: null }] }).total,
+    ).toBe(1);
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'start', op: 'in', value: [null] }] }).total,
+    ).toBe(1);
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'name', op: 'eq', value: 'null' }] }).total,
+    ).toBe(1);
+  });
+
+  it('an empty scalar needle is refused too, with the operators that test presence named', () => {
+    expect(() => run({ where: [{ field: 'owners', op: 'contains', value: '' }] })).toThrow(
+      /nonEmpty/,
+    );
+  });
+
+  it('an empty needle in a list is refused: it would match every note', () => {
+    expect(() =>
+      run({ where: [{ field: 'owners', op: 'contains', value: ['Alice', ''] }] }),
+    ).toThrow(/empty/);
+  });
+});
+
+describe('evaluateQuery — groups budget', () => {
+  it('bounds the groups themselves: thousands of keys keep the largest groups and say so', () => {
+    for (let i = 0; i < 4000; i += 1) {
+      const bucket = i < 30 ? 'common' : `a-rather-long-and-unique-bucket-name-number-${i}`;
+      index.upsert(entry(`many/n${i}.md`, `---\nbucket: ${bucket}\n---\nbody`));
+    }
+    const counted = run({ pathPrefix: 'many', groupBy: 'bucket', countOnly: true });
+    expect(JSON.stringify(counted.groups).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+    expect(counted.groups?.find((g) => g.key === 'common')?.count).toBe(30);
+    expect(counted.hint).toMatch(/\d+ of 3971 groups shown/);
+    expect(counted.total).toBe(4000);
+  });
+
+  it('the whole result, wrapper and hints included, stays within what a client accepts', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const filler = 'x'.repeat(300);
+    for (let i = 0; i < 450; i += 1) {
+      index.upsert(
+        entry(`whole/n${i}.md`, `---\nblurb: "${filler}"\nkinds: [k${i}, shared]\n---\nbody`),
+      );
+    }
+    for (const format of ['rows', 'columns'] as const) {
+      const r = run({
+        pathPrefix: 'whole',
+        select: ['blurb'],
+        limit: 450,
+        groupBy: 'kinds',
+        format,
+      });
+      expect(r.hint).toBeDefined(); // budget hint + groups hint + overlapping-groups hint
+      expect(JSON.stringify(r).length).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    }
+  });
+
+  it('fifty long column names are paid for out of the same budget', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const names = Array.from(
+      { length: 50 },
+      (_, i) => `a_rather_long_property_name_number_${i}_${'x'.repeat(150)}`,
+    );
+    for (let i = 0; i < 300; i += 1) {
+      const fm = names
+        .slice(0, 10)
+        .map((n) => `${n}: v${i}`)
+        .join('\n');
+      index.upsert(entry(`cols/n${i}.md`, `---\n${fm}\n---\nbody`));
+    }
+    for (const format of ['rows', 'columns'] as const) {
+      const r = run({ pathPrefix: 'cols', select: names, limit: 300, format });
+      expect(JSON.stringify(r).length).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+      expect(r.truncated).toBe(true);
+    }
+  });
+
+  it('rows and groups share one budget', () => {
+    const filler = 'x'.repeat(300);
+    for (let i = 0; i < 450; i += 1) {
+      index.upsert(entry(`both/n${i}.md`, `---\nblurb: "${filler}"\nbucket: b${i}\n---\nbody`));
+    }
+    const r = run({ pathPrefix: 'both', select: ['blurb'], limit: 450, groupBy: 'bucket' });
+    const size = JSON.stringify(r.rows).length + JSON.stringify(r.groups).length;
+    expect(size).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+    expect(r.truncated).toBe(true);
+  });
+
+  it('the row hint counts against what was asked for, not against every match', () => {
+    const filler = 'x'.repeat(2000);
+    for (let i = 0; i < 300; i += 1) {
+      index.upsert(entry(`asked/n${i}.md`, `---\nblurb: "${filler}"\n---\nbody`));
+    }
+    const r = run({ pathPrefix: 'asked', select: ['blurb'], limit: 100 });
+    expect(r.total).toBe(300);
+    expect(r.hint).toMatch(/of the 100 rows asked for/);
+    expect(r.hint).not.toContain('lower limit');
+  });
+
+  it('drops the example paths, never the counts, when hundreds of groups outgrow the budget', () => {
+    const long = 'a-rather-long-folder-name-for-a-note/'.repeat(3);
+    for (let g = 0; g < 120; g += 1) {
+      for (let i = 0; i < 12; i += 1) {
+        index.upsert(entry(`${long}g${g}-n${i}.md`, `---\nbucket: b${g}\n---\nbody`));
+      }
+    }
+    const r = run({ pathPrefix: long.slice(0, -1).split('/')[0], groupBy: 'bucket', limit: 1 });
+    expect(r.groups).toHaveLength(120);
+    expect(r.groups?.every((g) => g.count === 12 && g.paths.length === 0)).toBe(true);
+    expect(r.hint).toContain('Example paths were left out');
+  });
+
+  it('keeps example paths on an ordinary grouping', () => {
+    const r = run({ groupBy: 'owners' });
+    expect(r.groups?.some((g) => g.paths.length > 0)).toBe(true);
+    expect(r.hint ?? '').not.toContain('Example paths');
   });
 });
 

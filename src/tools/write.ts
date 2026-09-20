@@ -68,7 +68,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Write note',
       description: `Create or overwrite a text file (max ${MAX_FILE_BYTES} bytes). Content may start with a YAML frontmatter block. With mergeFrontmatter=true the existing frontmatter is kept and only the provided keys are changed. Prefer vault_edit or vault_append to change part of an existing note.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: PathArg,
         content: z.string(),
         mergeFrontmatter: z
@@ -77,7 +77,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .describe('Keep existing frontmatter keys not present in the new content.'),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({ path: z.string(), bytes: z.number(), hash: z.string() }),
+      outputSchema: z.looseObject({ path: z.string(), bytes: z.number(), hash: z.string() }),
       annotations: OVERWRITE,
     },
     ({ path, content, mergeFrontmatter, expectedHash }) =>
@@ -102,13 +102,13 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Write attachment',
       description: `Store a binary attachment (image, audio, video or PDF) from base64. Allowed media types: ${[...BINARY_MIME_ALLOWLIST.keys()].join(', ')}. Max ${tc.runtime.maxBinaryBytes} bytes decoded. The file extension must match the media type.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: PathArg,
         base64: z.string(),
         mimeType: z.string(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         bytes: z.number(),
         mimeType: z.string(),
@@ -139,16 +139,16 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
       title: 'Edit note (exact-text patches)',
       description:
         'Apply ordered exact-text replacements to a file. Each "find" must occur exactly once in the current text (include surrounding context to disambiguate). Use dryRun=true to preview the unified diff without writing.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: PathArg,
         patches: z
-          .array(z.object({ find: z.string().min(1), replace: z.string() }))
+          .array(z.strictObject({ find: z.string().min(1), replace: z.string() }))
           .min(1)
           .max(50),
         dryRun: z.boolean().optional(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         applied: z.number(),
         dryRun: z.boolean(),
@@ -181,7 +181,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
       title: 'Append to note',
       description:
         'Append text to the end of a file (newline-terminated; created if missing). Cheaper than vault_write for adding to existing notes. With "heading" (e.g. "H1 > H2"), inserts inside that section — at its end (default) or start ("position"). "unique: true" skips (reports skipped) when the section/file already links the same [[target]] (alias/anchor ignored; any wikilink form of one note counts), or has an identical line with no link. "unique: \'line\'" skips only an identical trimmed line, ignoring links — for bullets that legitimately repeat a link.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: PathArg,
         content: z.string().min(1),
         heading: z
@@ -195,7 +195,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         unique: UniqueArg,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         bytes: z.number(),
         hash: z.string(),
@@ -260,13 +260,13 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
       title: 'Update frontmatter on a note',
       description:
         'Set or remove YAML frontmatter keys on a single markdown file without touching its body.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: PathArg,
         set: z.record(z.string(), z.unknown()).optional(),
         unset: z.array(z.string()).optional(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         frontmatter: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -310,10 +310,10 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Update frontmatter on several notes',
       description: `Set or remove YAML frontmatter keys on up to ${MAX_BATCH} markdown files without touching their bodies. Per-file failures are reported in "failed". For a single note use vault_frontmatter_update.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         updates: z
           .array(
-            z.object({
+            z.strictObject({
               path: PathArg,
               set: z.record(z.string(), z.unknown()).optional(),
               unset: z.array(z.string()).optional(),
@@ -323,9 +323,9 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .min(1)
           .max(MAX_BATCH),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         updated: z.array(z.string()),
-        failed: z.array(z.object({ path: z.string(), error: z.string() })),
+        failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
       }),
       annotations: OVERWRITE,
     },

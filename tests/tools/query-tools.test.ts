@@ -78,6 +78,24 @@ describe('vault_query', () => {
     );
   });
 
+  it('grouping by a list field says that the groups overlap', async () => {
+    await h.call('vault_write', {
+      path: 'projects/gamma.md',
+      content: '---\nstatus: active\nkinds: [draft, review]\n---\n# Gamma',
+    });
+    const lists = await h.call('vault_query', {
+      where: [{ field: 'kinds', op: 'exists' }],
+      groupBy: 'kinds',
+      countOnly: true,
+    });
+    const body = lists.structuredContent as QueryResult & { hint?: string };
+    expect(body.total).toBe(1);
+    expect(body.groups?.map((g) => g.count)).toEqual([1, 1]);
+    expect(body.hint).toContain('more than "total"');
+    const scalar = await h.call('vault_query', { pathPrefix: 'projects', groupBy: 'status' });
+    expect(scalar.structuredContent).not.toHaveProperty('hint');
+  });
+
   it('countOnly without groupBy is just the total, whatever limit says', async () => {
     const r = await h.call('vault_query', { pathPrefix: 'projects', countOnly: true, limit: 1 });
     expect(r.structuredContent).toEqual({ rows: [], total: 2, truncated: false });
@@ -103,6 +121,55 @@ describe('vault_query', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/Invalid arguments for tool vault_query/);
     expect(text(r)).toMatch(/limit/);
+  });
+
+  it('contains with an array value matches any needle', async () => {
+    const r = await h.call('vault_query', {
+      where: [{ field: 'status', op: 'contains', value: ['zzz', 'don'] }],
+    });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as QueryResult;
+    expect(body.rows.map((row) => row.path)).toEqual(['projects/beta.md']);
+  });
+
+  it('contains with an empty array value fails with INVALID_INPUT', async () => {
+    const r = await h.call('vault_query', {
+      where: [{ field: 'status', op: 'contains', value: [] }],
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/^INVALID_INPUT: /);
+  });
+
+  it('nonEmpty excludes missing, null, "" and [] but keeps a real value', async () => {
+    await h.call('vault_write', {
+      path: 'projects/gamma.md',
+      content: '---\nstatus: ""\n---\n# Gamma',
+    });
+    const r = await h.call('vault_query', { where: [{ field: 'status', op: 'nonEmpty' }] });
+    const body = r.structuredContent as QueryResult;
+    expect(body.rows.map((row) => row.path).sort()).toEqual([
+      'archive/old.md',
+      'projects/alpha.md',
+      'projects/beta.md',
+    ]);
+  });
+
+  it('format: "columns" carries the same content as rows, with rows empty', async () => {
+    const r = await h.call('vault_query', {
+      where: [{ field: 'status', op: 'eq', value: 'active' }],
+      select: ['status'],
+      format: 'columns',
+    });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as QueryResult & { columns?: string[]; values?: unknown[][] };
+    expect(body.rows).toEqual([]);
+    expect(body.columns).toEqual(['path', 'status']);
+    expect(body.values).toEqual(
+      expect.arrayContaining([
+        ['archive/old.md', 'active'],
+        ['projects/alpha.md', 'active'],
+      ]),
+    );
   });
 });
 

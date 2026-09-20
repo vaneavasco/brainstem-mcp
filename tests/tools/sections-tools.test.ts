@@ -198,6 +198,179 @@ describe('truncated reads', () => {
   });
 });
 
+describe('vault_batch_read sections and maxChars', () => {
+  type BatchNote = { path: string; body: string; truncated: boolean; missingSections?: string[] };
+  const notesOf = (r: { structuredContent?: unknown }) =>
+    (r.structuredContent as { notes: BatchNote[] }).notes;
+  const BIG = `# Big\n\n## Head\nshort\n\n## Tail\n${'word '.repeat(30_000)}\n`;
+
+  it('returns only the asked sections of every note, in document order', async () => {
+    await h.call('vault_write', { path: 'a.md', content: NOTE });
+    await h.call('vault_write', { path: 'b.md', content: NOTE.replace('alpha content', 'other') });
+    const r = await h.call('vault_batch_read', {
+      paths: ['a.md', 'b.md'],
+      sections: ['Gamma', 'Alpha'],
+    });
+    expect(r.isError).toBeFalsy();
+    const [a, b] = notesOf(r);
+    expect(a?.body).toBe('## Alpha\nalpha content\n\n## Gamma\ngamma content\n');
+    expect(b?.body).toBe('## Alpha\nother\n\n## Gamma\ngamma content\n');
+    expect(a).not.toHaveProperty('missingSections');
+  });
+
+  it('a note without one of the sections still answers, and names what it lacks', async () => {
+    await h.call('vault_write', { path: 'a.md', content: NOTE });
+    await h.call('vault_write', { path: 'short.md', content: '# T\n\n## Alpha\nonly alpha\n' });
+    await h.call('vault_write', { path: 'none.md', content: '# T\n\nplain\n' });
+    const r = await h.call('vault_batch_read', {
+      paths: ['a.md', 'short.md', 'none.md'],
+      sections: ['Alpha', 'Beta'],
+    });
+    expect(r.isError).toBeFalsy();
+    const [a, short, none] = notesOf(r);
+    expect(a?.body).toContain('beta content');
+    expect(short?.body).toBe('## Alpha\nonly alpha\n');
+    expect(short?.missingSections).toEqual(['Beta']);
+    expect(none?.body).toBe('');
+    expect(none?.missingSections).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('maxChars cuts every note on its own and the result says so', async () => {
+    await h.call('vault_write', { path: 'big.md', content: BIG });
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_batch_read', { paths: ['big.md', 'n.md'], maxChars: 600 });
+    const [big, n] = notesOf(r);
+    expect(big?.truncated).toBe(true);
+    expect(big?.body.length).toBeLessThan(800);
+    expect(n?.truncated).toBe(false);
+    expect((r.structuredContent as { hint?: string }).hint ?? '').toContain('vault_outline');
+  });
+});
+
+describe('vault_batch_read shares one budget fairly', () => {
+  it('a short note leaves its share to a long one; the total never exceeds the budget', async () => {
+    const { shareBudget } = await import('../../src/tools/read.ts');
+    expect(shareBudget([100, 45_000], 60_000)).toEqual([100, 45_000]);
+    expect(shareBudget([100, 80_000], 60_000)).toEqual([100, 59_900]);
+    expect(shareBudget([50_000, 50_000, 10], 60_000)).toEqual([29_995, 29_995, 10]);
+    expect(shareBudget([9_000, 9_000], 60_000, 600)).toEqual([600, 600]);
+    expect(shareBudget([], 60_000)).toEqual([]);
+    const many = shareBudget(new Array(20).fill(100_000), 60_000);
+    expect(many.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(60_000);
+  });
+
+  it('two notes of very different length both arrive whole when they fit together', async () => {
+    // more than an even share of the budget: an even split would have cut it
+    const long = `# Long\n\n${'word '.repeat(6_000)}\n`; // 30k characters
+    await h.call('vault_write', { path: 'long.md', content: long });
+    await h.call('vault_write', { path: 'short.md', content: '# Short\nhi\n' });
+    const r = await h.call('vault_batch_read', { paths: ['short.md', 'long.md'] });
+    const notes = (r.structuredContent as { notes: { truncated: boolean }[] }).notes;
+    expect(notes.map((n) => n.truncated)).toEqual([false, false]);
+    expect(r.structuredContent).not.toHaveProperty('hint');
+  });
+});
+
+describe('vault_batch_read bounds what the client receives, not only the bodies', () => {
+  it('twenty notes with heavy frontmatter and long bodies stay within the client-safe size', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const paths: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const ids = Array.from({ length: 60 }, (_, k) => `"<id-${i}-${k}-${'x'.repeat(40)}>"`);
+      const content = `---\nids: [${ids.join(', ')}]\nstatus: open\n---\n# N${i}\n\n## Summary\n${'word '.repeat(2_000)}\n`;
+      paths.push(`heavy/n${i}.md`);
+      await h.call('vault_write', { path: `heavy/n${i}.md`, content });
+    }
+    const r = await h.call('vault_batch_read', { paths, sections: ['Summary'] });
+    expect(r.isError).toBeFalsy();
+    expect(JSON.stringify(r.structuredContent).length).toBeLessThanOrEqual(
+      CLIENT_SAFE_RESULT_CHARS,
+    );
+    const body = r.structuredContent as {
+      notes: { frontmatter: object; frontmatterOmitted?: boolean; body: string }[];
+      hint?: string;
+    };
+    const omitted = body.notes.filter((n) => n.frontmatterOmitted);
+    expect(omitted.length).toBeGreaterThan(0);
+    expect(omitted.every((n) => Object.keys(n.frontmatter).length === 0)).toBe(true);
+    expect(body.notes.every((n) => n.body.includes('## Summary'))).toBe(true); // every note still answers
+    expect(body.hint).toContain('frontmatterOmitted');
+  });
+
+  const received = (r: { structuredContent?: unknown }) =>
+    JSON.stringify(r.structuredContent).length;
+
+  it('a body that is denser at the start than on average does not slip past the budget', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const paths: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      // 1,500 short quoted list lines (every line break and quote costs two characters in JSON),
+      // then long prose: the average escape ratio badly underestimates the prefix
+      const dense = Array.from({ length: 1_500 }, (_, k) => `- "k${k}"`).join('\n');
+      paths.push(`dense/n${i}.md`);
+      await h.call('vault_write', {
+        path: `dense/n${i}.md`,
+        content: `---\nstatus: open\n---\n\n\n\n${dense}\n${'prose '.repeat(8_000)}\n`,
+      });
+    }
+    const r = await h.call('vault_batch_read', { paths });
+    expect(r.isError).toBeFalsy();
+    expect(received(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
+  it('control characters, which JSON escapes sixfold, stay within the budget too', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    await h.call('vault_write', {
+      path: 'ctl.md',
+      content: `# C\n${'\u0001'.repeat(20_000)}${'a'.repeat(100_000)}\n`,
+    });
+    const r = await h.call('vault_batch_read', { paths: ['ctl.md'] });
+    expect(received(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
+  it('long paths, present or missing, are paid for out of the same budget', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const folder = `${'d'.repeat(120)}/${'e'.repeat(110)}`;
+    const present: string[] = [];
+    for (let i = 0; i < 10; i += 1) {
+      present.push(`${folder}/n${i}.md`);
+      await h.call('vault_write', {
+        path: `${folder}/n${i}.md`,
+        content: `# N\n${'word '.repeat(6_000)}\n`,
+      });
+    }
+    const missing = Array.from({ length: 10 }, (_, i) => `${folder}/missing-${i}.md`);
+    const r = await h.call('vault_batch_read', { paths: [...present, ...missing] });
+    expect((r.structuredContent as { missing: string[] }).missing).toHaveLength(10);
+    expect(received(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
+  it('a section name is a heading path, not a document: over 200 characters is refused', async () => {
+    await h.call('vault_write', { path: 'a.md', content: '# A\n' });
+    const long = 'h'.repeat(201);
+    expect((await h.call('vault_batch_read', { paths: ['a.md'], sections: [long] })).isError).toBe(
+      true,
+    );
+    expect((await h.call('vault_read', { path: 'a.md', sections: [long] })).isError).toBe(true);
+    expect((await h.call('vault_read', { path: 'a.md', section: long })).isError).toBe(true);
+  });
+
+  it('small frontmatter is never touched', async () => {
+    await h.call('vault_write', { path: 'a.md', content: '---\nstatus: open\n---\n# A\n' });
+    const r = await h.call('vault_batch_read', { paths: ['a.md'] });
+    const note = (r.structuredContent as { notes: Record<string, unknown>[] }).notes[0];
+    expect(note?.frontmatter).toEqual({ status: 'open' });
+    expect(note).not.toHaveProperty('frontmatterOmitted');
+  });
+
+  it('omitLargest drops the biggest blocks first, only as many as needed', async () => {
+    const { omitLargest } = await import('../../src/tools/read.ts');
+    expect([...omitLargest([10, 5_000, 20, 3_000], 4_000)]).toEqual([1]);
+    expect([...omitLargest([10, 20], 4_000)]).toEqual([]);
+    expect(omitLargest([3_000, 3_000, 3_000], 0).size).toBe(3);
+  });
+});
+
 describe('document reads for clients that show only the content blocks', () => {
   const meta = (r: { content: { type: string; text?: string }[] }) =>
     r.content[1]?.type === 'text' ? (r.content[1].text ?? '') : '';

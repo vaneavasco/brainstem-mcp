@@ -1,6 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_QUERY_ROWS, MAX_RECENT } from '../storage/limits.ts';
+import {
+  MAX_QUERY_FIELD_CHARS,
+  MAX_QUERY_RESULT_CHARS,
+  MAX_QUERY_ROWS,
+  MAX_QUERY_SELECT,
+  MAX_RECENT,
+} from '../storage/limits.ts';
 import type { Cond, Query } from '../vault/query.ts';
 import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
@@ -10,41 +16,54 @@ import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 
-const SortSchema = z.object({ field: z.string().min(1), order: z.enum(['asc', 'desc']) });
+const SortSchema = z.strictObject({
+  field: z.string().min(1).max(MAX_QUERY_FIELD_CHARS),
+  order: z.enum(['asc', 'desc']),
+});
 
 /**
- * Typed `z.ZodType<Query>` (not just `z.object({...})`) so this schema's inferred output is
+ * Typed `z.ZodType<Query>` (not just an untyped `z.strictObject({...})`) so this schema's inferred output is
  * checked against the pure `Query` interface at compile time — the same pattern `tx.ts` uses for
  * `TxOp`. If the two ever drift, this fails typecheck instead of silently succeeding behind an
  * `as Query` cast at the call site.
  */
-const QuerySchema: z.ZodType<Query> = z.object({
+const QuerySchema: z.ZodType<Query> = z.strictObject({
   where: z.array(CondSchema).optional(),
   tags: TagsFilterSchema.optional(),
   pathPrefix: z.string().optional(),
-  select: z.array(z.string()).optional(),
+  select: z.array(z.string().min(1).max(MAX_QUERY_FIELD_CHARS)).max(MAX_QUERY_SELECT).optional(),
   sort: z.array(SortSchema).optional(),
   limit: z.number().int().min(1).max(MAX_QUERY_ROWS).optional(),
-  groupBy: z.string().optional(),
+  groupBy: z.string().min(1).max(MAX_QUERY_FIELD_CHARS).optional(),
   countOnly: z.boolean().optional(),
+  format: z
+    .enum(['rows', 'columns'])
+    .optional()
+    .describe(
+      '"rows" (default): one object per note. "columns": a "columns" name list plus one ' +
+        '"values" array per note — cheaper for many rows/fields.',
+    ),
 });
 
-const QueryRowSchema = z.object({ path: z.string() }).catchall(z.unknown());
+const QueryRowSchema = z.looseObject({ path: z.string() });
 
-const GroupSchema = z.object({
+const GroupSchema = z.looseObject({
   key: z.string(),
   count: z.number(),
   paths: z.array(z.string()),
 });
 
-const QueryResultSchema = z.object({
+const QueryResultSchema = z.looseObject({
   rows: z.array(QueryRowSchema),
   total: z.number(),
   truncated: z.boolean(),
   groups: z.array(GroupSchema).optional(),
+  hint: z.string().optional(),
+  columns: z.array(z.string()).optional(),
+  values: z.array(z.array(z.unknown())).optional(),
 });
 
-const RecentInputSchema = z.object({
+const RecentInputSchema = z.strictObject({
   since: z
     .string()
     .regex(
@@ -67,12 +86,13 @@ export function registerQueryTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Query notes',
       description:
-        'Structured query over the in-memory index — no disk reads. "where" filters on frontmatter ' +
+        'Structured query over the in-memory index — no disk reads. "where" filters frontmatter ' +
         'dot paths or virtual fields (path, basename, folder, modifiedAt, size, wordCount, tags, ' +
-        'hash, backlinks/outgoing counts, backlinkPaths/outgoingPaths arrays) with typed ' +
-        'comparisons; "tags" (any/all/none) is nested-aware. Supports pathPrefix, select, sort, ' +
-        `groupBy, limit (default 100, max ${MAX_QUERY_ROWS}); "countOnly" returns just total and ` +
-        'group counts (limit, select, sort ignored). Prefer it to vault_search_frontmatter. ' +
+        'hash, backlinks/outgoing, backlinkPaths/outgoingPaths); "tags" is nested-aware. Supports ' +
+        `pathPrefix, select, sort, groupBy, limit (default 100, max ${MAX_QUERY_ROWS}), countOnly ` +
+        '(total + group counts only). "format":"columns" trades repeated field names for one ' +
+        `values array per row; rows/values cap at ${MAX_QUERY_RESULT_CHARS.toLocaleString('en-US')} ` +
+        'characters (truncated + hint). Prefer it to vault_search_frontmatter. ' +
         GUIDE_POINTER,
       inputSchema: QuerySchema,
       outputSchema: QueryResultSchema,

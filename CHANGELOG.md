@@ -8,6 +8,68 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Added
 
+- `vault_query` takes `format: "columns"`: a `columns` name list plus one `values` array per
+  note, instead of repeating every field name on every row; the same rows in roughly 40% fewer
+  characters. Found running a few hundred selected rows through a client that refused the
+  result outright.
+- `vault_query`'s `contains`/`startsWith` `where` conditions accept an array value (any of up to
+  50 needles, validated up front); useful when checking a list field against many candidates
+  would otherwise mean one query per candidate. `vault_search`'s `where` shares the same
+  compiler, so it gets this too.
+- `vault_query` gains a `nonEmpty` op: true when a field is present and not `null`, `""` or
+  `[]`. `exists` alone cannot tell an empty list or string from a filled one.
+- `vault_links` takes `countOnly`: keeps `total` (the per-kind counts it already reports) and
+  returns an empty array for every link list — for a plain "does this note have backlinks"
+  check that doesn't need the 9,000-character answer.
+- `vault_search` adds a `hint` on zero hits, and only advice that is true for that call: the
+  filter matched no note (so no text was searched), the scan stopped at its limit, the regular
+  expression matched nothing, or, for a plain search, that it is a literal substring match.
+- The in-memory index reconciles itself with the disk. An external job rewrote about 24,000
+  files in a minute; the file watcher lost events and the index served stale frontmatter until a
+  restart, with no sign of it. `FrontmatterIndex.reconcile()` compares a fresh listing (size and
+  mtime: unchanged files are not read) with the index; what differs is re-read, what is new is
+  added, and an entry is removed only after its absence is confirmed on disk, because a tool may
+  write or move a note while the sweep runs. It runs every `VAULT_RECONCILE_MS` (default
+  300000; `0` turns it off, otherwise at least 10000) and when the watcher reports an error. A
+  watcher error is never dropped: during a pass it is answered by one more pass, within 30 s of
+  the end of the last one by one trailing pass when the gap ends (a watcher that cannot watch reports once
+  per folder). A failed pass is logged without its error text (it can carry an absolute path),
+  and shutdown waits for the pass in flight. `brainstem_ping` (`index: { notes, builtAt, reconciledAt }`), `/health`
+  (`vault.reconciledAt`) and `./brainstem status` show when the index was last checked. An idle
+  pass over 37,000 notes takes about a second.
+- Every result is bounded as the client receives it, at 48,000 characters (ADR 0007), because on
+  a 37,000-note vault they were not: `vault_list` returned 283,000 characters, `vault_links` on
+  a hub 161,000, `vault_tags` 146,000, a batch of twenty long notes 91,000. Nothing is estimated:
+  each tool weighs its result with the lists empty and its longest hint in place (a path or a
+  field name can be a thousand characters) and gives the lists what is left. `vault_list`,
+  `vault_links` (its four lists share the room, short lists first), `vault_tags`,
+  `vault_search_frontmatter` and `vault_analytics_findings` keep the longest prefix that fits,
+  set `truncated`, and say how many of how many are shown and which narrower call to make.
+- `vault_search` is bounded like the other list results: its hits travel twice (`files` groups
+  what `matches` lists flat), so fifty long lines in long paths outgrew 48,000 characters. It
+  keeps the longest run of hits whose two renderings fit together, and sets `truncated`.
+- Arguments that are echoed back or compiled are capped where they are declared, so a caller
+  cannot make the server answer with 200,000 characters by sending them (a `tag` was echoed
+  whole; a 40,000-character `glob` ended in an internal error): a path 1,024 characters, a
+  heading path, field name or tag 200, `select` 50 names, a search string or glob 1,000.
+- `vault_query` and `vault_recent` bound the whole result, not only the rows: the result stays
+  within 48,000 characters, rows (or `values`), `groups`, column names, hints and all (`select`
+  takes at most 50 names of 200 characters). Groups get at most half when rows are wanted too (all of
+  it with `countOnly`); their example paths are dropped before any group is, and when thousands
+  of keys still do not fit the largest groups are kept. A cut is never silent: `truncated` is
+  set and a `hint` says what was cut; the row hint counts against the rows asked for (`limit`),
+  not against every match, and says so when the groups took part of the room. The number is
+  measured: a client with a token limit on tool results took about 51,000 characters and refused
+  55,100 and 59,800 (JSON costs more tokens per character than prose); another took 120,000.
+- `vault_batch_read` takes `sections` and `maxChars`, as `vault_read` does: the named sections
+  of every note in one call. A note that lacks one of the sections still answers and lists it in
+  `missingSections`, so a batch over notes of mixed shape never fails. Found by running
+  multi-step questions through a fresh model: reading the summaries of a dozen long notes was
+  the natural next step, and the only way to do it was one call per note.
+- `vault_query` results carry a `hint` when `groupBy` ran over a list field: a note counts once
+  under each of its values, so the group counts add up to more than `total`. Two test runs
+  out of sixteen took the sum for the total, or suspected a bug.
+
 - `brainstem_guide`: the connection instructions (server conventions plus the owner's
   `_brainstem/instructions.md`) as a tool. Measured on the claude.ai connector: the model
   never sees the MCP `instructions` field, so an owner's vault guide did not reach it at all.
@@ -56,6 +118,38 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- Tool results may grow without breaking anyone. Output schemas were closed
+  (`additionalProperties: false`), and clients cache the tool list: the first result that
+  carried a field added after the client's copy was rejected whole with "data must NOT have
+  additional properties". Every output schema is now open at every level, and a test walks all of
+  them. **Upgrading to this release:** a client that still holds the previous release's tool list
+  rejects the results that carry a new field by default: `brainstem_ping` (always), a
+  `vault_search` with zero hits, and a `vault_query` grouped by a list field or cut by the
+  character budget. It does not see new arguments either. Reconnect the connector after the
+  upgrade (that refreshes the list at once); otherwise the list is cacheable for an hour. See
+  ADR 0007.
+- Tool arguments nobody asked for are now an error instead of being ignored. A misspelled key
+  used to be dropped without a word: `vault_frontmatter_update { updates: … }` answered "ok" and
+  changed nothing, and `expected_hash` (for `expectedHash`) silently switched the concurrency
+  check off for that write. Every tool input is strict, and so are the nested `where`
+  conditions, sort keys, tags filters, edit patches, transaction ops, batch items and the
+  `vault_links` filter; the error names the unknown key. The one exception is deliberate: a
+  canvas node, edge or patch may carry properties the server does not know (JSON Canvas is
+  extensible), and they are written through.
+- A `vault_search` narrowed by `tags` / `where` / `glob` took its candidates from a presented
+  query result. With the new character budget on query rows, a few hundred candidates with long
+  paths were cut and matches were lost without a sign. Candidates now come from the complete
+  match set (`matchEntries`), which has no presentation limits.
+- A condition on a field the note does not have compared against the text "undefined":
+  `contains "und"`, `eq "undefined"`, `in ["undefined"]` and a matching `regex` all found every
+  note without the field. A missing field now contains nothing, equals nothing and matches no
+  pattern (`neq` stays the complement; `exists: false` finds the notes without it), and a null
+  field equals `null`, not the text "null". An empty
+  `contains` / `startsWith` needle, alone or in a list, is refused: it matched every note, and
+  `exists` / `nonEmpty` are the operators for presence.
+- `vault_batch_read` resolved `sections` against the body without the frontmatter, so a note
+  whose body opens with a horizontal rule lost its headings. It now resolves them against the
+  whole note, as `vault_read` does.
 - The content block of a truncated `vault_read` carried two truncation markers, the
   second with a wrong total (the already-clamped text was clamped again).
 - Frontmatter parsing no longer emits a Node process warning for every note whose
@@ -111,6 +205,21 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Changed
 
+- The owner's `_brainstem/instructions.md` may be up to 12,000 characters (was 8,000) before it is cut with a marker: a guide for a large, structured vault (folders, queryable fields, reading recipes) did not fit, and it is read once per conversation through `brainstem_guide`.
+
+- `vault_batch_read` bounds what the client receives, at 48,000 characters (it was 120,000 of
+  bodies alone, which a client refused outright: a full batch returned nothing). The result is
+  weighed without any body text first: paths, hashes, `missing`, `failed`, `missingSections`,
+  hints and frontmatter. Frontmatter gets at most half of the room (on a real vault the
+  frontmatter of twenty long notes weighed as much as their bodies); beyond that the largest
+  blocks are left out and flagged (`frontmatterOmitted`, with a hint that names `vault_query
+  select`). The bodies share exactly what is left, in serialized characters, each cut at the
+  longest prefix that fits (a body that opens with line breaks, quotes or control characters is
+  denser at the start than on average, so a ratio is not enough); a short note leaves its unused
+  share to the long ones. A heading path may be at most 200 characters, and a batch whose paths
+  and section names alone would exceed the limit is refused with a clear error (one bad path
+  never fails a batch). With `maxChars`, a note costs only what it may return, so capped notes
+  strand no room. `sections` is the intended call for long notes.
 - Positioning: the README intro, `llms.txt` and the GitHub description/topics
   now say what brainstem is *for* — your Obsidian vault as Claude's second brain
   (personal knowledge management, local-first, persistent memory) — before

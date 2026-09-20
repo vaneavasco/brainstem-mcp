@@ -200,6 +200,28 @@ describe('vault_links', () => {
       unlinkedMentions: body.unlinkedMentions.length,
     });
   });
+
+  it('countOnly keeps total but returns empty arrays for every link list', async () => {
+    const full = await h.call('vault_links', {
+      path: 'a.md',
+      include: ['outgoing', 'backlinks', 'embeds', 'unlinkedMentions'],
+    });
+    const fullBody = full.structuredContent as LinksResult;
+
+    const r = await h.call('vault_links', {
+      path: 'a.md',
+      include: ['outgoing', 'backlinks', 'embeds', 'unlinkedMentions'],
+      countOnly: true,
+    });
+    expect(r.isError, text(r)).toBeFalsy();
+    const body = r.structuredContent as LinksResult;
+    expect(body.outgoing).toEqual([]);
+    expect(body.backlinks).toEqual([]);
+    expect(body.embeds).toEqual([]);
+    expect(body.unlinkedMentions).toEqual([]);
+    expect(body.total).toEqual(fullBody.total);
+    expect(body.truncated).toEqual(fullBody.truncated);
+  });
 });
 
 describe('vault_links — filter.pathPrefix', () => {

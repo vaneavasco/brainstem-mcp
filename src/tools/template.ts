@@ -31,7 +31,7 @@ export function registerTemplateTools(server: McpServer, tc: ToolContext): void 
         'left verbatim and listed in the result. Fails with ALREADY_EXISTS if targetPath already ' +
         'exists — this never overwrites. With uniquePrefix=true, "YYYYMMDDHHmm " (vault timezone) ' +
         "is prepended to the target's basename, like the Unique Note core plugin.",
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         templatePath: PathArg.describe('Vault-relative path of the template note to render.'),
         targetPath: PathArg.describe('Vault-relative path of the note to create.'),
         vars: z
@@ -47,7 +47,7 @@ export function registerTemplateTools(server: McpServer, tc: ToolContext): void 
           .optional()
           .describe('{{title}} value. Defaults to the target basename without ".md".'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         hash: z.string(),
         unresolved: z.array(z.string()),

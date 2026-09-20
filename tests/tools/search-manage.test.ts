@@ -67,6 +67,17 @@ describe('vault_search', () => {
     expect(empty.isError).toBe(true);
   });
 
+  it('adds a hint only on zero hits, and only advice that is true for the call', async () => {
+    const zero = await h.call('vault_search', { query: 'nonexistentword' });
+    expect((zero.structuredContent as { total: number }).total).toBe(0);
+    expect((zero.structuredContent as { hint?: string }).hint).toContain('spelling');
+    // regex needs ripgrep, which a given install may lack: never send a caller into UNSUPPORTED
+    expect((zero.structuredContent as { hint?: string }).hint).not.toContain('regex');
+
+    const some = await h.call('vault_search', { query: 'milk' });
+    expect((some.structuredContent as { hint?: string }).hint).toBeUndefined();
+  });
+
   it('reports total and truncated alongside the matches', async () => {
     const r = await h.call('vault_search', { query: 'milk' });
     expect(r.structuredContent).toMatchObject({ total: 2, truncated: false });
@@ -112,6 +123,16 @@ describe('vault_search', () => {
     });
     // '00-inbox/todo.md' has status:open and contains "milk"; '02-areas/health.md' has no
     // frontmatter at all, so the where condition excludes it even though it also matches "milk".
+    const sc = r.structuredContent as { matches: { path: string }[] };
+    expect(sc.matches.map((m) => m.path)).toEqual(['00-inbox/todo.md']);
+  });
+
+  it('narrows candidates by a where "contains" array value (any of) before searching text', async () => {
+    // Same compiler as vault_query: an array value on "contains" matches any of its needles.
+    const r = await h.call('vault_search', {
+      query: 'milk',
+      where: [{ field: 'status', op: 'contains', value: ['zzz', 'ope'] }],
+    });
     const sc = r.structuredContent as { matches: { path: string }[] };
     expect(sc.matches.map((m) => m.path)).toEqual(['00-inbox/todo.md']);
   });
@@ -237,6 +258,12 @@ describe('vault_search_frontmatter', () => {
 });
 
 describe('vault_list', () => {
+  it('description points at vault_query countOnly for counting/sizing a folder', async () => {
+    const { tools } = await h.client.listTools();
+    const tool = tools.find((t) => t.name === 'vault_list');
+    expect(tool?.description).toMatch(/vault_query.*countOnly/);
+  });
+
   it('lists with depth and glob and rejects hidden folders', async () => {
     const top = await h.call('vault_list', {});
     expect(top.structuredContent).toMatchObject({ truncated: false });
@@ -258,7 +285,7 @@ describe('vault_list', () => {
     expect(text(hidden)).toMatch(/INVALID_PATH/);
   });
 
-  it('caps entries at MAX_LIST_ENTRIES and sets truncated', async () => {
+  it('caps entries by count and by characters, and says how many there were', async () => {
     // Plain .txt files written in parallel batches: they are ignored by the frontmatter index,
     // so this exercises the list cap without a 2005-event watcher/index storm (slow on CI).
     const dir = path.join(h.root, 'bulk');
@@ -268,9 +295,13 @@ describe('vault_list', () => {
       await Promise.all(names.slice(i, i + 250).map((n) => fs.writeFile(path.join(dir, n), 'x')));
     }
     const r = await h.call('vault_list', { path: 'bulk', depth: 1 });
-    const sc = r.structuredContent as { entries: unknown[]; truncated: boolean };
-    expect(sc.entries).toHaveLength(2000);
+    const sc = r.structuredContent as { entries: unknown[]; truncated: boolean; hint?: string };
+    // two caps: never more than MAX_LIST_ENTRIES, and never more characters than a client accepts
+    expect(sc.entries.length).toBeGreaterThan(100);
+    expect(sc.entries.length).toBeLessThanOrEqual(2000);
+    expect(JSON.stringify(sc).length).toBeLessThanOrEqual(48_000);
     expect(sc.truncated).toBe(true);
+    expect(sc.hint).toContain('of 2005 entries');
   }, 60_000);
 });
 

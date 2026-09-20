@@ -2,24 +2,44 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import picomatch from 'picomatch';
 import { z } from 'zod';
 import {
+  CLIENT_SAFE_RESULT_CHARS,
   MAX_FRONTMATTER_HITS,
+  MAX_GLOB_CHARS,
+  MAX_QUERY_FIELD_CHARS,
   MAX_QUERY_ROWS,
   MAX_SEARCH_PATHS,
   MAX_SEARCH_PATTERN_CHARS,
+  MAX_SEARCH_QUERY_CHARS,
   MAX_SEARCH_RESULTS,
   MAX_SEARCH_SCAN,
 } from '../storage/limits.ts';
 import { normalizeVaultPath } from '../storage/path-policy.ts';
 import type { Match, SearchOpts, StorageAdapter } from '../storage/types.ts';
 import { VaultError } from '../storage/types.ts';
+import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import type { FrontmatterIndex, IndexEntry } from '../vault/frontmatter-index.ts';
 import type { VaultGraph } from '../vault/graph.ts';
 import type { Cond, Query } from '../vault/query.ts';
-import { evaluateQuery } from '../vault/query.ts';
+import { matchEntries } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
 import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { GUIDE_POINTER, guarded, okJson } from './results.ts';
+
+/** Attached only when a search found nothing, and only with advice that is true for that call:
+ *  which of the caller's own choices could explain the empty result, never a generic tip. */
+function zeroHitsHint(why: { regex: boolean; noCandidates: boolean; truncated: boolean }): string {
+  if (why.noCandidates) {
+    return 'No note passed the tags/where/glob filter, so no text was searched: check the filter with vault_query (countOnly) before changing the words.';
+  }
+  if (why.truncated) {
+    return 'No matches in the part of the vault that was scanned before the scan limit: narrow the search with pathPrefix, tags or where.';
+  }
+  if (why.regex) {
+    return 'No matches for this regular expression: it is matched per line; try a simpler pattern or a literal search.';
+  }
+  return 'No matches: this is a literal substring search. Try a spelling variant or a shorter word.';
+}
 
 interface CandidateOpts {
   tags?: Query['tags'];
@@ -28,8 +48,8 @@ interface CandidateOpts {
   glob?: string;
 }
 
-/** The `where`/`tags`/`pathPrefix` portion of `CandidateOpts` as an `evaluateQuery` `Query`
- *  (glob is applied separately — evaluateQuery doesn't know about it). Shared by candidate-list
+/** The `where`/`tags`/`pathPrefix` portion of `CandidateOpts` as a `Query` for `matchEntries`
+ *  (glob is applied separately — the query engine doesn't know about it). Shared by candidate-list
  *  computation and by the single-entry re-check used when the candidate list itself was
  *  truncated (see `filterPassingPaths` below). */
 function filterQuery(opts: CandidateOpts, limit: number): Query {
@@ -48,12 +68,11 @@ function matchesGlob(p: string, glob: string, pathPrefix?: string): boolean {
 }
 
 interface Candidates {
-  /** Candidate paths from evaluateQuery (bounded by MAX_QUERY_ROWS), already glob-filtered. */
+  /** The first MAX_QUERY_ROWS candidate paths from matchEntries, already glob-filtered. */
   paths: string[];
-  /** True when evaluateQuery's own `total` exceeded MAX_QUERY_ROWS — `paths` may then be an
-   *  incomplete slice of the true candidate set (evaluateQuery always clamps `rows` to
-   *  MAX_QUERY_ROWS regardless of the `limit` requested), so it cannot be trusted as exhaustive
-   *  for either the ≤200/chunked path-list strategies or the "total" reported to the caller. */
+  /** True when more than MAX_QUERY_ROWS notes matched: `paths` is then only a slice of the
+   *  candidate set and cannot be trusted as exhaustive, neither for the path-list strategies nor
+   *  for the "total" reported to the caller. */
   incomplete: boolean;
 }
 
@@ -68,31 +87,24 @@ function computeCandidates(
   graph: VaultGraph,
   opts: CandidateOpts,
 ): Candidates {
-  const { rows, total } = evaluateQuery(index.all(), graph, filterQuery(opts, MAX_QUERY_ROWS));
-  let paths = rows.map((r) => r.path);
+  // matchEntries, not evaluateQuery: a presented query result is cut by a row limit AND by a
+  // character budget, and a candidate list cut by either silently loses matches.
+  const matched = matchEntries(index.all(), graph, filterQuery(opts, MAX_QUERY_ROWS));
+  let paths = matched.slice(0, MAX_QUERY_ROWS).map((entry) => entry.path);
   const glob = opts.glob;
   if (glob) paths = paths.filter((p) => matchesGlob(p, glob, opts.pathPrefix));
-  return { paths, incomplete: total > MAX_QUERY_ROWS };
+  return { paths, incomplete: matched.length > MAX_QUERY_ROWS };
 }
 
-/**
- * Which of `entries` pass the `where`/`tags`/`pathPrefix` filter. Evaluated in chunks of at most
- * MAX_QUERY_ROWS entries so evaluateQuery's own row cap — the exact thing `computeCandidates`
- * above cannot exceed — never truncates a chunk (`rows` covers every match in it), while the
- * `where` pattern is compiled once per chunk instead of once per file.
- */
+/** Which of `entries` pass the `where`/`tags`/`pathPrefix` filter: every one of them. */
 function filterPassingPaths(
   entries: IndexEntry[],
   graph: VaultGraph,
   opts: CandidateOpts,
 ): Set<string> {
-  const passing = new Set<string>();
-  for (let i = 0; i < entries.length; i += MAX_QUERY_ROWS) {
-    const chunk = entries.slice(i, i + MAX_QUERY_ROWS);
-    const { rows } = evaluateQuery(chunk, graph, filterQuery(opts, MAX_QUERY_ROWS));
-    for (const row of rows) passing.add(row.path);
-  }
-  return passing;
+  return new Set(
+    matchEntries(entries, graph, filterQuery(opts, MAX_QUERY_ROWS)).map((entry) => entry.path),
+  );
 }
 
 /**
@@ -196,8 +208,8 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         `handful of files. Returns up to ${MAX_SEARCH_RESULTS} matching lines grouped per file ` +
         'in "files" (prefer this); "matches" is the same hits as a flat array, kept for ' +
         `compatibility. ${GUIDE_POINTER}`,
-      inputSchema: z.object({
-        query: z.string().min(1),
+      inputSchema: z.strictObject({
+        query: z.string().min(1).max(MAX_SEARCH_QUERY_CHARS),
         regex: z
           .boolean()
           .optional()
@@ -214,21 +226,23 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           .describe('Restrict to notes matching these conditions before searching text.'),
         glob: z
           .string()
+          .max(MAX_GLOB_CHARS)
           .optional()
           .describe('Restrict candidate files to this glob, e.g. "**/*.md".'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         query: z.string(),
         regex: z.boolean(),
         files: z.array(
-          z.object({
+          z.looseObject({
             path: z.string(),
-            matches: z.array(z.object({ line: z.number(), text: z.string() })),
+            matches: z.array(z.looseObject({ line: z.number(), text: z.string() })),
           }),
         ),
-        matches: z.array(z.object({ path: z.string(), line: z.number(), text: z.string() })),
+        matches: z.array(z.looseObject({ path: z.string(), line: z.number(), text: z.string() })),
         total: z.number(),
         truncated: z.boolean(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -245,6 +259,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         const hasFilter = tags !== undefined || where !== undefined || glob !== undefined;
         let matches: Match[];
         let truncated: boolean;
+        let noCandidates = false;
         if (!hasFilter) {
           matches = await adapter.search(query, baseOpts);
           truncated = matches.length >= max;
@@ -252,8 +267,8 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           const candidateOpts: CandidateOpts = { tags, where, pathPrefix, glob };
           const candidates = computeCandidates(index, graph, candidateOpts);
           if (candidates.incomplete) {
-            // evaluateQuery's own row cap means `candidates.paths` cannot be trusted as
-            // exhaustive here — fall back to a bounded whole-vault scan, filtered per file.
+            // More candidates than one path list may carry: `candidates.paths` is only a slice —
+            // fall back to a bounded whole-vault scan, filtered per file.
             ({ matches, truncated } = await searchScanAndFilter(
               adapter,
               index,
@@ -266,6 +281,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           } else if (candidates.paths.length === 0) {
             matches = [];
             truncated = false;
+            noCandidates = true;
           } else if (candidates.paths.length <= MAX_SEARCH_PATHS) {
             matches = await adapter.search(query, { ...baseOpts, paths: candidates.paths });
             truncated = matches.length >= max;
@@ -283,6 +299,31 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           }
         }
 
+        // The hits travel twice ("files" groups what "matches" lists flat), so fifty long lines
+        // in long paths outgrow what a client accepts: keep the longest run of hits whose two
+        // renderings fit together beside the rest of the result.
+        const room = roomBeside(
+          { query, regex: true, files: [], matches: [], total: matches.length, truncated: true },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const weight = (count: number) => {
+          const kept = matches.slice(0, count);
+          return JSON.stringify(kept).length + JSON.stringify(groupByFile(kept)).length;
+        };
+        let fit = matches.length;
+        if (weight(fit) > room) {
+          let low = 0;
+          let high = matches.length;
+          while (low < high) {
+            const mid = Math.ceil((low + high) / 2);
+            if (weight(mid) <= room) low = mid;
+            else high = mid - 1;
+          }
+          fit = low;
+          truncated = true;
+        }
+        if (fit < matches.length) matches = matches.slice(0, fit);
+
         return okJson({
           query,
           regex: regex === true,
@@ -290,6 +331,9 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           matches,
           total: matches.length,
           truncated,
+          ...(matches.length === 0
+            ? { hint: zeroHitsHint({ regex: regex === true, noCandidates, truncated }) }
+            : {}),
         });
       }),
   );
@@ -299,16 +343,17 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Search by frontmatter',
       description: `Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported. Returns at most ${MAX_FRONTMATTER_HITS} hits; narrow the query if truncated.`,
-      inputSchema: z.object({
-        field: z.string().min(1),
+      inputSchema: z.strictObject({
+        field: z.string().min(1).max(MAX_QUERY_FIELD_CHARS),
         equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
         contains: z.string().optional(),
         exists: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         field: z.string(),
-        hits: z.array(z.object({ path: z.string(), value: z.unknown() })),
+        hits: z.array(z.looseObject({ path: z.string(), value: z.unknown() })),
         truncated: z.boolean(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -326,11 +371,21 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           ...(contains !== undefined ? { contains } : {}),
           ...(exists !== undefined ? { exists } : {}),
         });
-        const truncated = hits.length > MAX_FRONTMATTER_HITS;
+        const hintFor = (shown: number) =>
+          `${shown} of ${hits.length} hits shown: narrow the condition, or use vault_query, which pages by sort and counts with countOnly.`;
+        const fitted = fitWithinBudget(
+          hits.slice(0, MAX_FRONTMATTER_HITS),
+          roomBeside(
+            { field, hits: [], truncated: true, hint: hintFor(hits.length) },
+            CLIENT_SAFE_RESULT_CHARS,
+          ),
+        );
+        const truncated = fitted.cut || hits.length > MAX_FRONTMATTER_HITS;
         return okJson({
           field,
-          hits: truncated ? hits.slice(0, MAX_FRONTMATTER_HITS) : hits,
+          hits: fitted.kept,
           truncated,
+          ...(truncated ? { hint: hintFor(fitted.kept.length) } : {}),
         });
       }),
   );

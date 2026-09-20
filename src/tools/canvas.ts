@@ -45,8 +45,8 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Read canvas',
       description: 'Read an Obsidian .canvas file (JSON Canvas) and return its nodes and edges.',
-      inputSchema: z.object({ path: z.string() }),
-      outputSchema: z.object({
+      inputSchema: z.strictObject({ path: z.string() }),
+      outputSchema: z.looseObject({
         path: z.string(),
         nodes: z.array(z.record(z.string(), z.unknown())),
         edges: z.array(z.record(z.string(), z.unknown())),
@@ -67,12 +67,12 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Add canvas node',
       description:
         'Append a node (text, file, link or group) to a .canvas file. Creates the canvas file when it does not exist yet — there is intentionally no separate vault_canvas_create. The id is generated when omitted.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string(),
         node: CanvasNodeInputSchema,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         node: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -102,12 +102,12 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Add canvas edge',
       description:
         'Append an edge between two existing nodes of a .canvas file. Both fromNode and toNode must exist.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string(),
         edge: CanvasEdgeInputSchema,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         edge: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -136,13 +136,13 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Update canvas node',
       description:
         'Partially update one node of a .canvas file (position, size, color, or a type-specific field like text/file/url/label). Only fields belonging to the node\'s existing type may be patched — e.g. patching "text" on a file node fails with INVALID_INPUT. Unknown id fails with NOT_FOUND.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string(),
         id: z.string(),
         patch: CanvasNodePatchSchema,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         node: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -168,13 +168,13 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Remove canvas nodes/edges',
       description:
         'Remove nodes and/or edges from a .canvas file. Removing a node also removes every edge attached to it. Pass at least one of nodeIds or edgeIds. Unknown ids are reported in "missing", not fatal.',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string(),
         nodeIds: z.array(z.string()).optional(),
         edgeIds: z.array(z.string()).optional(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         removedNodes: z.array(z.string()),
         removedEdges: z.array(z.string()),

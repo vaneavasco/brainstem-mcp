@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { promises as fs, type Stats } from 'node:fs';
+import { type Dirent, promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
@@ -284,6 +284,14 @@ export class LocalFSAdapter implements StorageAdapter {
     return result;
   }
 
+  /** True when a file (not a folder) is at the path: a stat, no read. */
+  async exists(inputPath: string): Promise<boolean> {
+    const abs = this.abs(requireFilePath(inputPath));
+    await this.assertInsideRoot(abs); // the same containment check every other path goes through
+    const stat = await this.statOrNull(abs);
+    return stat?.isFile() === true;
+  }
+
   /**
    * sha256hex of the file's content, or `null` when it does not exist or is a directory —
    * those are the only cases with no comparable "content hash". Text (valid UTF-8, matching
@@ -479,7 +487,16 @@ export class LocalFSAdapter implements StorageAdapter {
 
     const out: Entry[] = [];
     const walk = async (dir: string, level: number): Promise<void> => {
-      const dirents = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      // A folder or file that disappears between being listed and being read is not an error of
+      // the listing: on a vault that other programs write to, it is a Tuesday.
+      let dirents: Dirent[];
+      try {
+        dirents = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      } catch (error) {
+        if (!isEnoent(error)) throw error;
+        if (dir !== base) return;
+        throw new VaultError('NOT_FOUND', `${base || '/'} does not exist.`);
+      }
       dirents.sort((a, b) => a.name.localeCompare(b.name, 'en'));
       for (const dirent of dirents) {
         if (dirent.name.startsWith('.')) continue;
@@ -491,7 +508,8 @@ export class LocalFSAdapter implements StorageAdapter {
           if (includeDirs && matches) out.push({ path: rel, kind: 'dir' });
           if (level < depth) await walk(rel, level + 1);
         } else if (dirent.isFile() && includeFiles && matches) {
-          const stat = await fs.stat(this.abs(rel));
+          const stat = await this.statOrNull(this.abs(rel));
+          if (!stat) continue;
           out.push({
             path: rel,
             kind: 'file',
@@ -799,7 +817,7 @@ export class LocalFSAdapter implements StorageAdapter {
 
   // ---- watch ---------------------------------------------------------------
 
-  watch(onChange: (event: ChangeEvent) => void): Unsubscribe {
+  watch(onChange: (event: ChangeEvent) => void, onError?: (error: unknown) => void): Unsubscribe {
     const watcher = chokidarWatch(this.root, {
       ignoreInitial: true,
       ignored: (absPath: string) => {
@@ -815,6 +833,9 @@ export class LocalFSAdapter implements StorageAdapter {
     watcher.on('add', (abs) => onChange({ type: 'create', path: this.rel(abs) }));
     watcher.on('change', (abs) => onChange({ type: 'update', path: this.rel(abs) }));
     watcher.on('unlink', (abs) => onChange({ type: 'delete', path: this.rel(abs) }));
+    // chokidar's own inotify/fsevents/polling backend surfaces a queue overflow or similar here —
+    // never thrown, so an unhandled listener is silent unless a caller wires this in.
+    if (onError) watcher.on('error', onError);
     return () => {
       void watcher.close();
     };

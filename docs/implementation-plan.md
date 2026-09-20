@@ -248,6 +248,7 @@ Every key is created by `npm run setup` in `.env` (from `.env.example`); most ar
 | `ALLOW_INSECURE_PUBLIC_URL` | Allows a non-https `PUBLIC_URL` — only for `none` mode / localhost. |
 | `VAULT_TIMEZONE` | IANA timezone used to resolve "today" for daily notes; `setup` fills it from the host. |
 | `VAULT_WATCH_POLL_MS` | When set, chokidar polls the vault at this interval instead of native fs events — needed on Docker Desktop bind mounts (Windows/macOS), which don't propagate inotify; `setup` sets `2000` automatically on non-Linux hosts. |
+| `VAULT_RECONCILE_MS` | How often (ms) the in-memory index re-checks the whole vault for drift a watcher event missed — an inotify queue overflow, or an external tool rewriting thousands of files at once (default `300000`, 5 min; `0` disables it). Also runs once whenever the watcher itself reports an error. `brainstem_ping`'s `index.reconciledAt` shows when it last ran. |
 | `DAILY_NOTES_FOLDER` | Folder daily notes are stored under (default: vault root). |
 | `DAILY_NOTES_FORMAT` | `date-fns` format string for the daily-note filename (default `yyyy-MM-dd`). |
 | `PORT` | Local port the app listens on, and that `up`/`url`/`status` poll (default `3000`). |

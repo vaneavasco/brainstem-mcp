@@ -10,6 +10,17 @@ export const MAX_BATCH = 20;
 export const MAX_READ_SECTIONS = 10;
 export const MAX_SEARCH_RESULTS = 50;
 export const MAX_RESULT_CHARS = 120_000;
+/**
+ * What the strictest client seen accepts in one tool result. Measured, not guessed: a client with
+ * a token limit on tool results took results of about 51,000 characters and refused (or diverted
+ * to a file the model cannot read) results of 55,100 and 59,800; another client took 120,000.
+ * JSON costs more tokens per character than prose, so the bound keeps a margin below the
+ * smallest refusal.
+ */
+export const CLIENT_SAFE_RESULT_CHARS = 48_000;
+/** Longest heading path a read may ask for; an unknown one is echoed back in the error or in
+ *  "missingSections", so it counts against the result. */
+export const MAX_SECTION_NAME_CHARS = 200;
 export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;
@@ -18,6 +29,26 @@ export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;
+/** Character budget for a whole vault_query / vault_recent result: rows (or "values"), groups,
+ *  column names and hints, independent of `limit` — a handful of wide selected fields across a
+ *  few hundred rows outgrow what a client accepts. */
+export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS;
+/** `select` names the fields of a row; they are echoed back (as keys, or once as "columns"). */
+export const MAX_QUERY_SELECT = 50;
+/** Free-text arguments that are echoed back or compiled: a search string, a glob, a tag. */
+export const MAX_SEARCH_QUERY_CHARS = 1_000;
+export const MAX_GLOB_CHARS = 1_000;
+export const MAX_TAG_CHARS = 200;
+/** Same number as the path policy's own limit: an argument longer than any legal path is refused
+ *  by the schema, before it can be echoed in an error. */
+export const MAX_PATH_ARG_CHARS = 1_024;
+export const MAX_QUERY_FIELD_CHARS = 200;
+/** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
+export const DEFAULT_RECONCILE_MS = 300_000;
+/** Shortest allowed reconcile interval: each pass lists the whole vault. */
+export const MIN_RECONCILE_MS = 10_000;
+/** Minimum distance between reconciles triggered by watcher errors. */
+export const DEFAULT_RECONCILE_MIN_GAP_MS = 30_000;
 export const MAX_RECENT = 200;
 /** Regex search patterns run only through ripgrep; capped like the query engine's regex op. */
 export const MAX_SEARCH_PATTERN_CHARS = 200;

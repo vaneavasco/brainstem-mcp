@@ -63,7 +63,7 @@ describe('GET /health', () => {
       publicUrl: 'https://brainstem.example.com/',
       mcpUrl: 'https://brainstem.example.com/mcp',
       tunnelMode: 'none',
-      vault: { notes: 0 },
+      vault: { notes: 0, reconciledAt: null },
     });
     expect(typeof body.version).toBe('string');
   });
@@ -88,6 +88,32 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
       const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({ server: 'brainstem-mcp', era: 'modern' });
+      const body = result.structuredContent as {
+        index: { notes: number; builtAt: string; reconciledAt: string | null };
+      };
+      expect(body.index.notes).toBe(runtime.index.size());
+      expect(() => new Date(body.index.builtAt).toISOString()).not.toThrow();
+      expect(body.index.reconciledAt).toBeNull(); // reconcile() hasn't run in this test
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('reports a non-null index.reconciledAt after a reconcile has run', async () => {
+    await runtime.index.reconcile(runtime.adapter);
+    const client = new Client(
+      { name: 'test-reconciled', version: '0.0.0' },
+      { versionNegotiation: { mode: 'auto' } },
+    );
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
+        authProvider: { token: async () => token },
+      }),
+    );
+    try {
+      const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });
+      const body = result.structuredContent as { index: { reconciledAt: string | null } };
+      expect(body.index.reconciledAt).not.toBeNull();
     } finally {
       await client.close();
     }

@@ -29,6 +29,16 @@ export interface FrontmatterHit {
   value: unknown;
 }
 
+export interface ReconcileResult {
+  /** Markdown notes that had an index entry but whose size/modifiedAt differed — re-read. */
+  refreshed: number;
+  /** Notes or assets whose index entry no longer has a file on disk — dropped. */
+  removed: number;
+  /** Notes or assets found on disk with no prior index entry — added. */
+  added: number;
+  durationMs: number;
+}
+
 /** True for a path that must never be tracked as an asset: reserved (`_brainstem/`) or dot-segmented. */
 function isDotOrReservedPath(p: string): boolean {
   return isReservedPath(p) || p.split('/').some((segment) => segment.startsWith('.'));
@@ -72,9 +82,17 @@ export class FrontmatterIndex {
   private readonly assetPaths = new Set<string>();
   private bytes = 0;
   private overBudgetLogged = false;
+  private _reconciledAt: Date | null = null;
+  /** Markdown paths a reconcile could not index, with the size:mtime they had then. */
+  private readonly unindexable = new Map<string, string>();
 
   private constructor() {
     this.builtAt = new Date();
+  }
+
+  /** null until reconcile() has run at least once. */
+  get reconciledAt(): Date | null {
+    return this._reconciledAt;
   }
 
   get version(): number {
@@ -247,7 +265,96 @@ export class FrontmatterIndex {
     }
   }
 
-  attach(adapter: StorageAdapter): Unsubscribe {
+  /**
+   * Re-derives the index from a fresh directory listing, to recover from watcher events an
+   * external process outran or an OS event queue silently dropped (inotify overflow and
+   * similar). Compares the adapter's own listing — which already carries size/modifiedAt, no
+   * extra stat calls — against what the index holds: a markdown path missing from the index, or
+   * whose size/modifiedAt differ, is re-read; an index entry with no matching file on disk is
+   * dropped; assets (non-markdown paths) are added/removed the same way, without a read (the
+   * index never stores their content). `adapter.list()` already excludes the reserved folder and
+   * hidden paths, so reconcile can never surface either.
+   *
+   * Safe to call while tools are writing: additions and refreshes go through the same
+   * upsert/addAsset the live watcher path uses; a removal is never decided on the listing alone
+   * but confirmed against the disk; and a single file that fails to read (raced away between the
+   * listing and the read) is skipped, never thrown — the counters simply don't credit it.
+   */
+  async reconcile(adapter: StorageAdapter): Promise<ReconcileResult> {
+    const start = Date.now();
+    const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
+    const seenNotes = new Set<string>();
+    const seenAssets = new Set<string>();
+    let refreshed = 0;
+    let added = 0;
+    let removed = 0;
+
+    for (const file of files) {
+      if (!isMarkdownPath(file.path)) {
+        seenAssets.add(file.path);
+        if (!this.assetPaths.has(file.path)) {
+          this.addAsset(file.path);
+          added += 1;
+        }
+        continue;
+      }
+      seenNotes.add(file.path);
+      const stamp = `${file.size}:${file.modifiedAt}`;
+      const existing = this.entries.get(file.path);
+      if (existing && existing.size === file.size && existing.modifiedAt === file.modifiedAt) {
+        continue;
+      }
+      // A file that could not be indexed last time (not UTF-8, say) and has not changed since is
+      // not worth another full read on every sweep.
+      if (!existing && this.unindexable.get(file.path) === stamp) continue;
+      try {
+        await this.refreshPath(adapter, file.path);
+      } catch {
+        continue; // one unreadable file must never abort the whole reconcile pass
+      }
+      if (this.entries.has(file.path)) {
+        this.unindexable.delete(file.path);
+        if (existing) refreshed += 1;
+        else added += 1;
+      } else {
+        this.unindexable.set(file.path, stamp);
+      }
+    }
+
+    // The listing is a snapshot. A note a tool wrote, or moved, after it was taken is in the index
+    // and not in the snapshot: removing on the snapshot alone would drop a note that exists (and a
+    // later move of one of its link targets would then leave its links unrewritten). So absence
+    // is confirmed against the disk, one candidate at a time; candidates are rare.
+    for (const p of [...this.entries.keys()]) {
+      if (seenNotes.has(p)) continue;
+      try {
+        await this.refreshPath(adapter, p); // removes the entry itself when the file is gone
+      } catch {
+        continue;
+      }
+      if (!this.entries.has(p)) removed += 1;
+    }
+    for (const p of [...this.assetPaths]) {
+      if (seenAssets.has(p)) continue;
+      const gone = adapter.exists
+        ? !(await adapter.exists(p).catch(() => true))
+        : (await adapter.hashOf(p).catch(() => undefined)) === null;
+      if (gone) {
+        this.removeAsset(p);
+        removed += 1;
+      }
+    }
+    for (const p of [...this.unindexable.keys()]) {
+      if (!seenNotes.has(p)) this.unindexable.delete(p);
+    }
+
+    this._reconciledAt = new Date();
+    return { refreshed, removed, added, durationMs: Date.now() - start };
+  }
+
+  /** `onError` (the adapter watcher's own `error` event, e.g. an inotify overflow) is optional so
+   *  callers/tests that don't care about it are unaffected. */
+  attach(adapter: StorageAdapter, onError?: (error: unknown) => void): Unsubscribe {
     if (!adapter.capabilities().watch || !adapter.watch) return () => {};
     return adapter.watch((event) => {
       if (!isMarkdownPath(event.path)) {
@@ -262,6 +369,6 @@ export class FrontmatterIndex {
       void this.refreshPath(adapter, event.path).catch(() => {
         /* a transient read failure leaves the previous entry in place; the next event or TTL rebuild fixes it */
       });
-    });
+    }, onError);
   }
 }

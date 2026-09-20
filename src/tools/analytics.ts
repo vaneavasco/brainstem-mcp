@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { CLIENT_SAFE_RESULT_CHARS } from '../storage/limits.ts';
 import { ANALYTICS_CATEGORIES, type AnalyticsReport, analyzeVault } from '../vault/analytics.ts';
+import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { READ_ONLY } from './annotations.ts';
 import type { ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
@@ -22,8 +24,8 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
     return fresh;
   }
 
-  const CategorySummary = z.object({ count: z.number(), examples: z.array(z.string()) });
-  const Hub = z.object({ path: z.string(), backlinks: z.number() });
+  const CategorySummary = z.looseObject({ count: z.number(), examples: z.array(z.string()) });
+  const Hub = z.looseObject({ path: z.string(), backlinks: z.number() });
 
   server.registerTool(
     'vault_analytics_summary',
@@ -31,11 +33,11 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
       title: 'Vault health summary',
       description:
         'Counts and examples of vault hygiene issues: notes without frontmatter, missing required frontmatter keys, broken wikilinks, ambiguous links, orphan notes, inconsistent tag spellings, non-UTF-8 files and oversized files. Also reports the top hub notes by backlink count. Results are cached for 10 minutes unless refresh=true.',
-      inputSchema: z.object({ refresh: z.boolean().optional() }),
-      outputSchema: z.object({
+      inputSchema: z.strictObject({ refresh: z.boolean().optional() }),
+      outputSchema: z.looseObject({
         scannedFiles: z.number(),
         truncated: z.boolean(),
-        categories: z.object(
+        categories: z.looseObject(
           Object.fromEntries(ANALYTICS_CATEGORIES.map((c) => [c, CategorySummary])),
         ),
         hubs: z.array(Hub),
@@ -54,15 +56,18 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
     {
       title: 'Vault health findings',
       description: `Detailed findings for one category: ${ANALYTICS_CATEGORIES.join(', ')}.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         category: z.enum(ANALYTICS_CATEGORIES),
         limit: z.number().int().min(1).max(100).optional(),
         refresh: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         category: z.string(),
         total: z.number(),
-        findings: z.array(z.object({ category: z.string(), path: z.string(), detail: z.string() })),
+        truncated: z.boolean().optional(),
+        findings: z.array(
+          z.looseObject({ category: z.string(), path: z.string(), detail: z.string() }),
+        ),
       }),
       annotations: READ_ONLY,
     },
@@ -70,10 +75,18 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
       guarded(tc.log, async () => {
         const { findings } = await report(refresh ?? false);
         const matching = findings.filter((f) => f.category === category);
+        const { kept, cut } = fitWithinBudget(
+          matching.slice(0, limit ?? 100),
+          roomBeside(
+            { category, total: matching.length, findings: [], truncated: true },
+            CLIENT_SAFE_RESULT_CHARS,
+          ),
+        );
         return okJson({
           category,
           total: matching.length,
-          findings: matching.slice(0, limit ?? 100),
+          findings: kept,
+          ...(cut ? { truncated: true } : {}),
         });
       }),
   );

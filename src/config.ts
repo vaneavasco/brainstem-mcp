@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MAX_BINARY_BYTES } from './storage/limits.ts';
+import { DEFAULT_RECONCILE_MS, MAX_BINARY_BYTES, MIN_RECONCILE_MS } from './storage/limits.ts';
 import { normalizeVaultPath } from './storage/path-policy.ts';
 import { resolveDailyNotePath } from './vault/daily-notes.ts';
 
@@ -25,6 +25,8 @@ export interface Config {
   accessTokenTtlS: number;
   refreshTokenTtlS: number;
   watchPollMs: number | null;
+  /** How often FrontmatterIndex.reconcile() runs in the background (ms); 0 disables it. */
+  reconcileMs: number;
   publicUrlFile: string | null;
   stateDir: string | null;
   tunnelMode: TunnelMode;
@@ -72,6 +74,13 @@ const EnvSchema = z.object({
     .min(3600)
     .default(90 * 24 * 3600),
   VAULT_WATCH_POLL_MS: z.coerce.number().int().min(250).max(60_000).optional(),
+  VAULT_RECONCILE_MS: z.coerce
+    .number()
+    .int()
+    .refine((ms) => ms === 0 || ms >= MIN_RECONCILE_MS, {
+      message: `must be 0 (off) or at least ${MIN_RECONCILE_MS} ms: every pass lists the whole vault`,
+    })
+    .default(DEFAULT_RECONCILE_MS),
   PUBLIC_URL_FILE: z.string().min(1).optional(),
   STATE_DIR: z.string().min(1).optional(),
   TUNNEL_MODE: z.enum(['cloudflare', 'quick', 'none']).default('none'),
@@ -214,6 +223,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     accessTokenTtlS: d.ACCESS_TOKEN_TTL_S,
     refreshTokenTtlS: d.REFRESH_TOKEN_TTL_S,
     watchPollMs: d.VAULT_WATCH_POLL_MS ?? null,
+    reconcileMs: d.VAULT_RECONCILE_MS,
     publicUrlFile: d.PUBLIC_URL_FILE ?? null,
     stateDir: d.STATE_DIR ?? null,
     tunnelMode: d.TUNNEL_MODE,

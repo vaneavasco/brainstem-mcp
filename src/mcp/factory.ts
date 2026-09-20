@@ -17,11 +17,17 @@ export interface FactoryDeps {
   instructions?: () => Promise<string>;
 }
 
-const PingOutput = z.object({
+const PingOutput = z.looseObject({
   server: z.string(),
   version: z.string(),
   era: z.enum(['legacy', 'modern']),
   now: z.string(),
+  index: z.looseObject({
+    notes: z.number(),
+    builtAt: z.string(),
+    /** null until the background reconcile has run at least once. */
+    reconciledAt: z.string().nullable(),
+  }),
 });
 
 /** Builds a fresh McpServer for one request (stateless per MCP 2026-07-28). */
@@ -30,6 +36,7 @@ export async function createVaultServer(
   deps: FactoryDeps,
 ): Promise<McpServer> {
   const instructions = deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS;
+  const runtime = await deps.resolveRuntime(ctx);
   const server = new McpServer(SERVER_INFO, {
     instructions,
     cacheHints: {
@@ -41,7 +48,9 @@ export async function createVaultServer(
     'brainstem_ping',
     {
       title: 'Ping',
-      description: 'Health check. Returns server name, version, protocol era and current time.',
+      description:
+        'Health check. Returns server name, version, protocol era, current time, and index ' +
+        'freshness (note count, when it was built, when the background reconcile last ran).',
       outputSchema: PingOutput,
       annotations: {
         readOnlyHint: true,
@@ -56,6 +65,11 @@ export async function createVaultServer(
         version: SERVER_INFO.version,
         era: ctx.era,
         now: new Date().toISOString(),
+        index: {
+          notes: runtime.index.size(),
+          builtAt: runtime.index.builtAt.toISOString(),
+          reconciledAt: runtime.index.reconciledAt?.toISOString() ?? null,
+        },
       };
       return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
     },
@@ -80,7 +94,6 @@ export async function createVaultServer(
     async () => ({ content: [{ type: 'text', text: instructions }] }),
   );
 
-  const runtime = await deps.resolveRuntime(ctx);
   registerVaultTools(server, {
     runtime,
     log: (error) => deps.logger.error({ err: error }, 'tool failure'),
