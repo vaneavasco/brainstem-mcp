@@ -284,13 +284,7 @@ export class LocalFSAdapter implements StorageAdapter {
     return result;
   }
 
-  /**
-   * sha256hex of the file's content, or `null` when it does not exist or is a directory —
-   * those are the only cases with no comparable "content hash". Text (valid UTF-8, matching
-   * `Note.hash`) is hashed as decoded text; content that fails to decode (e.g. a binary
-   * attachment written via vault_write_binary) is hashed over its raw bytes instead, so every
-   * existing file gets a real, round-trippable hash for expectedHash.
-   */
+  /** True when a file (not a folder) is at the path: a stat, no read. */
   async exists(inputPath: string): Promise<boolean> {
     const abs = this.abs(requireFilePath(inputPath));
     await this.assertInsideRoot(abs); // the same containment check every other path goes through
@@ -298,6 +292,13 @@ export class LocalFSAdapter implements StorageAdapter {
     return stat?.isFile() === true;
   }
 
+  /**
+   * sha256hex of the file's content, or `null` when it does not exist or is a directory —
+   * those are the only cases with no comparable "content hash". Text (valid UTF-8, matching
+   * `Note.hash`) is hashed as decoded text; content that fails to decode (e.g. a binary
+   * attachment written via vault_write_binary) is hashed over its raw bytes instead, so every
+   * existing file gets a real, round-trippable hash for expectedHash.
+   */
   async hashOf(inputPath: string): Promise<string | null> {
     const p = requireFilePath(inputPath);
     const abs = this.abs(p);

@@ -579,6 +579,22 @@ describe('evaluateQuery — contains/startsWith on what is not there', () => {
     expect(run({ where: [{ field: 'no_such_field', op: 'neq', value: 'x' }] }).total).toBe(4);
   });
 
+  it('a null field equals null, not the text "null"', () => {
+    index.upsert(entry('nulls/n.md', '---\nstart: null\nname: "null"\n---\nbody'));
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'start', op: 'eq', value: 'null' }] }).total,
+    ).toBe(0);
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'start', op: 'eq', value: null }] }).total,
+    ).toBe(1);
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'start', op: 'in', value: [null] }] }).total,
+    ).toBe(1);
+    expect(
+      run({ pathPrefix: 'nulls', where: [{ field: 'name', op: 'eq', value: 'null' }] }).total,
+    ).toBe(1);
+  });
+
   it('an empty scalar needle is refused too, with the operators that test presence named', () => {
     expect(() => run({ where: [{ field: 'owners', op: 'contains', value: '' }] })).toThrow(
       /nonEmpty/,
@@ -623,6 +639,26 @@ describe('evaluateQuery — groups budget', () => {
       });
       expect(r.hint).toBeDefined(); // budget hint + groups hint + overlapping-groups hint
       expect(JSON.stringify(r).length).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    }
+  });
+
+  it('fifty long column names are paid for out of the same budget', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const names = Array.from(
+      { length: 50 },
+      (_, i) => `a_rather_long_property_name_number_${i}_${'x'.repeat(150)}`,
+    );
+    for (let i = 0; i < 300; i += 1) {
+      const fm = names
+        .slice(0, 10)
+        .map((n) => `${n}: v${i}`)
+        .join('\n');
+      index.upsert(entry(`cols/n${i}.md`, `---\n${fm}\n---\nbody`));
+    }
+    for (const format of ['rows', 'columns'] as const) {
+      const r = run({ pathPrefix: 'cols', select: names, limit: 300, format });
+      expect(JSON.stringify(r).length).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+      expect(r.truncated).toBe(true);
     }
   });
 

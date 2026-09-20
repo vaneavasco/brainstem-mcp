@@ -297,6 +297,64 @@ describe('vault_batch_read bounds what the client receives, not only the bodies'
     expect(body.hint).toContain('frontmatterOmitted');
   });
 
+  const received = (r: { structuredContent?: unknown }) =>
+    JSON.stringify(r.structuredContent).length;
+
+  it('a body that is denser at the start than on average does not slip past the budget', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const paths: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      // 1,500 short quoted list lines (every line break and quote costs two characters in JSON),
+      // then long prose: the average escape ratio badly underestimates the prefix
+      const dense = Array.from({ length: 1_500 }, (_, k) => `- "k${k}"`).join('\n');
+      paths.push(`dense/n${i}.md`);
+      await h.call('vault_write', {
+        path: `dense/n${i}.md`,
+        content: `---\nstatus: open\n---\n\n\n\n${dense}\n${'prose '.repeat(8_000)}\n`,
+      });
+    }
+    const r = await h.call('vault_batch_read', { paths });
+    expect(r.isError).toBeFalsy();
+    expect(received(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
+  it('control characters, which JSON escapes sixfold, stay within the budget too', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    await h.call('vault_write', {
+      path: 'ctl.md',
+      content: `# C\n${'\u0001'.repeat(20_000)}${'a'.repeat(100_000)}\n`,
+    });
+    const r = await h.call('vault_batch_read', { paths: ['ctl.md'] });
+    expect(received(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
+  it('long paths, present or missing, are paid for out of the same budget', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const folder = `${'d'.repeat(120)}/${'e'.repeat(110)}`;
+    const present: string[] = [];
+    for (let i = 0; i < 10; i += 1) {
+      present.push(`${folder}/n${i}.md`);
+      await h.call('vault_write', {
+        path: `${folder}/n${i}.md`,
+        content: `# N\n${'word '.repeat(6_000)}\n`,
+      });
+    }
+    const missing = Array.from({ length: 10 }, (_, i) => `${folder}/missing-${i}.md`);
+    const r = await h.call('vault_batch_read', { paths: [...present, ...missing] });
+    expect((r.structuredContent as { missing: string[] }).missing).toHaveLength(10);
+    expect(received(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
+  it('a section name is a heading path, not a document: over 200 characters is refused', async () => {
+    await h.call('vault_write', { path: 'a.md', content: '# A\n' });
+    const long = 'h'.repeat(201);
+    expect((await h.call('vault_batch_read', { paths: ['a.md'], sections: [long] })).isError).toBe(
+      true,
+    );
+    expect((await h.call('vault_read', { path: 'a.md', sections: [long] })).isError).toBe(true);
+    expect((await h.call('vault_read', { path: 'a.md', section: long })).isError).toBe(true);
+  });
+
   it('small frontmatter is never touched', async () => {
     await h.call('vault_write', { path: 'a.md', content: '---\nstatus: open\n---\n# A\n' });
     const r = await h.call('vault_batch_read', { paths: ['a.md'] });

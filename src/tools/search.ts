@@ -13,7 +13,7 @@ import {
 import { normalizeVaultPath } from '../storage/path-policy.ts';
 import type { Match, SearchOpts, StorageAdapter } from '../storage/types.ts';
 import { VaultError } from '../storage/types.ts';
-import { fitWithinBudget } from '../vault/budget.ts';
+import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import type { FrontmatterIndex, IndexEntry } from '../vault/frontmatter-index.ts';
 import type { VaultGraph } from '../vault/graph.ts';
 import type { Cond, Query } from '../vault/query.ts';
@@ -324,6 +324,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         field: z.string(),
         hits: z.array(z.looseObject({ path: z.string(), value: z.unknown() })),
         truncated: z.boolean(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -341,14 +342,21 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           ...(contains !== undefined ? { contains } : {}),
           ...(exists !== undefined ? { exists } : {}),
         });
+        const hintFor = (shown: number) =>
+          `${shown} of ${hits.length} hits shown: narrow the condition, or use vault_query, which pages by sort and counts with countOnly.`;
         const fitted = fitWithinBudget(
           hits.slice(0, MAX_FRONTMATTER_HITS),
-          CLIENT_SAFE_RESULT_CHARS - 500,
+          roomBeside(
+            { field, hits: [], truncated: true, hint: hintFor(hits.length) },
+            CLIENT_SAFE_RESULT_CHARS,
+          ),
         );
+        const truncated = fitted.cut || hits.length > MAX_FRONTMATTER_HITS;
         return okJson({
           field,
           hits: fitted.kept,
-          truncated: fitted.cut || hits.length > MAX_FRONTMATTER_HITS,
+          truncated,
+          ...(truncated ? { hint: hintFor(fitted.kept.length) } : {}),
         });
       }),
   );

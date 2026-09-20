@@ -1,6 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS, MAX_RECENT } from '../storage/limits.ts';
+import {
+  MAX_QUERY_FIELD_CHARS,
+  MAX_QUERY_RESULT_CHARS,
+  MAX_QUERY_ROWS,
+  MAX_QUERY_SELECT,
+  MAX_RECENT,
+} from '../storage/limits.ts';
 import type { Cond, Query } from '../vault/query.ts';
 import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
@@ -22,10 +28,10 @@ const QuerySchema: z.ZodType<Query> = z.strictObject({
   where: z.array(CondSchema).optional(),
   tags: TagsFilterSchema.optional(),
   pathPrefix: z.string().optional(),
-  select: z.array(z.string()).optional(),
+  select: z.array(z.string().min(1).max(MAX_QUERY_FIELD_CHARS)).max(MAX_QUERY_SELECT).optional(),
   sort: z.array(SortSchema).optional(),
   limit: z.number().int().min(1).max(MAX_QUERY_ROWS).optional(),
-  groupBy: z.string().optional(),
+  groupBy: z.string().min(1).max(MAX_QUERY_FIELD_CHARS).optional(),
   countOnly: z.boolean().optional(),
   format: z
     .enum(['rows', 'columns'])

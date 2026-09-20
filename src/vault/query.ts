@@ -191,6 +191,8 @@ function asArray(v: unknown): unknown[] | null {
 function matchesEq(fieldVal: unknown, value: unknown): boolean {
   // A missing field equals nothing (not even the text "undefined"); "exists: false" finds it.
   if (fieldVal === undefined) return false;
+  // A null field equals null and nothing else (not the text "null").
+  if (fieldVal === null || value === null) return fieldVal === value;
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => typedCompare(el, value) === 0);
   return typedCompare(fieldVal, value) === 0;
@@ -200,6 +202,7 @@ function matchesEq(fieldVal: unknown, value: unknown): boolean {
  *  up-front check before this ever runs — see the comment there. */
 function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
   if (fieldVal === undefined) return false;
+  if (fieldVal === null) return value.includes(null);
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => value.some((v) => typedCompare(el, v) === 0));
   return value.some((v) => typedCompare(fieldVal, v) === 0);
@@ -542,9 +545,8 @@ export function evaluateQuery(
   // One budget for the whole result: the groups take what they need first (at most half when rows
   // are wanted too), the rows get the rest. Two independent budgets would add up to twice what a
   // client accepts.
-  const groupsBudget = q.countOnly
-    ? MAX_QUERY_RESULT_CHARS
-    : Math.floor(MAX_QUERY_RESULT_CHARS / 2);
+  const room = Math.max(MAX_QUERY_RESULT_CHARS - wrapperChars(q, total), 0);
+  const groupsBudget = q.countOnly ? room : Math.floor(room / 2);
   const fitted =
     q.groupBy === undefined
       ? undefined
@@ -565,7 +567,7 @@ export function evaluateQuery(
     return withGroupsHint(counted, fitted?.overlapping ?? false);
   }
 
-  const rowsBudget = MAX_QUERY_RESULT_CHARS - (fitted ? JSON.stringify(fitted.groups).length : 0);
+  const rowsBudget = room - (fitted ? JSON.stringify(fitted.groups).length : 0);
   const payload =
     q.format === 'columns'
       ? buildColumnsPayload(limited, graph, q.select, rowsBudget)
@@ -581,7 +583,7 @@ export function evaluateQuery(
   if (payload.hint) {
     // With groups in the result the rows had less room: say so, or the advice cannot help.
     result.hint = fitted
-      ? `${payload.hint} The groups took ${JSON.stringify(fitted.groups).length} characters of it: drop groupBy, or ask for the counts alone with countOnly.`
+      ? `${payload.hint} ${groupsTookHint(JSON.stringify(fitted.groups).length)}`
       : payload.hint;
   }
   if (fitted) {
@@ -592,6 +594,38 @@ export function evaluateQuery(
 }
 
 type Group = { key: string; count: number; paths: string[] };
+
+function groupsTookHint(chars: number): string {
+  return `The groups took ${chars} characters of it: drop groupBy, or ask for the counts alone with countOnly.`;
+}
+
+function groupsShownHint(shown: number, all: number): string {
+  return `${shown} of ${all} groups shown, the largest ones; filter with "where" to see the others.`;
+}
+
+/**
+ * What the result costs besides its rows and groups: the keys, `total`, the column names, and
+ * the longest hint this call could carry. Measured, not reserved: a caller may select fifty
+ * long field names, and the hints together run to several hundred characters.
+ */
+function wrapperChars(q: Query, total: number): number {
+  const widest = Number.MAX_SAFE_INTEGER;
+  const hint = [
+    budgetHint(widest, widest),
+    groupsTookHint(widest),
+    GROUP_PATHS_DROPPED_HINT,
+    groupsShownHint(widest, widest),
+    OVERLAPPING_GROUPS_HINT,
+  ].join(' ');
+  return JSON.stringify({
+    rows: [],
+    total,
+    truncated: true,
+    ...(q.format === 'columns' ? { columns: selectedColumns(q.select), values: [] } : {}),
+    ...(q.groupBy === undefined ? {} : { groups: [] }),
+    hint,
+  }).length;
+}
 
 /**
  * Groups within `budget` characters. The counts are the answer and the example paths a
@@ -619,10 +653,7 @@ function fitGroups(
     const { kept } = fitWithinBudget(bySize, budget);
     const keep = new Set(kept.map((g) => g.key));
     const shown = groups.filter((g) => keep.has(g.key));
-    hint = joinHints(
-      hint,
-      `${shown.length} of ${groups.length} groups shown, the largest ones; filter with "where" to see the others.`,
-    );
+    hint = joinHints(hint, groupsShownHint(shown.length, groups.length));
     groups = shown;
     cut = true;
   }

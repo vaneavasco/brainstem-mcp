@@ -212,6 +212,37 @@ describe('background reconcile', () => {
     }
   });
 
+  it('the gap counts from the end of a pass: a pass longer than the gap does not run back to back', async () => {
+    const watcher = adapterWithWatcherErrors();
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      reconcileMinGapMs: 120,
+      createAdapter: watcher.createAdapter,
+    });
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const original = runtime.index.reconcile.bind(runtime.index);
+    runtime.index.reconcile = (async (adapter) => {
+      starts.push(Date.now());
+      await new Promise((r) => setTimeout(r, 200)); // longer than the gap
+      const result = await original(adapter);
+      ends.push(Date.now());
+      return result;
+    }) as typeof runtime.index.reconcile;
+    const storm = setInterval(() => watcher.fail(new Error('still failing')), 10);
+    try {
+      await waitFor(() => starts.length >= 3, 4000);
+    } finally {
+      clearInterval(storm);
+      await runtime.close();
+    }
+    for (let i = 1; i < starts.length; i += 1) {
+      expect((starts[i] ?? 0) - (ends[i - 1] ?? 0)).toBeGreaterThanOrEqual(100);
+    }
+  });
+
   it('a reporting callback that throws does not turn a good pass into a failed one', async () => {
     let failures = 0;
     let reports = 0;

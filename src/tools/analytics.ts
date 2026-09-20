@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { CLIENT_SAFE_RESULT_CHARS } from '../storage/limits.ts';
 import { ANALYTICS_CATEGORIES, type AnalyticsReport, analyzeVault } from '../vault/analytics.ts';
-import { fitWithinBudget } from '../vault/budget.ts';
+import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { READ_ONLY } from './annotations.ts';
 import type { ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
@@ -64,6 +64,7 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
       outputSchema: z.looseObject({
         category: z.string(),
         total: z.number(),
+        truncated: z.boolean().optional(),
         findings: z.array(
           z.looseObject({ category: z.string(), path: z.string(), detail: z.string() }),
         ),
@@ -76,7 +77,10 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
         const matching = findings.filter((f) => f.category === category);
         const { kept, cut } = fitWithinBudget(
           matching.slice(0, limit ?? 100),
-          CLIENT_SAFE_RESULT_CHARS - 500,
+          roomBeside(
+            { category, total: matching.length, findings: [], truncated: true },
+            CLIENT_SAFE_RESULT_CHARS,
+          ),
         );
         return okJson({
           category,

@@ -7,7 +7,7 @@ import {
 } from '../storage/limits.ts';
 import { normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
-import { fitListsWithinBudget, fitWithinBudget } from '../vault/budget.ts';
+import { fitListsWithinBudget, fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import type { Backlink, ResolvedLink } from '../vault/graph.ts';
 import { contextByLine, findUnlinkedMentions } from '../vault/mentions.ts';
 import type { Heading } from '../vault/note-parse.ts';
@@ -99,8 +99,8 @@ function buildHeadingTree(headings: Heading[]): HeadingNode[] {
   return root;
 }
 
-/** Room for the lists of one links or tags result; totals, flags and the hint ride on top. */
-const LINKS_BUDGET_CHARS = CLIENT_SAFE_RESULT_CHARS - 1_000;
+const LINKS_CUT_HINT =
+  'Lists were cut to fit ("truncated" says which; "total" has the full counts): ask for one kind with "include", one folder at a time with "filter.pathPrefix", or only the counts with countOnly.';
 
 export function registerGraphTools(server: McpServer, tc: ToolContext): void {
   const { adapter, index, graph } = tc.runtime;
@@ -204,12 +204,31 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         }
 
         // The caps above bound the counts; a hub's 500 links with their context still outgrow
-        // what a client accepts, so the four lists also share one character budget.
+        // what a client accepts, so the four lists share what is left once the rest of the result
+        // (path, flags, totals, hint) is paid for.
+        const total = {
+          outgoing: outgoingAll.length,
+          backlinks: backlinksAll.length,
+          embeds: embedsAll.length,
+          unlinkedMentions: unlinkedTotal,
+        };
+        const allTrue = { outgoing: true, backlinks: true, embeds: true, unlinkedMentions: true };
         const fitted = fitListsWithinBudget<unknown>(
           [outgoing, backlinks, embeds, unlinkedMentions],
-          LINKS_BUDGET_CHARS,
+          roomBeside(
+            {
+              path: p,
+              outgoing: [],
+              backlinks: [],
+              embeds: [],
+              unlinkedMentions: [],
+              truncated: allTrue,
+              total,
+              hint: LINKS_CUT_HINT,
+            },
+            CLIENT_SAFE_RESULT_CHARS,
+          ),
         );
-        const cutByBudget = fitted.cut.some(Boolean);
         return okJson({
           path: p,
           outgoing: fitted.kept[0],
@@ -222,17 +241,8 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
             embeds: embedsTruncated || fitted.cut[2] === true,
             unlinkedMentions: unlinkedTruncated || fitted.cut[3] === true,
           },
-          ...(cutByBudget
-            ? {
-                hint: 'Lists were cut to fit ("truncated" says which; "total" has the full counts): ask for one kind with "include", one folder at a time with "filter.pathPrefix", or only the counts with countOnly.',
-              }
-            : {}),
-          total: {
-            outgoing: outgoingAll.length,
-            backlinks: backlinksAll.length,
-            embeds: embedsAll.length,
-            unlinkedMentions: unlinkedTotal,
-          },
+          ...(fitted.cut.some(Boolean) ? { hint: LINKS_CUT_HINT } : {}),
+          total,
         });
       }),
   );
@@ -241,7 +251,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     'vault_tags',
     {
       title: 'Tags',
-      description: `List every tag in the vault with note counts, or the notes carrying one tag (with includeNested, default true, rolling up nested children like "project/alpha" into "project"). Filter the tag list with prefix (case-insensitive). Caps notes at ${MAX_GRAPH_ITEMS} for a given tag.`,
+      description: `List every tag in the vault with note counts, or the notes carrying one tag (with includeNested, default true, rolling up nested children like "project/alpha" into "project"). Filter the tag list with prefix (case-insensitive). Caps notes at ${MAX_GRAPH_ITEMS} for a given tag. Long lists are cut to what a client accepts (truncated + hint).`,
       inputSchema: z.strictObject({
         tag: z.string().optional(),
         prefix: z.string().optional(),
@@ -272,22 +282,39 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
             prefix !== undefined
               ? all.filter((t) => t.tag.toLowerCase().startsWith(prefix.toLowerCase()))
               : all;
-          const { kept, cut } = fitWithinBudget(filtered, LINKS_BUDGET_CHARS);
+          const hintFor = (shown: number) =>
+            `${shown} of ${filtered.length} tags shown: narrow with "prefix", or look one tag up with "tag".`;
+          const { kept, cut } = fitWithinBudget(
+            filtered,
+            roomBeside(
+              { tags: [], total: filtered.length, truncated: true, hint: hintFor(filtered.length) },
+              CLIENT_SAFE_RESULT_CHARS,
+            ),
+          );
           return okJson({
             tags: kept,
             total: filtered.length,
-            ...(cut
-              ? {
-                  truncated: true,
-                  hint: `${kept.length} of ${filtered.length} tags shown: narrow with "prefix", or look one tag up with "tag".`,
-                }
-              : {}),
+            ...(cut ? { truncated: true, hint: hintFor(kept.length) } : {}),
           });
         }
         const all = graph.notesWithTag(tag, includeNested ?? true);
-        const fittedNotes = fitWithinBudget(all.slice(0, MAX_GRAPH_ITEMS), LINKS_BUDGET_CHARS);
+        const hintFor = (shown: number) =>
+          `${shown} of ${all.length} notes shown: list them with vault_query { tags: { any: [tag] } } and a pathPrefix, or count them with countOnly.`;
+        const fittedNotes = fitWithinBudget(
+          all.slice(0, MAX_GRAPH_ITEMS),
+          roomBeside(
+            { tag, notes: [], total: all.length, truncated: true, hint: hintFor(all.length) },
+            CLIENT_SAFE_RESULT_CHARS,
+          ),
+        );
         const truncated = fittedNotes.cut || all.length > MAX_GRAPH_ITEMS;
-        return okJson({ tag, notes: fittedNotes.kept, total: all.length, truncated });
+        return okJson({
+          tag,
+          notes: fittedNotes.kept,
+          total: all.length,
+          truncated,
+          ...(truncated ? { hint: hintFor(fittedNotes.kept.length) } : {}),
+        });
       }),
   );
 

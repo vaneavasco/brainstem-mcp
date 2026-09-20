@@ -43,3 +43,30 @@ export function fitListsWithinBudget<T>(
   });
   return { kept, cut };
 }
+
+/** What is left of `budget` once `wrapper` (the result with its lists empty and its longest
+ *  hint in place) is paid for. Measured, never estimated: a path, a field name or a hint can be
+ *  a thousand characters long. */
+export function roomBeside(wrapper: unknown, budget: number): number {
+  return Math.max(budget - JSON.stringify(wrapper).length, 0);
+}
+
+/**
+ * The longest prefix of `text` whose JSON string stays within `maxSerialized` characters
+ * (quotes included). An average escape ratio is not good enough: a text that opens with line
+ * breaks or control characters is denser at the start than overall. Serialized length grows with
+ * the prefix, so a binary search finds the cut; a surrogate pair is never split.
+ */
+export function prefixWithinSerialized(text: string, maxSerialized: number): string {
+  if (JSON.stringify(text).length <= maxSerialized) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (JSON.stringify(text.slice(0, mid)).length <= maxSerialized) low = mid;
+    else high = mid - 1;
+  }
+  const code = text.charCodeAt(low - 1);
+  if (low > 0 && code >= 0xd800 && code <= 0xdbff) low -= 1;
+  return text.slice(0, low);
+}

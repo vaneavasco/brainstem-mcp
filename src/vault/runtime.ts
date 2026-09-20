@@ -94,17 +94,17 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   // One reconcile at a time. The timer simply skips a tick while a pass runs (the next tick is
   // soon enough). A watcher error is different: it means events were lost, so it is never
   // dropped. During a pass it is remembered and answered by one more pass; within `minGapMs` of
-  // the last start it is answered by one trailing pass when the gap ends, because a watcher that
+  // the last pass it is answered by one trailing pass when the gap ends, because a watcher that
   // cannot watch reports once per folder and each pass lists the whole vault.
   let inFlight: Promise<void> | null = null;
   let pending = false;
   let closed = false;
-  let lastStart = 0;
+  let lastPass = 0; // when the last pass started, then when it ended: the gap counts from its end
   let trailing: ReturnType<typeof setTimeout> | null = null;
   const minGapMs = opts.reconcileMinGapMs ?? DEFAULT_RECONCILE_MIN_GAP_MS;
 
   const startPass = (): void => {
-    lastStart = Date.now();
+    lastPass = Date.now();
     inFlight = index
       .reconcile(adapter)
       .then(
@@ -126,6 +126,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
       )
       .finally(() => {
         inFlight = null;
+        lastPass = Date.now();
         if (pending) {
           pending = false;
           requestPass();
@@ -140,7 +141,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
       pending = true;
       return;
     }
-    const wait = minGapMs - (Date.now() - lastStart);
+    const wait = minGapMs - (Date.now() - lastPass);
     if (wait <= 0) {
       startPass();
     } else if (!trailing) {

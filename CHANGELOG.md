@@ -32,19 +32,22 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   write or move a note while the sweep runs. It runs every `VAULT_RECONCILE_MS` (default
   300000; `0` turns it off, otherwise at least 10000) and when the watcher reports an error. A
   watcher error is never dropped: during a pass it is answered by one more pass, within 30 s of
-  the last one by one trailing pass when the gap ends (a watcher that cannot watch reports once
+  the end of the last one by one trailing pass when the gap ends (a watcher that cannot watch reports once
   per folder). A failed pass is logged without its error text (it can carry an absolute path),
   and shutdown waits for the pass in flight. `brainstem_ping` (`index: { notes, builtAt, reconciledAt }`), `/health`
   (`vault.reconciledAt`) and `./brainstem status` show when the index was last checked. An idle
   pass over 37,000 notes takes about a second.
-- Every tool that returns a list is bounded the same way (ADR 0007), because on a 37,000-note
-  vault they were not: `vault_list` returned 283,000 characters, `vault_links` on a hub 161,000,
-  `vault_tags` 146,000. `vault_list`, `vault_links` (its four lists share one budget, short
-  lists first), `vault_tags`, `vault_search_frontmatter` and `vault_analytics_findings` keep the
-  longest prefix that fits 48,000 characters, set `truncated`, and where there is something
-  useful to say, a `hint` with the counts and the narrower call.
+- Every result is bounded as the client receives it, at 48,000 characters (ADR 0007), because on
+  a 37,000-note vault they were not: `vault_list` returned 283,000 characters, `vault_links` on
+  a hub 161,000, `vault_tags` 146,000, a batch of twenty long notes 91,000. Nothing is estimated:
+  each tool weighs its result with the lists empty and its longest hint in place (a path or a
+  field name can be a thousand characters) and gives the lists what is left. `vault_list`,
+  `vault_links` (its four lists share the room, short lists first), `vault_tags`,
+  `vault_search_frontmatter` and `vault_analytics_findings` keep the longest prefix that fits,
+  set `truncated`, and say how many of how many are shown and which narrower call to make.
 - `vault_query` and `vault_recent` bound the whole result, not only the rows: the result stays
-  within 48,000 characters, rows (or `values`), `groups`, hints and all. Groups get at most half when rows are wanted too (all of
+  within 48,000 characters, rows (or `values`), `groups`, column names, hints and all (`select`
+  takes at most 50 names of 200 characters). Groups get at most half when rows are wanted too (all of
   it with `countOnly`); their example paths are dropped before any group is, and when thousands
   of keys still do not fit the largest groups are kept. A cut is never silent: `truncated` is
   set and a `hint` says what was cut; the row hint counts against the rows asked for (`limit`),
@@ -133,7 +136,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 - A condition on a field the note does not have compared against the text "undefined":
   `contains "und"`, `eq "undefined"`, `in ["undefined"]` and a matching `regex` all found every
   note without the field. A missing field now contains nothing, equals nothing and matches no
-  pattern (`neq` stays the complement; `exists: false` finds the notes without it). An empty
+  pattern (`neq` stays the complement; `exists: false` finds the notes without it), and a null
+  field equals `null`, not the text "null". An empty
   `contains` / `startsWith` needle, alone or in a list, is refused: it matched every note, and
   `exists` / `nonEmpty` are the operators for presence.
 - `vault_batch_read` resolved `sections` against the body without the frontmatter, so a note
@@ -197,14 +201,17 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 - The owner's `_brainstem/instructions.md` may be up to 12,000 characters (was 8,000) before it is cut with a marker: a guide for a large, structured vault (folders, queryable fields, reading recipes) did not fit, and it is read once per conversation through `brainstem_guide`.
 
 - `vault_batch_read` bounds what the client receives, at 48,000 characters (it was 120,000 of
-  bodies alone, which a client refused outright: a full batch returned nothing). The budget
-  covers frontmatter as well as bodies: on a real vault the frontmatter of twenty long notes
-  weighed as much as their bodies (45,000 characters), so bounding the bodies alone still
-  produced a 91,000-character result. Frontmatter gets at most half; beyond that the largest
+  bodies alone, which a client refused outright: a full batch returned nothing). The result is
+  weighed without any body text first: paths, hashes, `missing`, `failed`, `missingSections`,
+  hints and frontmatter. Frontmatter gets at most half of the room (on a real vault the
+  frontmatter of twenty long notes weighed as much as their bodies); beyond that the largest
   blocks are left out and flagged (`frontmatterOmitted`, with a hint that names `vault_query
-  select`). The bodies share the rest fairly, in serialized characters: a short note leaves its
-  unused share to the long ones. A cut is reported per note (`truncated`) with the usual hint;
-  `sections` is the intended call for long notes.
+  select`). The bodies share exactly what is left, in serialized characters, each cut at the
+  longest prefix that fits (a body that opens with line breaks, quotes or control characters is
+  denser at the start than on average, so a ratio is not enough); a short note leaves its unused
+  share to the long ones. A heading path may be at most 200 characters, and a batch whose paths
+  and section names alone would exceed the limit is refused with a clear error. `sections` is
+  the intended call for long notes.
 - Positioning: the README intro, `llms.txt` and the GitHub description/topics
   now say what brainstem is *for* — your Obsidian vault as Claude's second brain
   (personal knowledge management, local-first, persistent memory) — before

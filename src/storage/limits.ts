@@ -18,11 +18,9 @@ export const MAX_RESULT_CHARS = 120_000;
  * smallest refusal.
  */
 export const CLIENT_SAFE_RESULT_CHARS = 48_000;
-/** What one note costs in a vault_batch_read besides its frontmatter and body: path, hash, size,
- *  modifiedAt, the JSON around them and a truncation marker. */
-export const BATCH_NOTE_OVERHEAD_CHARS = 300;
-/** The hints and the "missing" / "failed" lists of one vault_batch_read. */
-export const BATCH_FIXED_OVERHEAD_CHARS = 1_000;
+/** Longest heading path a read may ask for; an unknown one is echoed back in the error or in
+ *  "missingSections", so it counts against the result. */
+export const MAX_SECTION_NAME_CHARS = 200;
 export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;
@@ -31,10 +29,13 @@ export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;
-/** Character budget for a vault_query / vault_recent payload: rows (or "values") and groups
- *  together, independent of `limit` — a handful of wide selected fields across a few hundred
- *  rows outgrow what a client accepts. */
-export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS - 1_000; // total, flags and hints ride on top
+/** Character budget for a whole vault_query / vault_recent result: rows (or "values"), groups,
+ *  column names and hints, independent of `limit` — a handful of wide selected fields across a
+ *  few hundred rows outgrow what a client accepts. */
+export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS;
+/** `select` names the fields of a row; they are echoed back (as keys, or once as "columns"). */
+export const MAX_QUERY_SELECT = 50;
+export const MAX_QUERY_FIELD_CHARS = 200;
 /** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
 export const DEFAULT_RECONCILE_MS = 300_000;
 /** Shortest allowed reconcile interval: each pass lists the whole vault. */

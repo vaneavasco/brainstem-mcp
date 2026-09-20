@@ -74,6 +74,20 @@ describe('list-returning tools stay within what a client accepts', () => {
     expect((r.structuredContent as { truncated: boolean }).truncated).toBe(true);
   });
 
+  it('a path of many hundred characters is paid for out of the same budget', async () => {
+    const deep = ['a', 'b', 'c', 'd'].map((c) => c.repeat(230)).join('/');
+    await fs.mkdir(path.join(h.root, deep), { recursive: true });
+    for (let i = 0; i < 120; i += 1) {
+      await fs.writeFile(path.join(h.root, deep, `n${i}.md`), `see [[hub]]\n`);
+    }
+    await fs.writeFile(path.join(h.root, deep, 'center.md'), '# center\n');
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const listed = await h.call('vault_list', { path: deep });
+    expect(size(listed)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    const links = await h.call('vault_links', { path: 'hub.md' });
+    expect(size(links)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+  });
+
   it('a small result is untouched', async () => {
     const r = await h.call('vault_list', { path: '' });
     const body = r.structuredContent as { truncated: boolean; hint?: string };

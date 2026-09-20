@@ -1,14 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
-  BATCH_FIXED_OVERHEAD_CHARS,
-  BATCH_NOTE_OVERHEAD_CHARS,
   CLIENT_SAFE_RESULT_CHARS,
   MAX_BATCH,
   MAX_READ_SECTIONS,
   MAX_RESULT_CHARS,
+  MAX_SECTION_NAME_CHARS,
 } from '../storage/limits.ts';
 import { VaultError } from '../storage/types.ts';
+import { prefixWithinSerialized } from '../vault/budget.ts';
 import type { SectionRange } from '../vault/sections.ts';
 import { describeUnknownHeading, findSection, sliceSection } from '../vault/sections.ts';
 import { READ_ONLY } from './annotations.ts';
@@ -22,6 +22,9 @@ import {
   okJson,
   TRUNCATED_HINT,
 } from './results.ts';
+
+/** A heading path ("H1 > H2"): long enough for any real heading, short enough to be echoed back. */
+const SectionArg = z.string().min(1).max(MAX_SECTION_NAME_CHARS);
 
 const NoteSummary = z.looseObject({
   path: z.string(),
@@ -85,6 +88,12 @@ function pickSections(content: string, headings: string[]): PickedSections {
   };
 }
 
+/** Upper bound of what clampText appends to a cut text, as serialized: two line breaks (two
+ *  characters each in JSON) and the marker with both counts at their widest. */
+const TRUNCATION_MARKER_CHARS = JSON.stringify(
+  `\n\n[truncated: showing ${MAX_RESULT_CHARS} of ${Number.MAX_SAFE_INTEGER} characters]`,
+).length;
+
 const FRONTMATTER_OMITTED_HINT =
   'Frontmatter was left out of some notes ("frontmatterOmitted") to keep the result within what clients accept: read the fields you need with vault_query select, or one note with vault_read.';
 
@@ -132,14 +141,11 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         GUIDE_POINTER,
       inputSchema: z.strictObject({
         path: DetailedPathArg,
-        section: z
-          .string()
-          .optional()
-          .describe(
-            'Return only this section (by heading path, e.g. "Heading" or "H1 > H2") instead of the whole file.',
-          ),
+        section: SectionArg.optional().describe(
+          'Return only this section (by heading path, e.g. "Heading" or "H1 > H2") instead of the whole file.',
+        ),
         sections: z
-          .array(z.string().min(1))
+          .array(SectionArg)
           .min(1)
           .max(MAX_READ_SECTIONS)
           .optional()
@@ -230,7 +236,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
       inputSchema: z.strictObject({
         paths: z.array(DetailedPathArg).min(1).max(MAX_BATCH),
         sections: z
-          .array(z.string().min(1))
+          .array(SectionArg)
           .min(1)
           .max(MAX_READ_SECTIONS)
           .optional()
@@ -268,39 +274,60 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         const wanted = result.notes.map((note) =>
           sections ? pickSections(note.content, sections) : undefined,
         );
-        // The budget covers what the client receives, not only the bodies: the frontmatter of
-        // twenty long notes can weigh as much as their bodies. Frontmatter gets at most half;
-        // beyond that the largest blocks are left out (and said so), the bodies share the rest.
-        const room =
-          CLIENT_SAFE_RESULT_CHARS -
-          BATCH_FIXED_OVERHEAD_CHARS -
-          result.notes.length * BATCH_NOTE_OVERHEAD_CHARS;
-        const fmSizes = result.notes.map((note) => JSON.stringify(note.frontmatter).length);
-        const omitted = omitLargest(fmSizes, Math.floor(room / 2));
-        const fmKept = fmSizes.reduce((sum, size, i) => sum + (omitted.has(i) ? 0 : size), 0);
-        // Shared in serialized characters (a line break costs two in JSON), handed out in raw ones.
         const texts = result.notes.map((note, i) => wanted[i]?.text ?? note.body);
-        const serialized = texts.map((text) => JSON.stringify(text).length);
-        const allowance = shareBudget(serialized, room - fmKept).map((chars, i) => {
-          const raw = Math.floor(
-            (chars * (texts[i]?.length ?? 0)) / Math.max(serialized[i] ?? 1, 1),
-          );
-          return Math.min(raw, maxChars ?? Number.POSITIVE_INFINITY);
-        });
-        const notes = result.notes.map((note, i) => {
-          const picked = wanted[i];
-          const clamped = clampText(texts[i] ?? '', allowance[i]);
+
+        // The budget covers what the client receives, and everything is measured: a path can be
+        // a thousand characters, a body can open with characters JSON escapes sixfold. First the
+        // result without any body text is built and weighed (frontmatter gets at most half of
+        // the room; beyond that the largest blocks are left out and flagged), then the bodies
+        // share exactly what is left, in serialized characters.
+        const skeleton = (i: number, withFrontmatter: boolean) => {
+          const note = result.notes[i] as (typeof result.notes)[number];
           return {
             path: note.path,
-            frontmatter: omitted.has(i) ? {} : note.frontmatter,
+            frontmatter: withFrontmatter ? note.frontmatter : {},
             hasFrontmatter: note.hasFrontmatter,
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
             hash: note.hash,
+            body: '',
+            truncated: true,
+            ...(withFrontmatter ? {} : { frontmatterOmitted: true }),
+            ...(wanted[i]?.missing.length ? { missingSections: wanted[i]?.missing } : {}),
+          };
+        };
+        const weigh = (omit: Set<number>) =>
+          JSON.stringify({
+            notes: result.notes.map((_, i) => skeleton(i, !omit.has(i))),
+            missing: result.missing,
+            failed: result.failed,
+            hint: `${TRUNCATED_HINT} ${FRONTMATTER_OMITTED_HINT}`,
+          }).length;
+
+        const everything = new Set(result.notes.map((_, i) => i));
+        const bare = weigh(everything);
+        if (bare > CLIENT_SAFE_RESULT_CHARS) {
+          throw new VaultError(
+            'INVALID_INPUT',
+            'The paths and section names of this batch alone exceed what a client accepts: ask for fewer notes or sections per call.',
+          );
+        }
+        const fmSizes = result.notes.map((note) => JSON.stringify(note.frontmatter).length);
+        const omitted = omitLargest(fmSizes, Math.floor((CLIENT_SAFE_RESULT_CHARS - bare) / 2));
+        const bodiesRoom =
+          CLIENT_SAFE_RESULT_CHARS - weigh(omitted) - result.notes.length * TRUNCATION_MARKER_CHARS;
+
+        // A body's cost is its JSON string without the two quotes the skeleton already paid for.
+        const costs = texts.map((text) => JSON.stringify(text).length - 2);
+        const shares = shareBudget(costs, Math.max(bodiesRoom, 0));
+        const notes = result.notes.map((_, i) => {
+          const text = texts[i] ?? '';
+          const prefix = prefixWithinSerialized(text, (shares[i] ?? 0) + 2);
+          const clamped = clampText(text, Math.min(prefix.length, maxChars ?? prefix.length));
+          return {
+            ...skeleton(i, !omitted.has(i)),
             body: clamped.text,
             truncated: clamped.truncated,
-            ...(omitted.has(i) ? { frontmatterOmitted: true } : {}),
-            ...(picked?.missing.length ? { missingSections: picked.missing } : {}),
           };
         });
         const hints = [
