@@ -435,3 +435,21 @@ describe('third review of the shape-first listing', () => {
     expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
   });
 });
+
+describe('fourth review of the listing hint', () => {
+  it('advises a glob only when a glob would bring the paths back', async () => {
+    await fs.mkdir(path.join(h.root, 'bigflat'), { recursive: true });
+    const long = 'a-long-file-name-segment-'.repeat(8);
+    await Promise.all(
+      Array.from({ length: 400 }, (_, i) =>
+        fs.writeFile(path.join(h.root, 'bigflat', `${long}${i}.md`), 'x'),
+      ),
+    );
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    // cut by the budget, not by the shape rule: a glob returns no more than this did
+    const r = await h.call('vault_list', { path: 'bigflat' });
+    const out = r.structuredContent as { truncated: boolean; hint?: string };
+    expect(out.truncated).toBe(true);
+    expect(out.hint).not.toMatch(/for the paths themselves/);
+  });
+});

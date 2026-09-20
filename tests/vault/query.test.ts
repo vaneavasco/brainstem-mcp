@@ -1060,3 +1060,15 @@ describe('third review of sum', () => {
     expect(r.hint).not.toMatch(/"x", "y"/);
   });
 });
+
+describe('fourth review of sum', () => {
+  it('a finite total is found even when the running total passes twice the largest number', () => {
+    for (const [i, v] of ['1.7e308', '1.7e308', '1.7e308', '-1.7e308', '-1.7e308'].entries()) {
+      index.upsert(entry(`huge/n${i}.md`, `---\ng: alpha\nv: ${v}\n---\nx`));
+    }
+    const r = run({ pathPrefix: 'huge', sum: ['v'], groupBy: 'g', countOnly: true });
+    expect(r.hint).toBeUndefined();
+    expect(r.sums?.v).toBeCloseTo(1.7e308, -294);
+    expect((r.groups?.[0] as { sums?: { v?: number } }).sums?.v).toBeCloseTo(1.7e308, -294);
+  });
+});

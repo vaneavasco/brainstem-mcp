@@ -46,7 +46,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters. A listing deeper than one level with no glob and over 200 entries shows its shape instead (shallowest entries, files per folder in "folders"); a glob returns the paths. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters. A listing deeper than one level, over 200 entries, with sub-folders and no glob shows its shape instead (shallowest entries, files per folder in "folders"); a glob returns the paths. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
       inputSchema: z.strictObject({
         path: z.string().optional(),
@@ -148,7 +148,9 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
             ? ''
             : `; "folders" counts every file under each listed folder, at any depth, whatever glob or depth was asked${foldersCut ? ' (itself truncated too)' : ''}`) +
           `: ${allFolders.length === 0 ? 'narrow with path' : 'list one folder'}` +
-          `${glob === undefined ? ', pass glob (e.g. "**/*.md") for the paths themselves' : ', or a narrower glob'}` +
+          // A glob brings the paths back only when the shape rule withheld them; when the budget
+          // cut the listing, a glob over the same files is cut at the same place.
+          `${shapeFirst && !wouldTruncate ? ', pass glob (e.g. "**/*.md") for the paths themselves' : ', or a narrower glob'}` +
           ', or count with vault_query { pathPrefix, countOnly: true }.';
         // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
         // for entries/folders never overshoots what the final, possibly-shorter hint leaves.

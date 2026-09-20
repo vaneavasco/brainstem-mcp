@@ -444,20 +444,23 @@ function budgetHint(kept: number, asked: number): string {
  *  being left out. Built via Map -> Object.fromEntries, never `obj[field] =`, so a field literally
  *  named "__proto__" becomes an ordinary own key instead of silently reassigning the prototype
  *  (the same hazard `buildRow` guards against for selected columns). */
+const SCALE = 2 ** -32;
+
 /** A running total that is plain addition whenever plain addition can hold it, so the result is
  *  exactly what adding the values gives. Only when the plain total has gone non-finite is the
- *  total of the halves used, doubled: 1e308 + 1e308 + (-1e308) is 1e308, not an overflow. The
- *  halves are not used otherwise because halving a subnormal (5e-324) loses it. */
+ *  scaled total used: every value times 2^-32 (a power of two, so exact except for subnormals),
+ *  which cannot overflow below four thousand million addends, scaled back at the end. So
+ *  1.7e308 three times and -1.7e308 twice is 1.7e308, not an overflow, while a total that truly
+ *  does not fit a number still comes out non-finite and is reported as such. */
 class Total {
   private plain = 0;
-  private halves = 0;
+  private scaled = 0;
   add(v: number): void {
     this.plain += v;
-    this.halves += v / 2;
+    this.scaled += v * SCALE;
   }
-  /** Infinity or NaN only when the true total does not fit a number. */
   value(): number {
-    return Number.isFinite(this.plain) ? this.plain : this.halves * 2;
+    return Number.isFinite(this.plain) ? this.plain : this.scaled / SCALE;
   }
 }
 
