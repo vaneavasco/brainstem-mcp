@@ -19,6 +19,10 @@ export type Op =
   | 'in'
   | 'regex';
 
+/** Cap on the number of needles a "contains"/"startsWith" array value may carry — past this, one
+ *  query per candidate is no cheaper, and the caller likely wants a different op. */
+export const MAX_CONTAINS_NEEDLES = 50;
+
 export interface Cond {
   field: string;
   op: Op;
@@ -189,18 +193,32 @@ function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
   return value.some((v) => typedCompare(fieldVal, v) === 0);
 }
 
-function matchesContains(fieldVal: unknown, value: unknown): boolean {
-  const needle = String(value).toLowerCase();
+function matchesOneContains(fieldVal: unknown, needleValue: unknown): boolean {
+  const needle = String(needleValue).toLowerCase();
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => String(el).toLowerCase().includes(needle));
   return String(fieldVal).toLowerCase().includes(needle);
 }
 
-function matchesStartsWith(fieldVal: unknown, value: unknown): boolean {
-  const prefix = String(value).toLowerCase();
+/** `value` may be a single needle or (validated up front by compileCond) an array of up to
+ *  MAX_CONTAINS_NEEDLES needles — "any of" them matching is a match, so checking a list field
+ *  against many candidate values takes one query instead of one per candidate. */
+function matchesContains(fieldVal: unknown, value: unknown): boolean {
+  const needles = Array.isArray(value) ? value : [value];
+  return needles.some((needle) => matchesOneContains(fieldVal, needle));
+}
+
+function matchesOneStartsWith(fieldVal: unknown, prefixValue: unknown): boolean {
+  const prefix = String(prefixValue).toLowerCase();
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => String(el).toLowerCase().startsWith(prefix));
   return String(fieldVal).toLowerCase().startsWith(prefix);
+}
+
+/** Same "any of" array-value semantics as matchesContains. */
+function matchesStartsWith(fieldVal: unknown, value: unknown): boolean {
+  const prefixes = Array.isArray(value) ? value : [value];
+  return prefixes.some((prefix) => matchesOneStartsWith(fieldVal, prefix));
 }
 
 function matchesExists(fieldVal: unknown, value: unknown): boolean {
@@ -233,11 +251,27 @@ function compileSafeRegex(value: unknown): SafeMatcher {
   return compileSafePattern(String(value));
 }
 
+/** Validates a "contains"/"startsWith" array value up front: 1–MAX_CONTAINS_NEEDLES needles,
+ *  each a string or number (the same types a scalar `value` is ever meaningfully compared as). */
+function validateNeedleArray(op: 'contains' | 'startsWith', value: unknown[]): void {
+  if (value.length === 0 || value.length > MAX_CONTAINS_NEEDLES) {
+    throw new VaultError(
+      'INVALID_INPUT',
+      `"${op}" with an array value needs 1–${MAX_CONTAINS_NEEDLES} needles (got ${value.length}).`,
+    );
+  }
+  for (const needle of value) {
+    if (typeof needle !== 'string' && typeof needle !== 'number') {
+      throw new VaultError('INVALID_INPUT', `"${op}" array needles must be strings or numbers.`);
+    }
+  }
+}
+
 type CompiledCond = (entry: IndexEntry, graph: VaultGraph) => boolean;
 
 /** Compiles one Cond into a predicate. Regex conditions are validated and built once, up front,
- *  so an invalid pattern or a malformed "in" value throws immediately regardless of how many (or
- *  few) entries are scanned. */
+ *  so an invalid pattern or a malformed "in"/array "contains"/"startsWith" value throws
+ *  immediately regardless of how many (or few) entries are scanned. */
 function compileCond(cond: Cond): CompiledCond {
   if (cond.op === 'regex') {
     const matcher = compileSafeRegex(cond.value);
@@ -245,6 +279,9 @@ function compileCond(cond: Cond): CompiledCond {
   }
   if (cond.op === 'in' && !Array.isArray(cond.value)) {
     throw new VaultError('INVALID_INPUT', '"in" requires an array value.');
+  }
+  if ((cond.op === 'contains' || cond.op === 'startsWith') && Array.isArray(cond.value)) {
+    validateNeedleArray(cond.op, cond.value);
   }
   return (entry, graph) => {
     const fv = fieldValue(entry, graph, cond.field);

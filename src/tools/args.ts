@@ -26,9 +26,10 @@ export const DetailedPathArg = z
 export const QueryOpSchema = z
   .enum(['eq', 'neq', 'contains', 'startsWith', 'exists', 'gt', 'gte', 'lt', 'lte', 'in', 'regex'])
   .describe(
-    'Comparison operator. "regex" is a FULL match — the pattern is implicitly anchored to the ' +
-      'whole value — over a reduced, linear-time syntax: literals, ".", "[classes]", "* + ? ' +
-      '{m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", backreferences, ' +
+    'Comparison operator. "contains"/"startsWith" also accept an array value: true when any ' +
+      'needle matches (max 50). "regex" is a FULL match — the pattern is implicitly anchored to ' +
+      'the whole value — over a reduced, linear-time syntax: literals, ".", "[classes]", ' +
+      '"* + ? {m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", backreferences, ' +
       'lookarounds or named groups; max 200 characters.',
   );
 

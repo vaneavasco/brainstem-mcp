@@ -219,6 +219,52 @@ describe('evaluateQuery — where operators by type', () => {
     ]);
   });
 
+  it('contains: an array value matches when any needle matches (scalar field)', () => {
+    expect(
+      paths(run({ where: [{ field: 'status', op: 'contains', value: ['zzz', 'ctiv'] }] })),
+    ).toEqual(['archive/d.md', 'notes/a.md', 'notes/b.md']);
+  });
+
+  it('contains: an array value against an array field — any needle, any element', () => {
+    expect(
+      paths(run({ where: [{ field: 'owners', op: 'contains', value: ['zzz', 'aro'] }] })),
+    ).toEqual(['notes/b.md']);
+  });
+
+  it('startsWith: an array value matches when any needle matches', () => {
+    expect(
+      paths(run({ where: [{ field: 'status', op: 'startsWith', value: ['zzz', 'IN'] }] })),
+    ).toEqual(['notes/b.md']);
+  });
+
+  it('contains/startsWith: an empty array value throws INVALID_INPUT', () => {
+    expect(() => run({ where: [{ field: 'status', op: 'contains', value: [] }] })).toThrow(
+      VaultError,
+    );
+    expect(() => run({ where: [{ field: 'status', op: 'startsWith', value: [] }] })).toThrow(
+      VaultError,
+    );
+  });
+
+  it('contains: more than 50 needles throws INVALID_INPUT', () => {
+    const needles = Array.from({ length: 51 }, (_, i) => `n${i}`);
+    try {
+      run({ where: [{ field: 'status', op: 'contains', value: needles }] });
+      expect.unreachable('expected evaluateQuery to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(VaultError);
+      expect((error as VaultError).code).toBe('INVALID_INPUT');
+    }
+  });
+
+  it('contains: validates the needle array up front, even when no entry would be scanned', () => {
+    index.remove('notes/a.md');
+    index.remove('notes/b.md');
+    index.remove('notes/c.md');
+    index.remove('archive/d.md');
+    expect(() => run({ where: [{ field: 'status', op: 'contains', value: [] }] })).toThrow();
+  });
+
   it('exists: true (default) requires the field to be present', () => {
     expect(paths(run({ where: [{ field: 'status', op: 'exists' }] }))).toEqual([
       'archive/d.md',

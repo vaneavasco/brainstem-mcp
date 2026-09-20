@@ -123,6 +123,23 @@ describe('vault_query', () => {
     expect(text(r)).toMatch(/limit/);
   });
 
+  it('contains with an array value matches any needle', async () => {
+    const r = await h.call('vault_query', {
+      where: [{ field: 'status', op: 'contains', value: ['zzz', 'don'] }],
+    });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as QueryResult;
+    expect(body.rows.map((row) => row.path)).toEqual(['projects/beta.md']);
+  });
+
+  it('contains with an empty array value fails with INVALID_INPUT', async () => {
+    const r = await h.call('vault_query', {
+      where: [{ field: 'status', op: 'contains', value: [] }],
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/^INVALID_INPUT: /);
+  });
+
   it('format: "columns" carries the same content as rows, with rows empty', async () => {
     const r = await h.call('vault_query', {
       where: [{ field: 'status', op: 'eq', value: 'active' }],

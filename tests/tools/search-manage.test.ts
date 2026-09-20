@@ -116,6 +116,16 @@ describe('vault_search', () => {
     expect(sc.matches.map((m) => m.path)).toEqual(['00-inbox/todo.md']);
   });
 
+  it('narrows candidates by a where "contains" array value (any of) before searching text', async () => {
+    // Same compiler as vault_query: an array value on "contains" matches any of its needles.
+    const r = await h.call('vault_search', {
+      query: 'milk',
+      where: [{ field: 'status', op: 'contains', value: ['zzz', 'ope'] }],
+    });
+    const sc = r.structuredContent as { matches: { path: string }[] };
+    expect(sc.matches.map((m) => m.path)).toEqual(['00-inbox/todo.md']);
+  });
+
   it('narrows candidates by glob before searching text', async () => {
     await h.call('vault_write', { path: 'note.txt', content: 'milk in a plain text file\n' });
     const r = await h.call('vault_search', { query: 'milk', glob: '**/*.md' });
