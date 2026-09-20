@@ -77,7 +77,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .describe('Keep existing frontmatter keys not present in the new content.'),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({ path: z.string(), bytes: z.number(), hash: z.string() }),
+      outputSchema: z.looseObject({ path: z.string(), bytes: z.number(), hash: z.string() }),
       annotations: OVERWRITE,
     },
     ({ path, content, mergeFrontmatter, expectedHash }) =>
@@ -108,7 +108,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         mimeType: z.string(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         bytes: z.number(),
         mimeType: z.string(),
@@ -148,7 +148,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         dryRun: z.boolean().optional(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         applied: z.number(),
         dryRun: z.boolean(),
@@ -195,7 +195,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         unique: UniqueArg,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         bytes: z.number(),
         hash: z.string(),
@@ -266,7 +266,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         unset: z.array(z.string()).optional(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         frontmatter: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -323,9 +323,9 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .min(1)
           .max(MAX_BATCH),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         updated: z.array(z.string()),
-        failed: z.array(z.object({ path: z.string(), error: z.string() })),
+        failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
       }),
       annotations: OVERWRITE,
     },

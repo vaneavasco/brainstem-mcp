@@ -95,6 +95,14 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- Tool results may grow without breaking anyone. Output schemas were closed
+  (`additionalProperties: false`), and clients cache the tool list: the first result that
+  carried a field added after the client's copy (`hint` on a grouped query) was rejected whole
+  with "data must NOT have additional properties". Every output schema is now open, and a test
+  walks all of them. **Upgrading to this release:** a client that cached the previous tool list
+  keeps its closed schemas until it refreshes (the list is cacheable for one hour; reconnecting
+  the connector refreshes it at once), so it rejects results with new fields and does not see
+  new arguments until then.
 - Tool arguments nobody asked for are now an error instead of being ignored. A misspelled key
   used to be dropped without a word: `vault_frontmatter_update { updates: … }` answered "ok" and
   changed nothing, and `expected_hash` (for `expectedHash`) silently switched the concurrency

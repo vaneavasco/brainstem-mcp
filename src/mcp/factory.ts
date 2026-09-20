@@ -17,12 +17,12 @@ export interface FactoryDeps {
   instructions?: () => Promise<string>;
 }
 
-const PingOutput = z.object({
+const PingOutput = z.looseObject({
   server: z.string(),
   version: z.string(),
   era: z.enum(['legacy', 'modern']),
   now: z.string(),
-  index: z.object({
+  index: z.looseObject({
     notes: z.number(),
     builtAt: z.string(),
     /** null until the background reconcile has run at least once. */

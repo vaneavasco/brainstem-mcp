@@ -22,8 +22,8 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
     return fresh;
   }
 
-  const CategorySummary = z.object({ count: z.number(), examples: z.array(z.string()) });
-  const Hub = z.object({ path: z.string(), backlinks: z.number() });
+  const CategorySummary = z.looseObject({ count: z.number(), examples: z.array(z.string()) });
+  const Hub = z.looseObject({ path: z.string(), backlinks: z.number() });
 
   server.registerTool(
     'vault_analytics_summary',
@@ -32,10 +32,10 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
       description:
         'Counts and examples of vault hygiene issues: notes without frontmatter, missing required frontmatter keys, broken wikilinks, ambiguous links, orphan notes, inconsistent tag spellings, non-UTF-8 files and oversized files. Also reports the top hub notes by backlink count. Results are cached for 10 minutes unless refresh=true.',
       inputSchema: z.strictObject({ refresh: z.boolean().optional() }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         scannedFiles: z.number(),
         truncated: z.boolean(),
-        categories: z.object(
+        categories: z.looseObject(
           Object.fromEntries(ANALYTICS_CATEGORIES.map((c) => [c, CategorySummary])),
         ),
         hubs: z.array(Hub),
@@ -59,10 +59,12 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
         limit: z.number().int().min(1).max(100).optional(),
         refresh: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         category: z.string(),
         total: z.number(),
-        findings: z.array(z.object({ category: z.string(), path: z.string(), detail: z.string() })),
+        findings: z.array(
+          z.looseObject({ category: z.string(), path: z.string(), detail: z.string() }),
+        ),
       }),
       annotations: READ_ONLY,
     },

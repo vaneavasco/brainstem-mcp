@@ -50,6 +50,31 @@ describe('tool surface parity', () => {
     }
   });
 
+  it("output schemas stay open to new fields: a client that cached yesterday's tool list must not reject tomorrow's result", async () => {
+    const { tools } = await h.client.listTools();
+    const closed: string[] = [];
+    const walk = (node: unknown, where: string): void => {
+      if (!node || typeof node !== 'object') return;
+      const o = node as Record<string, unknown>;
+      if (o.type === 'object' && o.additionalProperties === false) closed.push(where);
+      for (const [k, v] of Object.entries(o)) walk(v, `${where}.${k}`);
+    };
+    for (const tool of tools) if (tool.outputSchema) walk(tool.outputSchema, tool.name);
+    expect(closed).toEqual([]);
+  });
+
+  it('input schemas are closed: an argument nobody declared is refused', async () => {
+    const { tools } = await h.client.listTools();
+    for (const tool of tools) {
+      const props = (tool.inputSchema as { properties?: object }).properties ?? {};
+      if (Object.keys(props).length === 0) continue; // a tool without arguments has nothing to misspell
+      expect(
+        (tool.inputSchema as { additionalProperties?: unknown }).additionalProperties,
+        tool.name,
+      ).toBe(false);
+    }
+  });
+
   it('exposes exactly the 30 vault tools plus brainstem_ping and brainstem_guide, each with title, description and full annotations', async () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(

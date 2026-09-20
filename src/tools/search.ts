@@ -222,16 +222,16 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           .optional()
           .describe('Restrict candidate files to this glob, e.g. "**/*.md".'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         query: z.string(),
         regex: z.boolean(),
         files: z.array(
-          z.object({
+          z.looseObject({
             path: z.string(),
-            matches: z.array(z.object({ line: z.number(), text: z.string() })),
+            matches: z.array(z.looseObject({ line: z.number(), text: z.string() })),
           }),
         ),
-        matches: z.array(z.object({ path: z.string(), line: z.number(), text: z.string() })),
+        matches: z.array(z.looseObject({ path: z.string(), line: z.number(), text: z.string() })),
         total: z.number(),
         truncated: z.boolean(),
         hint: z.string().optional(),
@@ -312,9 +312,9 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         contains: z.string().optional(),
         exists: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         field: z.string(),
-        hits: z.array(z.object({ path: z.string(), value: z.unknown() })),
+        hits: z.array(z.looseObject({ path: z.string(), value: z.unknown() })),
         truncated: z.boolean(),
       }),
       annotations: READ_ONLY,

@@ -21,7 +21,7 @@ import {
   TRUNCATED_HINT,
 } from './results.ts';
 
-const NoteSummary = z.object({
+const NoteSummary = z.looseObject({
   path: z.string(),
   frontmatter: z.record(z.string(), z.unknown()),
   hasFrontmatter: z.boolean(),
@@ -125,9 +125,9 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         text: z.string(),
         truncated: z.boolean(),
         totalChars: z.number(),
-        sectionRange: z.object({ startLine: z.number(), endLine: z.number() }).optional(),
+        sectionRange: z.looseObject({ startLine: z.number(), endLine: z.number() }).optional(),
         sectionRanges: z
-          .array(z.object({ heading: z.string(), startLine: z.number(), endLine: z.number() }))
+          .array(z.looseObject({ heading: z.string(), startLine: z.number(), endLine: z.number() }))
           .optional(),
         hint: z.string().optional(),
       }),
@@ -208,7 +208,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           .optional()
           .describe('Cut the body of each note after this many characters.'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         notes: z.array(
           NoteSummary.extend({
             body: z.string(),
@@ -217,7 +217,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           }),
         ),
         missing: z.array(z.string()),
-        failed: z.array(z.object({ path: z.string(), error: z.string() })),
+        failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
         hint: z.string().optional(),
       }),
       annotations: READ_ONLY,

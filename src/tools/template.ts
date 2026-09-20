@@ -47,7 +47,7 @@ export function registerTemplateTools(server: McpServer, tc: ToolContext): void 
           .optional()
           .describe('{{title}} value. Defaults to the target basename without ".md".'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         hash: z.string(),
         unresolved: z.array(z.string()),

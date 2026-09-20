@@ -13,7 +13,7 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 const SortSchema = z.strictObject({ field: z.string().min(1), order: z.enum(['asc', 'desc']) });
 
 /**
- * Typed `z.ZodType<Query>` (not just `z.object({...})`) so this schema's inferred output is
+ * Typed `z.ZodType<Query>` (not just `z.looseObject({...})`) so this schema's inferred output is
  * checked against the pure `Query` interface at compile time — the same pattern `tx.ts` uses for
  * `TxOp`. If the two ever drift, this fails typecheck instead of silently succeeding behind an
  * `as Query` cast at the call site.
@@ -36,15 +36,15 @@ const QuerySchema: z.ZodType<Query> = z.strictObject({
     ),
 });
 
-const QueryRowSchema = z.object({ path: z.string() }).catchall(z.unknown());
+const QueryRowSchema = z.looseObject({ path: z.string() }).catchall(z.unknown());
 
-const GroupSchema = z.object({
+const GroupSchema = z.looseObject({
   key: z.string(),
   count: z.number(),
   paths: z.array(z.string()),
 });
 
-const QueryResultSchema = z.object({
+const QueryResultSchema = z.looseObject({
   rows: z.array(QueryRowSchema),
   total: z.number(),
   truncated: z.boolean(),

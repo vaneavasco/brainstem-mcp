@@ -49,10 +49,10 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         includeFiles: z.boolean().optional(),
         includeDirs: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         entries: z.array(
-          z.object({
+          z.looseObject({
             path: z.string(),
             kind: z.enum(['file', 'dir']),
             size: z.number().optional(),
@@ -105,12 +105,12 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
               'containing either; false otherwise.',
           ),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         from: z.string(),
         to: z.string(),
         hash: z.string().nullable(),
-        linksUpdated: z.array(z.object({ path: z.string(), count: z.number() })),
-        failed: z.array(z.object({ path: z.string(), error: z.string() })),
+        linksUpdated: z.array(z.looseObject({ path: z.string(), count: z.number() })),
+        failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
       }),
       annotations: MOVE_OR_DELETE,
     },
@@ -155,7 +155,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         confirm: z.boolean(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({ path: z.string(), trashed: z.boolean() }),
+      outputSchema: z.looseObject({ path: z.string(), trashed: z.boolean() }),
       annotations: MOVE_OR_DELETE,
     },
     ({ path, confirm, expectedHash }) =>

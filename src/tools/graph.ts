@@ -15,7 +15,7 @@ const LinkInclude = z.enum(['outgoing', 'backlinks', 'embeds', 'unlinkedMentions
 type LinkIncludeT = z.infer<typeof LinkInclude>;
 const DEFAULT_INCLUDE: LinkIncludeT[] = ['outgoing', 'backlinks', 'embeds'];
 
-const OutgoingLink = z.object({
+const OutgoingLink = z.looseObject({
   target: z.string(),
   kind: z.enum(['wiki', 'md']),
   line: z.number(),
@@ -26,9 +26,9 @@ const OutgoingLink = z.object({
   anchorFound: z.boolean().optional(),
 });
 
-const ContextHit = z.object({ path: z.string(), line: z.number(), context: z.string() });
+const ContextHit = z.looseObject({ path: z.string(), line: z.number(), context: z.string() });
 
-const TagInfoSchema = z.object({
+const TagInfoSchema = z.looseObject({
   tag: z.string(),
   count: z.number(),
   nested: z.boolean(),
@@ -44,7 +44,7 @@ interface HeadingNode {
 }
 
 const HeadingNodeSchema: z.ZodType<HeadingNode> = z.lazy(() =>
-  z.object({
+  z.looseObject({
     level: z.number(),
     text: z.string(),
     line: z.number(),
@@ -120,19 +120,19 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           .optional()
           .describe('Return just "total" (the per-kind counts) with every link list empty.'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         outgoing: z.array(OutgoingLink),
         backlinks: z.array(ContextHit),
         embeds: z.array(ContextHit),
         unlinkedMentions: z.array(ContextHit),
-        truncated: z.object({
+        truncated: z.looseObject({
           outgoing: z.boolean(),
           backlinks: z.boolean(),
           embeds: z.boolean(),
           unlinkedMentions: z.boolean(),
         }),
-        total: z.object({
+        total: z.looseObject({
           outgoing: z.number(),
           backlinks: z.number(),
           embeds: z.number(),
@@ -226,12 +226,15 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         prefix: z.string().optional(),
         includeNested: z.boolean().optional(),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         tags: z.array(TagInfoSchema).optional(),
         tag: z.string().optional(),
         notes: z
           .array(
-            z.object({ path: z.string(), sources: z.array(z.enum(['frontmatter', 'inline'])) }),
+            z.looseObject({
+              path: z.string(),
+              sources: z.array(z.enum(['frontmatter', 'inline'])),
+            }),
           )
           .optional(),
         total: z.number(),
@@ -263,7 +266,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
       description:
         'Structural summary of one note from the in-memory index: frontmatter keys, tags, a heading tree, block IDs, word count, and link/backlink counts. Never reads the file from disk.',
       inputSchema: z.strictObject({ path: DetailedPathArg }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         hash: z.string(),
         modifiedAt: z.string(),
@@ -272,7 +275,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         frontmatterKeys: z.array(z.string()),
         tags: z.array(z.string()),
         headings: z.array(HeadingNodeSchema),
-        blockIds: z.array(z.object({ id: z.string(), line: z.number() })),
+        blockIds: z.array(z.looseObject({ id: z.string(), line: z.number() })),
         linkCount: z.number(),
         backlinkCount: z.number(),
       }),

@@ -74,7 +74,7 @@ const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
   }),
 ]);
 
-const OpResultSchema = z.object({
+const OpResultSchema = z.looseObject({
   index: z.number(),
   op: z.enum(['write', 'edit', 'append', 'frontmatter_update', 'move', 'delete']),
   ok: z.boolean(),
@@ -137,7 +137,7 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
         ops: z.array(TxOpSchema).describe(`Ordered operations, 1 to ${MAX_TX_OPS} of them.`),
         dryRun: z.boolean().optional().describe('Validate and return diffs without writing.'),
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         id: z.string(),
         applied: z.boolean(),
         dryRun: z.boolean(),

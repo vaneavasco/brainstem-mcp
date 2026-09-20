@@ -46,7 +46,7 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
       title: 'Read canvas',
       description: 'Read an Obsidian .canvas file (JSON Canvas) and return its nodes and edges.',
       inputSchema: z.strictObject({ path: z.string() }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         nodes: z.array(z.record(z.string(), z.unknown())),
         edges: z.array(z.record(z.string(), z.unknown())),
@@ -72,7 +72,7 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         node: CanvasNodeInputSchema,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         node: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -107,7 +107,7 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         edge: CanvasEdgeInputSchema,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         edge: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -142,7 +142,7 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         patch: CanvasNodePatchSchema,
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         node: z.record(z.string(), z.unknown()),
         hash: z.string(),
@@ -174,7 +174,7 @@ export function registerCanvasTools(server: McpServer, tc: ToolContext): void {
         edgeIds: z.array(z.string()).optional(),
         expectedHash: ExpectedHashArg,
       }),
-      outputSchema: z.object({
+      outputSchema: z.looseObject({
         path: z.string(),
         removedNodes: z.array(z.string()),
         removedEdges: z.array(z.string()),
