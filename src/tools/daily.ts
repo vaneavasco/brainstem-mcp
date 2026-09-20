@@ -59,7 +59,7 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Read daily note',
       description:
-        'Read the daily note for a date (default today). Fails with NOT_FOUND when it does not exist — it never creates one; use vault_daily_note_append to create.',
+        'Read the daily note for a date (default today). Fails with NOT_FOUND when it does not exist — it never creates one; use vault_daily_note_append to create. A final "[brainstem] …" content block is metadata (path, hash), never part of the note.',
       inputSchema: z.object({ date: DateArg }),
       outputSchema: z.object({
         path: z.string(),

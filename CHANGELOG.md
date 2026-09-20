@@ -14,12 +14,15 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   The descriptions of `vault_list`, `vault_search`, `vault_query` and `vault_read` point to it.
 - `vault_read` takes `maxChars` (500–120,000): a look at a note of unknown size without paying
   for 120k characters. `vault_query` takes `countOnly`: `total` and group counts, no rows and
-  no example paths — "how many per status" in a few hundred characters instead of thousands.
+  no example paths (`limit`, `select`, `sort` ignored) — "how many per status" in a few hundred characters instead of thousands.
 - `vault_read` takes `sections` (1–10 heading paths): the sections come back in
   document order, joined by a blank line, with `sectionRanges` — one call where a
   reader needed one per heading. Two paths that resolve to the same section return
   it once; an unknown path fails with `NOT_FOUND` and the list of headings, as
-  `section` does. `section` and `sections` cannot be combined.
+  `section` does. `section` and `sections` cannot be combined. Content lines come back
+  byte-exact (line endings, trailing spaces); only the blank line between sections is
+  synthetic, and a section nested in another requested one is returned once, labelled
+  with the heading it resolved to.
 - `vault_read` and `vault_daily_note_read` add a second content block with the note's
   `path`, its `hash` and, when the text was cut, how to read the rest. Clients that show
   the model only the content blocks (the claude.ai connector does) never saw the hash —
@@ -53,8 +56,6 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
-- `vault_read` with `sections`: sections are separated by exactly one blank line whatever the
-  note's own spacing, and a section nested in another requested section is returned once.
 - The content block of a truncated `vault_read` carried two truncation markers, the
   second with a wrong total (the already-clamped text was clamped again).
 - Frontmatter parsing no longer emits a Node process warning for every note whose

@@ -78,6 +78,11 @@ describe('vault_query', () => {
     );
   });
 
+  it('countOnly without groupBy is just the total, whatever limit says', async () => {
+    const r = await h.call('vault_query', { pathPrefix: 'projects', countOnly: true, limit: 1 });
+    expect(r.structuredContent).toEqual({ rows: [], total: 2, truncated: false });
+  });
+
   it('filters by nested-aware tags', async () => {
     const r = await h.call('vault_query', { tags: { any: ['proj'] } });
     expect(r.isError).toBeFalsy();

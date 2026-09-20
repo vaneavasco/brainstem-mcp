@@ -136,12 +136,34 @@ describe('vault_read sections — shape', () => {
     expect((r.structuredContent as { sectionRanges: unknown[] }).sectionRanges).toHaveLength(1);
   });
 
+  it('keeps every content line byte-exact: CRLF endings and trailing spaces survive, only blank lines between sections are normalised', async () => {
+    await h.call('vault_write', {
+      path: 'crlf.md',
+      content: '# T\r\n## A\r\na  \r\n\r\n\r\n## B\r\nb\r\n',
+    });
+    const r = await h.call('vault_read', { path: 'crlf.md', sections: ['A', 'B'] });
+    expect(text(r)).toBe('## A\r\na  \r\n\r\n## B\r\nb\r\n');
+    await h.call('vault_write', { path: 'lf.md', content: '# T\n## A\nhard break  \n\n## B\nb' });
+    const lf = await h.call('vault_read', { path: 'lf.md', sections: ['A', 'B'] });
+    expect(text(lf)).toBe('## A\nhard break  \n\n## B\nb\n');
+  });
+
+  it('labels each returned range with the heading it resolved to, whatever spelling was asked for', async () => {
+    await h.call('vault_write', { path: 't.md', content: TIGHT });
+    const r = await h.call('vault_read', { path: 't.md', sections: ['two > deep', 'ONE'] });
+    expect(
+      (r.structuredContent as { sectionRanges: { heading: string }[] }).sectionRanges.map(
+        (x) => x.heading,
+      ),
+    ).toEqual(['One', 'Deep']);
+  });
+
   it('maxChars cuts the read earlier than the server limit and says so', async () => {
     await h.call('vault_write', { path: 'long.md', content: `# L\n${'word '.repeat(2_000)}\n` });
     const r = await h.call('vault_read', { path: 'long.md', maxChars: 1_000 });
     expect(r.structuredContent).toMatchObject({ truncated: true, totalChars: 10_005 });
     expect(text(r)).toContain('[truncated: showing 1000 of 10005 characters]');
-    expect(text(r).length).toBeLessThan(1_100);
+    expect(text(r).length).toBeLessThan(1_060); // 1,000 + the marker line
   });
 
   it('starts the second content block on its own line', async () => {

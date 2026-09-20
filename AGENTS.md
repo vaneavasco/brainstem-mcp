@@ -21,7 +21,7 @@ src/auth/as/          authorization server: metadata, cimd (+net SSRF guard), au
 src/auth/rs/          resource server: bearer token verifier
 src/auth/store/       FileTokenStore (JSON, atomic writes, mtime reload)
 src/auth/mount.ts     rate limiters, bearer gate, router mounting
-src/mcp/factory.ts    McpServer per request; instructions; brainstem_ping
+src/mcp/factory.ts    McpServer per request; instructions; brainstem_ping, brainstem_guide
 src/tools/            the 30 vault_* tools (read/write/search/manage/daily/canvas/analytics/graph/query/tx/template)
 src/storage/          LocalFSAdapter, path policy (reserved `_brainstem/`), frontmatter, limits, write-gate, transaction
 src/vault/            runtime, frontmatter index, note-parse, graph, link-rewrite, query, sections, templates,

@@ -67,13 +67,12 @@ export function registerQueryTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Query notes',
       description:
-        'Bases-style structured query over the in-memory index — no disk reads. Filter with ' +
-        '"where" on frontmatter dot paths or virtual fields (path, basename, folder, modifiedAt, ' +
-        'size, wordCount, tags, hash, backlinks/outgoing as counts, backlinkPaths/outgoingPaths ' +
-        'as path arrays); comparisons are typed (numeric, chronological ISO dates, ' +
-        'case-insensitive strings/arrays). "tags" (any/all/none) is nested-aware ("proj" matches ' +
-        `"proj/x"). Supports pathPrefix, select, sort, groupBy, and limit (default 100, max ` +
-        `${MAX_QUERY_ROWS}); "countOnly" returns just total and group counts. ` +
+        'Structured query over the in-memory index — no disk reads. "where" filters on frontmatter ' +
+        'dot paths or virtual fields (path, basename, folder, modifiedAt, size, wordCount, tags, ' +
+        'hash, backlinks/outgoing counts, backlinkPaths/outgoingPaths arrays) with typed ' +
+        'comparisons; "tags" (any/all/none) is nested-aware. Supports pathPrefix, select, sort, ' +
+        `groupBy, limit (default 100, max ${MAX_QUERY_ROWS}); "countOnly" returns just total and ` +
+        'group counts (limit, select, sort ignored). Prefer it to vault_search_frontmatter. ' +
         GUIDE_POINTER,
       inputSchema: QuerySchema,
       outputSchema: QueryResultSchema,

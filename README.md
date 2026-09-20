@@ -125,7 +125,7 @@ On first start the server seeds `<vault>/_brainstem/instructions.md`. Open it in
 
 ### Safe concurrent edits
 
-Every read (`vault_read`, `vault_batch_read`, `vault_outline`) returns a content `hash`. Pass it back as `expectedHash` on a write (`vault_write`, `vault_edit`, `vault_append`, `vault_frontmatter_update`, or moving/deleting a single file): if the note changed since — another Claude session, or you editing it in Obsidian — the call fails with `CONFLICT` and the current hash instead of silently overwriting. To change several notes as one unit, `vault_transaction` (up to 20 ops) applies every op or rolls all of them back, using a journal under `_brainstem/tx/` that is removed once the transaction settles.
+Every read (`vault_read`, `vault_batch_read`, `vault_daily_note_read`, `vault_outline`) returns a content `hash`. Pass it back as `expectedHash` on a write (`vault_write`, `vault_edit`, `vault_append`, `vault_frontmatter_update`, or moving/deleting a single file): if the note changed since — another Claude session, or you editing it in Obsidian — the call fails with `CONFLICT` and the current hash instead of silently overwriting. To change several notes as one unit, `vault_transaction` (up to 20 ops) applies every op or rolls all of them back, using a journal under `_brainstem/tx/` that is removed once the transaction settles.
 
 ### Renames keep links working
 

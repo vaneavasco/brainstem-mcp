@@ -25,6 +25,9 @@ const NoteSummary = z.object({
   hash: z.string(),
 });
 
+/** Blank (whitespace-only) lines at the end of a slice, including the final line break. */
+const TRAILING_BLANK_LINES = /(?:\r?\n[ \t]*)*\r?\n?$/;
+
 export function registerReadTools(server: McpServer, tc: ToolContext): void {
   const { adapter } = tc.runtime;
 
@@ -33,7 +36,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Read note',
       description:
-        'Read one file from the vault: the full text (frontmatter + body). Large files are truncated at 120k characters ("maxChars" cuts earlier). With "section" (a heading path like "Heading" or "H1 > H2", case-insensitive), returns only that section\'s text and its sectionRange instead of the whole file; with "sections" (several heading paths), those sections in document order and their sectionRanges — one call instead of one per heading. A truncated result carries a "hint": read it by section. ' +
+        'Read one file: the full text (frontmatter + body), cut at 120k characters ("maxChars" cuts earlier; a cut result carries a "hint": read it by section). "section" (a heading path like "Heading" or "H1 > H2", case-insensitive) returns only that section and its sectionRange; "sections" returns several in document order with sectionRanges — text inside a section is verbatim, the blank line between sections is added. A final "[brainstem] …" content block is metadata (path, hash), never part of the note. ' +
         GUIDE_POINTER,
       inputSchema: z.object({
         path: DetailedPathArg,
@@ -58,7 +61,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           .max(MAX_RESULT_CHARS)
           .optional()
           .describe(
-            'Cut the returned text after this many characters (a look at a note of unknown size).',
+            'Cut the returned text after this many characters, plus a short truncation marker (a look at a note of unknown size).',
           ),
       }),
       outputSchema: NoteSummary.extend({
@@ -92,7 +95,8 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
               throw new VaultError('NOT_FOUND', describeUnknownHeading(note.content, heading));
             }
             // Two heading paths may resolve to one section ("B" and "A > B"): return it once.
-            if (!found.has(range.startLine)) found.set(range.startLine, { heading, range });
+            if (!found.has(range.startLine))
+              found.set(range.startLine, { heading: range.heading, range });
           }
           // Document order; a section inside another requested one is already in its parent's text.
           const ordered = [...found.values()]
@@ -111,9 +115,12 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             startLine: range.startLine,
             endLine: range.endLine,
           }));
+          // Content lines stay byte-exact (a model quotes them into vault_edit): only the blank lines
+          // after a section are dropped, and the separator uses the note's own line ending.
+          const eol = note.content.includes('\r\n') ? '\r\n' : '\n';
           textOut = `${ordered
-            .map(({ range }) => sliceSection(note.content, range).replace(/\s+$/, ''))
-            .join('\n\n')}\n`;
+            .map(({ range }) => sliceSection(note.content, range).replace(TRAILING_BLANK_LINES, ''))
+            .join(eol + eol)}${eol}`;
         } else if (section !== undefined) {
           const range = findSection(note.content, section);
           if (!range) {

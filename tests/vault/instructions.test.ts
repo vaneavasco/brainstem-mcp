@@ -28,7 +28,8 @@ describe('DEFAULT_INSTRUCTIONS', () => {
     for (const needle of ['vault_edit', 'vault_append', '.trash/', '_brainstem/', 'frontmatter']) {
       expect(DEFAULT_INSTRUCTIONS).toContain(needle);
     }
-    expect(DEFAULT_INSTRUCTIONS.length).toBeLessThan(2_000);
+    // Sent on every connection: short. Tool names are spelled out in full so the check below covers them.
+    expect(DEFAULT_INSTRUCTIONS.length).toBeLessThan(2_100);
   });
 
   it('says what to do with a truncated result', () => {

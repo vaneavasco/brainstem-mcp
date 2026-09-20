@@ -14,7 +14,7 @@ export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access t
 - Edit surgically: vault_edit (exact text replacement) or vault_append (optionally at a \`heading\`) instead of rewriting with vault_write; vault_frontmatter_update and vault_batch_frontmatter_update change metadata only.
 - Concurrency: reads return a \`hash\`. Pass it back as \`expectedHash\` on the write; a stale hash fails with CONFLICT (and the current hash) instead of overwriting silently, so re-read and retry. Several notes together: vault_transaction applies every op, or none.
 - Notes start with YAML frontmatter; keep existing keys. Link with [[wikilinks]]. vault_move rewrites every link that points at the moved note, by default.
-- \`.base\` and \`.canvas\` files are plain YAML/JSON; edit \`.canvas\` structurally with vault_canvas_read and its add_node / update_node / remove siblings; edit \`.base\` as text.
+- \`.base\` and \`.canvas\` files are plain YAML/JSON; edit \`.canvas\` structurally with vault_canvas_read, vault_canvas_add_node, vault_canvas_update_node, vault_canvas_remove; edit \`.base\` as text.
 - vault_create_from_template renders {{title}}/{{date}}/{{time}}/{{var}} placeholders into a new note.
 - Daily notes: vault_daily_note_read, vault_daily_note_append, vault_daily_note_path.
 - Deleting needs confirm=true and only moves the note to .trash/ — say so when you do.
