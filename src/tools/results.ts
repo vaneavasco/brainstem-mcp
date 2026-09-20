@@ -7,6 +7,12 @@ import { VaultError } from '../storage/types.ts';
 export const TRUNCATED_HINT =
   'Truncated: the text is incomplete. Use vault_outline to list the headings, then vault_read with "section" or "sections" — and never write truncated text back.';
 
+/**
+ * Appended to the description of the tools a conversation usually starts with. Not every client
+ * shows the model the connection `instructions`; a tool description always arrives.
+ */
+export const GUIDE_POINTER = 'New here? Call brainstem_guide first.';
+
 export function okText(text: string): CallToolResult {
   return { content: [{ type: 'text', text }] };
 }
@@ -35,7 +41,8 @@ export function okDocument<T extends Record<string, unknown>>(
   text: string,
   meta: { path: string; hash: string; sections?: string[]; truncated: boolean },
 ): CallToolResult {
-  const parts = [`[brainstem] path: ${meta.path}`, `hash: ${meta.hash}`];
+  // Clients join content blocks without a separator: the block brings its own line break.
+  const parts = [`\n[brainstem] path: ${meta.path}`, `hash: ${meta.hash}`];
   if (meta.sections?.length) parts.push(`sections: ${meta.sections.join(' | ')}`);
   if (meta.truncated) parts.push(TRUNCATED_HINT);
   return {

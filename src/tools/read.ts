@@ -7,7 +7,14 @@ import { describeUnknownHeading, findSection, sliceSection } from '../vault/sect
 import { READ_ONLY } from './annotations.ts';
 import { DetailedPathArg } from './args.ts';
 import type { ToolContext } from './register.ts';
-import { clampText, guarded, okDocument, okJson, TRUNCATED_HINT } from './results.ts';
+import {
+  clampText,
+  GUIDE_POINTER,
+  guarded,
+  okDocument,
+  okJson,
+  TRUNCATED_HINT,
+} from './results.ts';
 
 const NoteSummary = z.object({
   path: z.string(),
@@ -26,7 +33,8 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Read note',
       description:
-        'Read one file from the vault. Returns the full text (frontmatter + body) and parsed frontmatter. Large files are truncated at 120k characters. With "section" (a heading path like "Heading" or "H1 > H2", case-insensitive), returns only that section\'s text and its sectionRange instead of the whole file; with "sections" (several heading paths), those sections in document order and their sectionRanges — one call instead of one per heading. A truncated result carries a "hint": read it by section.',
+        'Read one file from the vault: the full text (frontmatter + body). Large files are truncated at 120k characters ("maxChars" cuts earlier). With "section" (a heading path like "Heading" or "H1 > H2", case-insensitive), returns only that section\'s text and its sectionRange instead of the whole file; with "sections" (several heading paths), those sections in document order and their sectionRanges — one call instead of one per heading. A truncated result carries a "hint": read it by section. ' +
+        GUIDE_POINTER,
       inputSchema: z.object({
         path: DetailedPathArg,
         section: z
@@ -43,6 +51,15 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           .describe(
             `Return only these sections (up to ${MAX_READ_SECTIONS} heading paths), in document order, joined by a blank line. Not together with "section".`,
           ),
+        maxChars: z
+          .number()
+          .int()
+          .min(500)
+          .max(MAX_RESULT_CHARS)
+          .optional()
+          .describe(
+            'Cut the returned text after this many characters (a look at a note of unknown size).',
+          ),
       }),
       outputSchema: NoteSummary.extend({
         // The text also travels in the content block, but clients that render structuredContent
@@ -58,7 +75,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
       }),
       annotations: READ_ONLY,
     },
-    ({ path, section, sections }) =>
+    ({ path, section, sections, maxChars }) =>
       guarded(tc.log, async () => {
         if (section !== undefined && sections !== undefined) {
           throw new VaultError('INVALID_INPUT', 'pass either "section" or "sections", not both');
@@ -77,13 +94,26 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             // Two heading paths may resolve to one section ("B" and "A > B"): return it once.
             if (!found.has(range.startLine)) found.set(range.startLine, { heading, range });
           }
-          const ordered = [...found.values()].sort((a, b) => a.range.startLine - b.range.startLine);
+          // Document order; a section inside another requested one is already in its parent's text.
+          const ordered = [...found.values()]
+            .sort((a, b) => a.range.startLine - b.range.startLine)
+            .filter(
+              (s, _i, all) =>
+                !all.some(
+                  (o) =>
+                    o !== s &&
+                    o.range.startLine <= s.range.startLine &&
+                    o.range.endLine >= s.range.endLine,
+                ),
+            );
           sectionRanges = ordered.map(({ heading, range }) => ({
             heading,
             startLine: range.startLine,
             endLine: range.endLine,
           }));
-          textOut = ordered.map(({ range }) => sliceSection(note.content, range)).join('\n');
+          textOut = `${ordered
+            .map(({ range }) => sliceSection(note.content, range).replace(/\s+$/, ''))
+            .join('\n\n')}\n`;
         } else if (section !== undefined) {
           const range = findSection(note.content, section);
           if (!range) {
@@ -92,7 +122,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           textOut = sliceSection(note.content, range);
           sectionRange = { startLine: range.startLine, endLine: range.endLine };
         }
-        const clamped = clampText(textOut);
+        const clamped = clampText(textOut, maxChars);
         return okDocument(
           {
             path: note.path,

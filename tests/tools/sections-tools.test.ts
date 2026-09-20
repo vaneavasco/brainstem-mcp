@@ -120,6 +120,37 @@ describe('vault_read sections', () => {
   });
 });
 
+describe('vault_read sections — shape', () => {
+  const TIGHT = '# T\n## One\none\n## Two\ntwo\n### Deep\ndeep\n## Three\nthree\n';
+
+  it('separates sections by exactly one blank line even when the note has none', async () => {
+    await h.call('vault_write', { path: 't.md', content: TIGHT });
+    const r = await h.call('vault_read', { path: 't.md', sections: ['One', 'Three'] });
+    expect(text(r)).toBe('## One\none\n\n## Three\nthree\n');
+  });
+
+  it('returns a section once when its parent was asked for too', async () => {
+    await h.call('vault_write', { path: 't.md', content: TIGHT });
+    const r = await h.call('vault_read', { path: 't.md', sections: ['Two > Deep', 'Two'] });
+    expect(text(r)).toBe('## Two\ntwo\n### Deep\ndeep\n');
+    expect((r.structuredContent as { sectionRanges: unknown[] }).sectionRanges).toHaveLength(1);
+  });
+
+  it('maxChars cuts the read earlier than the server limit and says so', async () => {
+    await h.call('vault_write', { path: 'long.md', content: `# L\n${'word '.repeat(2_000)}\n` });
+    const r = await h.call('vault_read', { path: 'long.md', maxChars: 1_000 });
+    expect(r.structuredContent).toMatchObject({ truncated: true, totalChars: 10_005 });
+    expect(text(r)).toContain('[truncated: showing 1000 of 10005 characters]');
+    expect(text(r).length).toBeLessThan(1_100);
+  });
+
+  it('starts the second content block on its own line', async () => {
+    await h.call('vault_write', { path: 't.md', content: 'no trailing newline' });
+    const r = await h.call('vault_read', { path: 't.md' });
+    expect((r.content[1] as { text: string }).text.startsWith('\n[brainstem] ')).toBe(true);
+  });
+});
+
 describe('truncated reads', () => {
   const BIG = `# Big\n\n## Head\nshort\n\n## Tail\n${'word '.repeat(30_000)}\n`;
 

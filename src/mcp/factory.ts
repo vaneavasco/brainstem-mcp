@@ -29,8 +29,9 @@ export async function createVaultServer(
   ctx: McpRequestContext,
   deps: FactoryDeps,
 ): Promise<McpServer> {
+  const instructions = deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS;
   const server = new McpServer(SERVER_INFO, {
-    instructions: deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS,
+    instructions,
     cacheHints: {
       'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
     },
@@ -58,6 +59,25 @@ export async function createVaultServer(
       };
       return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
     },
+  );
+
+  // Not every client shows the model the initialize `instructions` (measured: the claude.ai
+  // connector does not). The same text as a tool reaches any client; the descriptions of the tools
+  // a conversation starts with point here.
+  server.registerTool(
+    'brainstem_guide',
+    {
+      title: 'How to use this vault',
+      description:
+        "How this vault is organised and how to read and edit it cheaply: the server conventions plus the owner's own instructions for this vault. Call once at the start of a conversation, before listing or searching.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => ({ content: [{ type: 'text', text: instructions }] }),
   );
 
   const runtime = await deps.resolveRuntime(ctx);

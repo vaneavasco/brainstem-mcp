@@ -163,6 +163,11 @@ describe('/mcp with a 2025-era (legacy) client', () => {
       // The initialize result carries whatever the provider returned for this
       // connection — the owner's vault conventions reach the model this way.
       expect(client.getInstructions()).toBe('TEST INSTRUCTIONS: projects live in 10-projects/');
+      // Some clients never show the model the initialize `instructions`: the same text is a tool.
+      const guide = await client.callTool({ name: 'brainstem_guide', arguments: {} });
+      expect(guide.content).toEqual([
+        { type: 'text', text: 'TEST INSTRUCTIONS: projects live in 10-projects/' },
+      ]);
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toContain('brainstem_ping');
       const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });

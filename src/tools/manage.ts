@@ -6,7 +6,7 @@ import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
 import { applyLinkRewrites, planMove } from './move.ts';
 import { locked, type ToolContext, touch } from './register.ts';
-import { guarded, okJson } from './results.ts';
+import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
   const { adapter, index } = tc.runtime;
@@ -40,7 +40,8 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated.',
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated. ' +
+        GUIDE_POINTER,
       inputSchema: z.object({
         path: z.string().optional(),
         depth: z.number().int().min(1).max(50).optional(),

@@ -6,7 +6,7 @@ import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
 import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
-import { guarded, okJson } from './results.ts';
+import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 
@@ -26,6 +26,7 @@ const QuerySchema: z.ZodType<Query> = z.object({
   sort: z.array(SortSchema).optional(),
   limit: z.number().int().min(1).max(MAX_QUERY_ROWS).optional(),
   groupBy: z.string().optional(),
+  countOnly: z.boolean().optional(),
 });
 
 const QueryRowSchema = z.object({ path: z.string() }).catchall(z.unknown());
@@ -72,8 +73,8 @@ export function registerQueryTools(server: McpServer, tc: ToolContext): void {
         'as path arrays); comparisons are typed (numeric, chronological ISO dates, ' +
         'case-insensitive strings/arrays). "tags" (any/all/none) is nested-aware ("proj" matches ' +
         `"proj/x"). Supports pathPrefix, select, sort, groupBy, and limit (default 100, max ` +
-        `${MAX_QUERY_ROWS}). Replaces most uses of vault_search_frontmatter, which stays for ` +
-        'compatibility.',
+        `${MAX_QUERY_ROWS}); "countOnly" returns just total and group counts. ` +
+        GUIDE_POINTER,
       inputSchema: QuerySchema,
       outputSchema: QueryResultSchema,
       annotations: READ_ONLY,
