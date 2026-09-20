@@ -48,7 +48,6 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 - The content block of a truncated `vault_read` carried two truncation markers, the
   second with a wrong total (the already-clamped text was clamped again).
-
 - Frontmatter parsing no longer emits a Node process warning for every note whose
   YAML holds an unquoted `{{placeholder}}` (template notes such as `created: {{date}}`);
   the server log stayed noisy at each index pass.
