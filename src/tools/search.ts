@@ -19,7 +19,7 @@ import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
 import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
-import { guarded, okJson } from './results.ts';
+import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
 interface CandidateOpts {
   tags?: Query['tags'];
@@ -195,7 +195,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         'and/or glob before matching text — this can turn a vault-wide scan into a scan of a ' +
         `handful of files. Returns up to ${MAX_SEARCH_RESULTS} matching lines grouped per file ` +
         'in "files" (prefer this); "matches" is the same hits as a flat array, kept for ' +
-        'compatibility.',
+        `compatibility. ${GUIDE_POINTER}`,
       inputSchema: z.object({
         query: z.string().min(1),
         regex: z

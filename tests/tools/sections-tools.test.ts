@@ -77,6 +77,154 @@ describe('vault_read section', () => {
   });
 });
 
+describe('vault_read sections', () => {
+  it('returns several sections in document order, joined by a blank line, with their ranges', async () => {
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_read', { path: 'n.md', sections: ['Gamma', 'Alpha'] });
+    expect(r.isError).toBeFalsy();
+    const expected = '## Alpha\nalpha content\n\n## Gamma\ngamma content\n';
+    expect(text(r)).toBe(expected);
+    expect(r.structuredContent).toMatchObject({
+      path: 'n.md',
+      text: expected,
+      truncated: false,
+      totalChars: expected.length,
+      sectionRanges: [
+        { heading: 'Alpha', startLine: 3, endLine: 5 },
+        { heading: 'Gamma', startLine: 9, endLine: 11 },
+      ],
+    });
+    expect(r.structuredContent).not.toHaveProperty('sectionRange');
+  });
+
+  it('returns a section once when two heading paths resolve to it', async () => {
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_read', { path: 'n.md', sections: ['Beta', 'Title > Beta'] });
+    expect(text(r)).toBe('## Beta\nbeta content\n');
+    expect((r.structuredContent as { sectionRanges: unknown[] }).sectionRanges).toHaveLength(1);
+  });
+
+  it('fails with NOT_FOUND and the existing headings when one heading path is unknown', async () => {
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_read', { path: 'n.md', sections: ['Alpha', 'Nope'] });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/^NOT_FOUND: /);
+    expect(text(r)).toContain('Title > Alpha');
+  });
+
+  it('refuses "section" together with "sections"', async () => {
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_read', { path: 'n.md', section: 'Alpha', sections: ['Beta'] });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/section/);
+  });
+});
+
+describe('vault_read sections — shape', () => {
+  const TIGHT = '# T\n## One\none\n## Two\ntwo\n### Deep\ndeep\n## Three\nthree\n';
+
+  it('separates sections by exactly one blank line even when the note has none', async () => {
+    await h.call('vault_write', { path: 't.md', content: TIGHT });
+    const r = await h.call('vault_read', { path: 't.md', sections: ['One', 'Three'] });
+    expect(text(r)).toBe('## One\none\n\n## Three\nthree\n');
+  });
+
+  it('returns a section once when its parent was asked for too', async () => {
+    await h.call('vault_write', { path: 't.md', content: TIGHT });
+    const r = await h.call('vault_read', { path: 't.md', sections: ['Two > Deep', 'Two'] });
+    expect(text(r)).toBe('## Two\ntwo\n### Deep\ndeep\n');
+    expect((r.structuredContent as { sectionRanges: unknown[] }).sectionRanges).toHaveLength(1);
+  });
+
+  it('keeps every content line byte-exact: CRLF endings and trailing spaces survive, only blank lines between sections are normalised', async () => {
+    await h.call('vault_write', {
+      path: 'crlf.md',
+      content: '# T\r\n## A\r\na  \r\n\r\n\r\n## B\r\nb\r\n',
+    });
+    const r = await h.call('vault_read', { path: 'crlf.md', sections: ['A', 'B'] });
+    expect(text(r)).toBe('## A\r\na  \r\n\r\n## B\r\nb\r\n');
+    await h.call('vault_write', { path: 'lf.md', content: '# T\n## A\nhard break  \n\n## B\nb' });
+    const lf = await h.call('vault_read', { path: 'lf.md', sections: ['A', 'B'] });
+    expect(text(lf)).toBe('## A\nhard break  \n\n## B\nb\n');
+  });
+
+  it('labels each returned range with the heading it resolved to, whatever spelling was asked for', async () => {
+    await h.call('vault_write', { path: 't.md', content: TIGHT });
+    const r = await h.call('vault_read', { path: 't.md', sections: ['two > deep', 'ONE'] });
+    expect(
+      (r.structuredContent as { sectionRanges: { heading: string }[] }).sectionRanges.map(
+        (x) => x.heading,
+      ),
+    ).toEqual(['One', 'Deep']);
+  });
+
+  it('maxChars cuts the read earlier than the server limit and says so', async () => {
+    await h.call('vault_write', { path: 'long.md', content: `# L\n${'word '.repeat(2_000)}\n` });
+    const r = await h.call('vault_read', { path: 'long.md', maxChars: 1_000 });
+    expect(r.structuredContent).toMatchObject({ truncated: true, totalChars: 10_005 });
+    expect(text(r)).toContain('[truncated: showing 1000 of 10005 characters]');
+    expect(text(r).length).toBeLessThan(1_060); // 1,000 + the marker line
+  });
+
+  it('starts the second content block on its own line', async () => {
+    await h.call('vault_write', { path: 't.md', content: 'no trailing newline' });
+    const r = await h.call('vault_read', { path: 't.md' });
+    expect((r.content[1] as { text: string }).text.startsWith('\n[brainstem] ')).toBe(true);
+  });
+});
+
+describe('truncated reads', () => {
+  const BIG = `# Big\n\n## Head\nshort\n\n## Tail\n${'word '.repeat(30_000)}\n`;
+
+  it('vault_read says how to read the rest when the text was cut', async () => {
+    await h.call('vault_write', { path: 'big.md', content: BIG });
+    const r = await h.call('vault_read', { path: 'big.md' });
+    expect(r.structuredContent).toMatchObject({ truncated: true });
+    const hint = (r.structuredContent as { hint?: string }).hint ?? '';
+    expect(hint).toContain('vault_outline');
+    expect(hint).toContain('sections');
+    const head = await h.call('vault_read', { path: 'big.md', section: 'Head' });
+    expect(head.structuredContent).toMatchObject({ truncated: false });
+    expect(head.structuredContent).not.toHaveProperty('hint');
+  });
+
+  it('vault_batch_read carries the same hint when a note was cut', async () => {
+    await h.call('vault_write', { path: 'big.md', content: BIG });
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const cut = await h.call('vault_batch_read', { paths: ['big.md', 'n.md'] });
+    expect((cut.structuredContent as { hint?: string }).hint ?? '').toContain('vault_outline');
+    const whole = await h.call('vault_batch_read', { paths: ['n.md'] });
+    expect(whole.structuredContent).not.toHaveProperty('hint');
+  });
+});
+
+describe('document reads for clients that show only the content blocks', () => {
+  const meta = (r: { content: { type: string; text?: string }[] }) =>
+    r.content[1]?.type === 'text' ? (r.content[1].text ?? '') : '';
+
+  it('vault_read keeps the note text pure in the first block and adds path and hash in a second', async () => {
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_read', { path: 'n.md', sections: ['Alpha'] });
+    const hash = (r.structuredContent as { hash: string }).hash;
+    expect(text(r)).toBe('## Alpha\nalpha content\n');
+    expect(r.content).toHaveLength(2);
+    expect(meta(r)).toContain('n.md');
+    expect(meta(r)).toContain(hash);
+    expect(meta(r)).toContain('Alpha');
+    expect(meta(r)).not.toContain('Truncated');
+  });
+
+  it('says in the second block that the text was cut, once, with the real total', async () => {
+    const big = `# Big\n\n${'word '.repeat(30_000)}\n`;
+    await h.call('vault_write', { path: 'big.md', content: big });
+    const r = await h.call('vault_read', { path: 'big.md' });
+    expect(text(r).match(/\[truncated: showing/g)).toHaveLength(1);
+    expect(text(r)).toContain(`of ${big.length} characters`);
+    expect(meta(r)).toContain('Truncated');
+    expect(meta(r)).toContain('vault_outline');
+  });
+});
+
 describe('vault_append heading', () => {
   it('inserts under a heading (default position "end"), landing before the next heading with one blank line', async () => {
     await h.call('vault_write', { path: 'n.md', content: NOTE });

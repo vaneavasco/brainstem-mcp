@@ -43,9 +43,18 @@ afterAll(async () => {
 });
 
 describe('tool surface parity', () => {
-  it('exposes exactly the 30 vault tools plus brainstem_ping, each with title, description and full annotations', async () => {
+  it('points a model that never saw the connection instructions at brainstem_guide from the entry tools', async () => {
     const { tools } = await h.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED, 'brainstem_ping'].sort());
+    for (const name of ['vault_list', 'vault_search', 'vault_query', 'vault_read']) {
+      expect(tools.find((t) => t.name === name)?.description, name).toContain('brainstem_guide');
+    }
+  });
+
+  it('exposes exactly the 30 vault tools plus brainstem_ping and brainstem_guide, each with title, description and full annotations', async () => {
+    const { tools } = await h.client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      [...EXPECTED, 'brainstem_guide', 'brainstem_ping'].sort(),
+    );
     for (const tool of tools) {
       expect(tool.title, tool.name).toBeTruthy();
       expect(tool.description?.length ?? 0, tool.name).toBeGreaterThan(20);
@@ -62,6 +71,7 @@ describe('tool surface parity', () => {
       .map((t) => t.name)
       .sort();
     expect(readOnly).toEqual([
+      'brainstem_guide',
       'brainstem_ping',
       'vault_analytics_findings',
       'vault_analytics_summary',

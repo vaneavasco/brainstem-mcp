@@ -32,6 +32,8 @@ export interface Query {
   select?: string[];
   sort?: { field: string; order: 'asc' | 'desc' }[];
   limit?: number;
+  /** Counts only: no rows, no example paths in groups — the cheap answer to "how many". */
+  countOnly?: boolean;
   groupBy?: string;
 }
 
@@ -374,6 +376,13 @@ export function evaluateQuery(
   const truncated = total > limit;
   const limited = truncated ? matched.slice(0, limit) : matched;
 
+  if (q.countOnly) {
+    const counted: QueryResult = { rows: [], total, truncated: false };
+    if (q.groupBy !== undefined) {
+      counted.groups = buildGroups(matched, graph, q.groupBy).map((g) => ({ ...g, paths: [] }));
+    }
+    return counted;
+  }
   const result: QueryResult = {
     rows: limited.map((entry) => buildRow(entry, graph, q.select)),
     total,

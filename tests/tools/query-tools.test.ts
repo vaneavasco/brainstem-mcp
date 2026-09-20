@@ -61,6 +61,28 @@ describe('vault_query', () => {
     expect(byKey.get('done')).toMatchObject({ count: 1, paths: ['projects/beta.md'] });
   });
 
+  it('countOnly returns the group counts without rows or example paths', async () => {
+    const r = await h.call('vault_query', {
+      pathPrefix: 'projects',
+      groupBy: 'status',
+      countOnly: true,
+    });
+    const body = r.structuredContent as QueryResult;
+    expect(body.rows).toEqual([]);
+    expect(body.total).toBe(2);
+    expect(body.groups).toEqual(
+      expect.arrayContaining([
+        { key: 'active', count: 1, paths: [] },
+        { key: 'done', count: 1, paths: [] },
+      ]),
+    );
+  });
+
+  it('countOnly without groupBy is just the total, whatever limit says', async () => {
+    const r = await h.call('vault_query', { pathPrefix: 'projects', countOnly: true, limit: 1 });
+    expect(r.structuredContent).toEqual({ rows: [], total: 2, truncated: false });
+  });
+
   it('filters by nested-aware tags', async () => {
     const r = await h.call('vault_query', { tags: { any: ['proj'] } });
     expect(r.isError).toBeFalsy();

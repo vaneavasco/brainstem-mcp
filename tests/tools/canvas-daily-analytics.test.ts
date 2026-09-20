@@ -157,6 +157,10 @@ describe('daily note tools', () => {
     });
     const r = await h.call('vault_daily_note_read', { date: '2026-08-29' });
     expect(text(r)).toBe('# 2026-08-29\n\n## Log\n- did a thing\n');
+    // the body and the hash reach both kinds of client: structuredContent-only and content-only
+    const sc = r.structuredContent as { text: string; hash: string };
+    expect(sc.text).toBe('# 2026-08-29\n\n## Log\n- did a thing\n');
+    expect(r.content[1]).toMatchObject({ type: 'text', text: expect.stringContaining(sc.hash) });
     const a2 = await h.call('vault_daily_note_append', {
       date: '2026-08-29',
       content: '- another',
