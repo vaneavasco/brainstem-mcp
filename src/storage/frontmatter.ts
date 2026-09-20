@@ -1,4 +1,5 @@
 import { parse, stringify } from 'yaml';
+import { MAX_FILE_BYTES } from './limits.ts';
 import { VaultError } from './types.ts';
 
 export interface SplitResult {
@@ -14,16 +15,74 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** True when a value contains itself. An alias used twice is not a cycle: only ancestors count. */
-function refersToItself(value: unknown, ancestors: Set<object> = new Set()): boolean {
-  if (value === null || typeof value !== 'object') return false;
-  if (ancestors.has(value)) return true;
-  ancestors.add(value);
-  const children =
-    value instanceof Map ? [...value.keys(), ...value.values()] : Object.values(value);
-  const found = children.some((child) => refersToItself(child, ancestors));
-  ancestors.delete(value);
-  return found;
+/**
+ * Makes parsed YAML safe to hold, copy and serialize, or says why it cannot be. YAML can express
+ * three things JSON, the index and every tool result cannot:
+ *  - a value that contains itself (`a: &x {b: *x}`): refused, whatever it runs through (mapping,
+ *    list, `!!set`, `!!omap`). One such note once stopped the server from starting.
+ *  - one anchor used many times: 1 MB of file that is 96 MB once each alias is written out, which
+ *    is what a copy or JSON.stringify does. Refused when the written-out size passes what a file
+ *    may hold, so aliases can say nothing a plain file could not.
+ *  - sets and ordered maps, which JSON shows as `{}`: read as a list and a mapping.
+ * Sizes and copies are memoized per node, so a shared node costs once here however often used.
+ */
+function admit(root: unknown): unknown {
+  const ancestors = new Set<object>();
+  const sizes = new Map<object, number>();
+  const copies = new Map<object, unknown>();
+
+  const walk = (value: unknown): { size: number; out: unknown } => {
+    if (value === null || typeof value !== 'object') {
+      return {
+        size: typeof value === 'string' ? value.length + 2 : String(value).length,
+        out: value,
+      };
+    }
+    if (ancestors.has(value)) {
+      throw new VaultError('INVALID_INPUT', 'Frontmatter refers to itself (a YAML alias cycle).');
+    }
+    const known = sizes.get(value);
+    if (known !== undefined) return { size: known, out: copies.get(value) };
+    ancestors.add(value);
+    let size = 2;
+    let out: unknown;
+    if (Array.isArray(value) || value instanceof Set) {
+      const list: unknown[] = [];
+      for (const item of value) {
+        const child = walk(item);
+        size += child.size + 1;
+        list.push(child.out);
+      }
+      out = list;
+    } else {
+      const entries = value instanceof Map ? [...value.entries()] : Object.entries(value);
+      const record: Record<string, unknown> = {};
+      for (const [key, item] of entries) {
+        const name = typeof key === 'string' ? key : JSON.stringify(walk(key).out);
+        const child = walk(item);
+        size += name.length + child.size + 4;
+        // defined, not assigned: a `__proto__` key must stay a key
+        Object.defineProperty(record, name, {
+          value: child.out,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      out = record;
+    }
+    ancestors.delete(value);
+    sizes.set(value, size);
+    copies.set(value, out);
+    if (size > MAX_FILE_BYTES) {
+      throw new VaultError(
+        'INVALID_INPUT',
+        `Frontmatter is too large once its YAML aliases are written out (over ${MAX_FILE_BYTES} characters).`,
+      );
+    }
+    return { size, out };
+  };
+  return walk(root).out;
 }
 
 export function splitFrontmatter(text: string): SplitResult {
@@ -55,13 +114,7 @@ export function splitFrontmatter(text: string): SplitResult {
   if (!isPlainObject(parsed)) {
     throw new VaultError('INVALID_INPUT', 'Frontmatter must be a YAML mapping (key: value pairs).');
   }
-  if (refersToItself(parsed)) {
-    // YAML allows it (`a: &x {b: *x}`); JSON, the index and every tool result do not. Refused
-    // here, the one place frontmatter enters, so such a note reads as body-only with a reason
-    // instead of overflowing the stack of whoever walks it (one such note stopped the boot).
-    throw new VaultError('INVALID_INPUT', 'Frontmatter refers to itself (a YAML alias cycle).');
-  }
-  return { frontmatter: parsed, body, hasFrontmatter: true };
+  return { frontmatter: admit(parsed) as Record<string, unknown>, body, hasFrontmatter: true };
 }
 
 export function joinFrontmatter(frontmatter: Record<string, unknown>, body: string): string {
@@ -82,6 +135,10 @@ export function applyFrontmatterUpdate(
   set: Record<string, unknown> = {},
   unset: string[] = [],
 ): Record<string, unknown> {
+  if (Object.hasOwn(set, '__proto__')) {
+    // `{...set}` would drop it and the write would report success having done nothing
+    throw new VaultError('INVALID_INPUT', 'A frontmatter key cannot be named "__proto__".');
+  }
   const out: Record<string, unknown> = { ...existing, ...set };
   for (const key of unset) delete out[key];
   return out;

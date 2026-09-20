@@ -15,6 +15,19 @@ import type { Cond, Query } from '../vault/query.ts';
  * `.github/workflows/ci.yml` boots `register.ts` under plain Node as the guard.
  */
 
+/** Frontmatter keys to set. A plain `z.record` drops a `__proto__` key without a word, so the
+ *  write would report success having done less than it was asked; here that key is an error. */
+export const FrontmatterSetArg = z.preprocess(
+  (value, ctx) => {
+    if (typeof value === 'object' && value !== null && Object.hasOwn(value, '__proto__')) {
+      ctx.addIssue({ code: 'custom', message: 'a frontmatter key cannot be named "__proto__"' });
+      return z.NEVER;
+    }
+    return value;
+  },
+  z.record(z.string(), z.unknown()),
+);
+
 /** Vault-relative path. Wording only — validation happens in `normalizeVaultPath` at call time. */
 export const PathArg = z
   .string()

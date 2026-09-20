@@ -140,7 +140,19 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 - A query on a field name every object inherits (`constructor`, `toString`) matched every note.
   Only what the frontmatter itself holds is a field, in `vault_query`, `vault_search`'s `where`,
   `vault_search_frontmatter` and the required-frontmatter check. A `__proto__` key in
-  frontmatter is kept as an ordinary key.
+  frontmatter is kept as an ordinary key, `vault_query` `select` returns it as a column, and
+  setting it through `vault_frontmatter_update`, the batch form or a transaction is refused
+  instead of reporting success while dropping it.
+- YAML aliases could make a 1 MB note cost 116 MB of memory (one anchor used 99 times, written
+  out in full by every copy and every result); 45 such notes stopped the server from starting.
+  Frontmatter whose written-out size passes what a file may hold (1 MiB) is refused where it is
+  parsed; the note reads as body-only with the reason.
+- `vault_read`, `vault_daily_note_read` and `vault_frontmatter_update` returned a note's
+  frontmatter whatever its size (630,000 characters measured). A block over 24,000 characters
+  is left out and flagged (`frontmatterOmitted`, with a `hint` naming the narrower call).
+- A YAML `!!set` or `!!omap` value read as `{}` everywhere, and a set that contained itself got
+  past the cycle check. A set reads as a list, an ordered map as a mapping; a frontmatter update
+  writes them back as such.
 - Tool results may grow without breaking anyone. Output schemas were closed
   (`additionalProperties: false`), and clients cache the tool list: the first result that
   carried a field added after the client's copy was rejected whole with "data must NOT have

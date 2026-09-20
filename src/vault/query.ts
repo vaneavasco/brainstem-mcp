@@ -364,7 +364,13 @@ function buildRow(entry: IndexEntry, graph: VaultGraph, select?: string[]): Quer
   if (!select) return row;
   for (const field of select) {
     if (field === 'path') continue;
-    row[field] = fieldValue(entry, graph, field);
+    // defined, not assigned: a selected `__proto__` column must stay a column
+    Object.defineProperty(row, field, {
+      value: fieldValue(entry, graph, field),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return row;
 }

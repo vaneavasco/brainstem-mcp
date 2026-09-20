@@ -15,9 +15,12 @@ import { READ_ONLY } from './annotations.ts';
 import { DetailedPathArg } from './args.ts';
 import type { ToolContext } from './register.ts';
 import {
+  boundedFrontmatter,
   clampText,
+  FRONTMATTER_TOO_LARGE_HINT,
   GUIDE_POINTER,
   guarded,
+  joinHints,
   okDocument,
   okJson,
   TRUNCATED_HINT,
@@ -29,6 +32,8 @@ const SectionArg = z.string().min(1).max(MAX_SECTION_NAME_CHARS);
 const NoteSummary = z.looseObject({
   path: z.string(),
   frontmatter: z.record(z.string(), z.unknown()),
+  /** true when the block was too large for a result and `frontmatter` is `{}` instead. */
+  frontmatterOmitted: z.boolean().optional(),
   hasFrontmatter: z.boolean(),
   size: z.number(),
   modifiedAt: z.string(),
@@ -205,10 +210,11 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           sectionRange = { startLine: range.startLine, endLine: range.endLine };
         }
         const clamped = clampText(textOut, maxChars);
+        const fm = boundedFrontmatter(note.frontmatter);
         return okDocument(
           {
             path: note.path,
-            frontmatter: note.frontmatter,
+            ...fm,
             hasFrontmatter: note.hasFrontmatter,
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
@@ -218,7 +224,10 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             totalChars: clamped.totalChars,
             ...(sectionRange ? { sectionRange } : {}),
             ...(sectionRanges ? { sectionRanges } : {}),
-            ...(clamped.truncated ? { hint: TRUNCATED_HINT } : {}),
+            ...joinHints(
+              clamped.truncated && TRUNCATED_HINT,
+              fm.frontmatterOmitted && FRONTMATTER_TOO_LARGE_HINT,
+            ),
           },
           clamped.text,
           {

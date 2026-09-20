@@ -10,7 +10,15 @@ import {
 } from '../vault/daily-notes.ts';
 import { APPEND_ONLY, READ_ONLY } from './annotations.ts';
 import { applyNote, locked, type ToolContext } from './register.ts';
-import { clampText, guarded, okDocument, okJson } from './results.ts';
+import {
+  boundedFrontmatter,
+  clampText,
+  FRONTMATTER_TOO_LARGE_HINT,
+  guarded,
+  joinHints,
+  okDocument,
+  okJson,
+} from './results.ts';
 
 const DateArg = z
   .string()
@@ -77,11 +85,13 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
         const { path, date: day } = resolve(date);
         const note = await adapter.read(path);
         const clamped = clampText(note.content);
+        const fm = boundedFrontmatter(note.frontmatter);
         return okDocument(
           {
             path,
             date: day,
-            frontmatter: note.frontmatter,
+            ...fm,
+            ...joinHints(fm.frontmatterOmitted && FRONTMATTER_TOO_LARGE_HINT),
             hash: note.hash,
             text: clamped.text,
             truncated: clamped.truncated,
