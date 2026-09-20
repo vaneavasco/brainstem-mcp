@@ -66,6 +66,12 @@ export async function runStatus(deps: StatusDeps): Promise<number> {
       ? `Health: ok (publicUrl=${health.publicUrl}, notes=${health.notes}, index checked=${health.reconciledAt ?? 'not yet'})`
       : 'Health: not running (./brainstem up)',
   );
+  if (health?.indexOverBudget) {
+    deps.print(
+      'Warning: the vault index is over its size budget. Nothing is dropped, but the server ' +
+        'uses about twice the index size in memory; brainstem_ping shows both numbers.',
+    );
+  }
 
   if (!(await deps.compose.available())) {
     deps.print('Docker is not running or not installed');

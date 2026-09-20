@@ -127,10 +127,20 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   20 MiB stays held.
 - The index size budget was never connected to anything: no log line, and a vault already over
   it at boot could not have been reported even if it were. It now warns once at boot or on the
-  change that crosses it, `brainstem_ping` shows `index.bytes`, `index.budgetBytes` and
+  change that crosses it, `./brainstem status` prints a warning (`/health` carries only the
+  yes/no, `vault.indexOverBudget`, because it is public), `brainstem_ping` shows `index.bytes`, `index.budgetBytes` and
   `index.overBudget`, and the budget is the measured one (256 MiB of serialized entries, about
   75,000 long notes; the earlier 64 MiB assumed 1–2 KB per note, real notes need 3.5 KB). It is
-  a warning line, not a limit: nothing is evicted.
+  a warning line, not a limit: nothing is evicted. The size is counted in bytes (it was UTF-16
+  units, which halved it for a vault not written in Latin script), and a budget that is not a
+  finite number is refused.
+- A note whose frontmatter refers to itself (a YAML alias cycle, `a: &x {b: *x}`) stopped the
+  server from starting. Such frontmatter is now refused where frontmatter is parsed, like any
+  other invalid block: the note reads as body-only with the reason in `frontmatterError`.
+- A query on a field name every object inherits (`constructor`, `toString`) matched every note.
+  Only what the frontmatter itself holds is a field, in `vault_query`, `vault_search`'s `where`,
+  `vault_search_frontmatter` and the required-frontmatter check. A `__proto__` key in
+  frontmatter is kept as an ordinary key.
 - Tool results may grow without breaking anyone. Output schemas were closed
   (`additionalProperties: false`), and clients cache the tool list: the first result that
   carried a field added after the client's copy was rejected whole with "data must NOT have

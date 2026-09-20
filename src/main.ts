@@ -207,6 +207,7 @@ async function main(): Promise<void> {
       extras: {
         notes: () => runtime.index.size(),
         reconciledAt: () => runtime.index.reconciledAt,
+        indexOverBudget: () => runtime.index.byteSize() > runtime.index.budgetBytes,
         instructions: () => instructions.get(),
       },
     },

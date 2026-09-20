@@ -49,6 +49,9 @@ export interface AppExtras {
   notes?: () => number;
   /** When the index was last checked against the disk (null until the first reconcile). */
   reconciledAt?: () => Date | null;
+  /** Whether the index is over its size budget. /health is public, so it says only that: the
+   *  sizes themselves are in brainstem_ping, behind the bearer gate. */
+  indexOverBudget?: () => boolean;
   /** Per-connection MCP `instructions`; see `FactoryDeps.instructions`. */
   instructions?: () => Promise<string>;
 }
@@ -92,6 +95,7 @@ export function createApp(
       vault: {
         notes: extras.notes?.() ?? 0,
         reconciledAt: extras.reconciledAt?.()?.toISOString() ?? null,
+        indexOverBudget: extras.indexOverBudget?.() ?? false,
       },
     });
   });

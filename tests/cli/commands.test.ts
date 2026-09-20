@@ -213,6 +213,7 @@ describe('runUp', () => {
         tunnelMode: 'cloudflare',
         notes: 0,
         reconciledAt: null,
+        indexOverBudget: false,
       },
       { secretHint: 'in .env' },
     );
@@ -331,6 +332,34 @@ describe('runStatus', () => {
     expect(output).not.toContain('super-secret-value');
     // an older server has no reconciledAt in /health: the line says so instead of "undefined"
     expect(output).toContain('index checked=not yet');
+  });
+
+  it('warns when the server says its index is over the size budget, and only then', async () => {
+    const overBudget = (async () =>
+      new Response(
+        JSON.stringify({
+          status: 'ok',
+          publicUrl: 'http://localhost:3000',
+          mcpUrl: 'http://localhost:3000/mcp',
+          tunnelMode: 'none',
+          vault: { notes: 3, reconciledAt: null, indexOverBudget: true },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch;
+    const run = async (fetchImpl: typeof fetch): Promise<string> => {
+      const lines: string[] = [];
+      await runStatus({
+        env: new Map([['TUNNEL_MODE', 'none']]),
+        vaultCtx: vaultCtx(),
+        compose: new FakeCompose(''),
+        fetchImpl,
+        print: (l) => lines.push(l),
+        localPort: 3000,
+      });
+      return lines.join('\n');
+    };
+    expect(await run(overBudget)).toMatch(/index is over its size budget/);
+    expect(await run(healthOk('http://localhost:3000'))).not.toMatch(/size budget/);
   });
 });
 

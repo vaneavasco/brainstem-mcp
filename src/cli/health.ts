@@ -11,6 +11,8 @@ export interface HealthInfo {
   notes: number;
   /** ISO time of the index's last check against the disk; null before the first one or on an older server. */
   reconciledAt: string | null;
+  /** false on an older server, which does not say. */
+  indexOverBudget: boolean;
 }
 
 function toHealthInfo(body: unknown): HealthInfo | null {
@@ -25,6 +27,7 @@ function toHealthInfo(body: unknown): HealthInfo | null {
     tunnelMode: typeof rec.tunnelMode === 'string' ? rec.tunnelMode : 'none',
     notes,
     reconciledAt: typeof vault?.reconciledAt === 'string' ? vault.reconciledAt : null,
+    indexOverBudget: vault?.indexOverBudget === true,
   };
 }
 

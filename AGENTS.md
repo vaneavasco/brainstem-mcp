@@ -37,6 +37,7 @@ scripts/              docker-smoke.sh, mcp-call.ts (headless OAuth + tool calls)
 ```bash
 npm ci                      # dev install (the ./brainstem launcher installs runtime-only)
 npm test                    # vitest; 7 ripgrep tests skip when `rg` is not installed
+npm run test:scale          # 40,000-note run: memory, build time, bounded results (about a minute)
 npm run typecheck           # tsc --noEmit
 npm run lint                # biome check .   (npm run lint:fix to apply)
 npm run dev                 # server without Docker, reads .env
@@ -44,7 +45,7 @@ npm run docker:smoke        # end-to-end against the Docker image (needs Docker)
 npm run mcp:call -- --list  # authenticate headlessly and call tools on a running instance
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, `npm audit --omit=dev --audit-level=high`, build, the Docker smoke, then publishes images. A change is not done until CI is green.
+CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note scale run, `npm audit --omit=dev --audit-level=high`, build, the Docker smoke, then publishes images. A change is not done until CI is green.
 
 ## Conventions that will bite you
 
