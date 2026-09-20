@@ -22,6 +22,31 @@ export function okJson<T extends Record<string, unknown>>(
   };
 }
 
+/**
+ * A document read. Some clients show the model only `structuredContent`, others only the content
+ * blocks — so a note's text is in both, and what the second kind would otherwise never see (the
+ * `hash` for `expectedHash`, that the text was cut and how to read the rest) goes in a second
+ * content block. The first block stays the note's text and nothing else, so it can be quoted into
+ * an edit as it is. `text` is already clamped by the caller; it is not clamped again here (a second
+ * clamp used to append a second marker with the wrong total).
+ */
+export function okDocument<T extends Record<string, unknown>>(
+  structured: T,
+  text: string,
+  meta: { path: string; hash: string; sections?: string[]; truncated: boolean },
+): CallToolResult {
+  const parts = [`[brainstem] path: ${meta.path}`, `hash: ${meta.hash}`];
+  if (meta.sections?.length) parts.push(`sections: ${meta.sections.join(' | ')}`);
+  if (meta.truncated) parts.push(TRUNCATED_HINT);
+  return {
+    content: [
+      { type: 'text', text },
+      { type: 'text', text: parts.join(' · ') },
+    ],
+    structuredContent: structured,
+  };
+}
+
 export function fail(message: string): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: message }] };
 }

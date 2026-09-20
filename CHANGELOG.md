@@ -13,6 +13,13 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   reader needed one per heading. Two paths that resolve to the same section return
   it once; an unknown path fails with `NOT_FOUND` and the list of headings, as
   `section` does. `section` and `sections` cannot be combined.
+- `vault_read` and `vault_daily_note_read` add a second content block with the note's
+  `path`, its `hash` and, when the text was cut, how to read the rest. Clients that show
+  the model only the content blocks (the claude.ai connector does) never saw the hash —
+  so could not pass `expectedHash` — nor that a text was truncated. The first block is
+  still the note's text and nothing else. `vault_daily_note_read` also returns `hash` and
+  `text` in its structured result, which clients that show only `structuredContent` need
+  to see the body at all.
 - A truncated `vault_read` or `vault_batch_read` result carries a `hint` that says
   the text is incomplete and how to read the rest (`vault_outline`, then `section` /
   `sections`). The connection instructions now say the same in one line: a
@@ -38,6 +45,9 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   filtering and before capping.
 
 ### Fixed
+
+- The content block of a truncated `vault_read` carried two truncation markers, the
+  second with a wrong total (the already-clamped text was clamped again).
 
 - Frontmatter parsing no longer emits a Node process warning for every note whose
   YAML holds an unquoted `{{placeholder}}` (template notes such as `created: {{date}}`);

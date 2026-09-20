@@ -145,6 +145,33 @@ describe('truncated reads', () => {
   });
 });
 
+describe('document reads for clients that show only the content blocks', () => {
+  const meta = (r: { content: { type: string; text?: string }[] }) =>
+    r.content[1]?.type === 'text' ? (r.content[1].text ?? '') : '';
+
+  it('vault_read keeps the note text pure in the first block and adds path and hash in a second', async () => {
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_read', { path: 'n.md', sections: ['Alpha'] });
+    const hash = (r.structuredContent as { hash: string }).hash;
+    expect(text(r)).toBe('## Alpha\nalpha content\n');
+    expect(r.content).toHaveLength(2);
+    expect(meta(r)).toContain('n.md');
+    expect(meta(r)).toContain(hash);
+    expect(meta(r)).toContain('Alpha');
+    expect(meta(r)).not.toContain('Truncated');
+  });
+
+  it('says in the second block that the text was cut, once, with the real total', async () => {
+    const big = `# Big\n\n${'word '.repeat(30_000)}\n`;
+    await h.call('vault_write', { path: 'big.md', content: big });
+    const r = await h.call('vault_read', { path: 'big.md' });
+    expect(text(r).match(/\[truncated: showing/g)).toHaveLength(1);
+    expect(text(r)).toContain(`of ${big.length} characters`);
+    expect(meta(r)).toContain('Truncated');
+    expect(meta(r)).toContain('vault_outline');
+  });
+});
+
 describe('vault_append heading', () => {
   it('inserts under a heading (default position "end"), landing before the next heading with one blank line', async () => {
     await h.call('vault_write', { path: 'n.md', content: NOTE });

@@ -7,7 +7,7 @@ import { describeUnknownHeading, findSection, sliceSection } from '../vault/sect
 import { READ_ONLY } from './annotations.ts';
 import { DetailedPathArg } from './args.ts';
 import type { ToolContext } from './register.ts';
-import { clampText, guarded, okJson, TRUNCATED_HINT } from './results.ts';
+import { clampText, guarded, okDocument, okJson, TRUNCATED_HINT } from './results.ts';
 
 const NoteSummary = z.object({
   path: z.string(),
@@ -93,7 +93,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           sectionRange = { startLine: range.startLine, endLine: range.endLine };
         }
         const clamped = clampText(textOut);
-        return okJson(
+        return okDocument(
           {
             path: note.path,
             frontmatter: note.frontmatter,
@@ -109,6 +109,12 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             ...(clamped.truncated ? { hint: TRUNCATED_HINT } : {}),
           },
           clamped.text,
+          {
+            path: note.path,
+            hash: note.hash,
+            sections: sectionRanges?.map((r) => r.heading) ?? (section ? [section] : undefined),
+            truncated: clamped.truncated,
+          },
         );
       }),
   );

@@ -10,7 +10,7 @@ import {
 } from '../vault/daily-notes.ts';
 import { APPEND_ONLY, READ_ONLY } from './annotations.ts';
 import { applyNote, locked, type ToolContext } from './register.ts';
-import { clampText, guarded, okJson } from './results.ts';
+import { clampText, guarded, okDocument, okJson } from './results.ts';
 
 const DateArg = z
   .string()
@@ -65,6 +65,9 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
         path: z.string(),
         date: z.string(),
         frontmatter: z.record(z.string(), z.unknown()),
+        hash: z.string(),
+        // As in vault_read: clients that show only structuredContent would never see the body.
+        text: z.string(),
         truncated: z.boolean(),
       }),
       annotations: READ_ONLY,
@@ -74,9 +77,17 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
         const { path, date: day } = resolve(date);
         const note = await adapter.read(path);
         const clamped = clampText(note.content);
-        return okJson(
-          { path, date: day, frontmatter: note.frontmatter, truncated: clamped.truncated },
+        return okDocument(
+          {
+            path,
+            date: day,
+            frontmatter: note.frontmatter,
+            hash: note.hash,
+            text: clamped.text,
+            truncated: clamped.truncated,
+          },
           clamped.text,
+          { path, hash: note.hash, truncated: clamped.truncated },
         );
       }),
   );
