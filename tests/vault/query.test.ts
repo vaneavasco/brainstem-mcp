@@ -899,7 +899,10 @@ describe('evaluateQuery — link-aware equality (a wikilink value matches its pl
       pathPrefix: 'links',
       where: [{ field: 'owner', op: 'eq', value: 'people/Alpha Person' }],
     });
-    expect(paths(r)).toEqual(['links/full-target.md']);
+    // A link without a folder may well point at people/Alpha Person (that is how short links
+    // resolve), so it matches; only a link into ANOTHER folder is a different note.
+    expect(paths(r)).toContain('links/full-target.md');
+    expect(paths(r).length).toBeGreaterThan(1);
   });
 
   it('eq: the exact bracketed string still matches as before', () => {
@@ -947,5 +950,66 @@ describe('evaluateQuery — link-aware equality (a wikilink value matches its pl
       where: [{ field: 'owners', op: 'eq', value: 'Beta Person' }],
     });
     expect(paths(r)).toEqual(['links/list.md']);
+  });
+});
+
+describe('review of sum and link-aware equality', () => {
+  it('a name listed twice in "sum" is summed once', () => {
+    index.upsert(entry('dup/a.md', '---\nn: 1\n---\nx'));
+    index.upsert(entry('dup/b.md', '---\nn: 2\n---\nx'));
+    const r = run({ pathPrefix: 'dup', sum: ['n', 'n'] });
+    expect(r.sums?.n).toBe(3);
+    expect(r.sumCounted?.n).toBe(2);
+  });
+
+  it('a total too large for a number is left out and said, never emitted as Infinity', () => {
+    index.upsert(entry('big/a.md', '---\nbig: 1e308\nok: 1\n---\nx'));
+    index.upsert(entry('big/b.md', '---\nbig: 1e308\nok: 2\n---\nx'));
+    const r = run({ pathPrefix: 'big', sum: ['big', 'ok'], groupBy: 'ok', countOnly: true });
+    expect(r.sums).toEqual({ ok: 3 });
+    expect(r.sumCounted).toEqual({ big: 2, ok: 2 });
+    expect(r.hint).toMatch(/too large/);
+    expect(JSON.stringify(r)).not.toContain('null');
+    for (const g of r.groups ?? [])
+      expect(Number.isFinite((g as { sums: { big?: number } }).sums.big ?? 0)).toBe(true);
+  });
+
+  it('two links to the same name in different folders are different', () => {
+    index.upsert(entry('lk/a.md', '---\nowner: "[[other/Alpha Person]]"\n---\nx'));
+    const hit = (value: unknown) =>
+      run({ pathPrefix: 'lk', where: [{ field: 'owner', op: 'eq', value }] }).total;
+    expect(hit('[[people/Alpha Person]]')).toBe(0);
+    expect(hit('people/Alpha Person')).toBe(0);
+    expect(hit('[[other/Alpha Person]]')).toBe(1);
+    expect(hit('other/Alpha Person')).toBe(1);
+    expect(hit('Alpha Person')).toBe(1);
+    expect(hit('[[Alpha Person]]')).toBe(1);
+  });
+
+  it('a link written with .md equals the name, and a numeric name equals the number', () => {
+    index.upsert(
+      entry('lk2/a.md', '---\nowner: "[[people/Alpha Person.md]]"\nyear: "[[2024]]"\n---\nx'),
+    );
+    const hit = (field: string, value: unknown) =>
+      run({ pathPrefix: 'lk2', where: [{ field, op: 'eq', value }] }).total;
+    expect(hit('owner', 'Alpha Person')).toBe(1);
+    expect(hit('year', 2024)).toBe(1);
+    expect(
+      run({ pathPrefix: 'lk2', where: [{ field: 'year', op: 'in', value: [2023, 2024] }] }).total,
+    ).toBe(1);
+  });
+
+  it('"in" with fifty values over many notes stays fast', () => {
+    for (let i = 0; i < 20_000; i += 1)
+      index.upsert(entry(`perf/n${i}.md`, `---\nowner: "[[people/Person ${i}]]"\n---\nx`));
+    const value = Array.from({ length: 50 }, (_, i) => `Nobody ${i}`);
+    const started = performance.now();
+    expect(
+      run({ pathPrefix: 'perf', where: [{ field: 'owner', op: 'in', value }], countOnly: true })
+        .total,
+    ).toBe(0);
+    // measured ~30 ms after precomputing the query side once; ~150 ms before. One second tells
+    // a per-comparison regex apart from a precomputed key on any machine.
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

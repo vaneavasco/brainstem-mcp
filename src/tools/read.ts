@@ -8,8 +8,8 @@ import {
   MAX_SECTION_NAME_CHARS,
 } from '../storage/limits.ts';
 import { type Note, VaultError } from '../storage/types.ts';
-import { prefixWithinSerialized } from '../vault/budget.ts';
-import { suggestPaths } from '../vault/path-suggest.ts';
+import { fitWithinBudget, prefixWithinSerialized } from '../vault/budget.ts';
+import { buildSuggester, suggestPaths } from '../vault/path-suggest.ts';
 import type { SectionRange } from '../vault/sections.ts';
 import { describeUnknownHeading, findSection, sliceSection } from '../vault/sections.ts';
 import { READ_ONLY } from './annotations.ts';
@@ -340,10 +340,23 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         // A near-miss for each missing path, computed once over every index path (cheap: it only
         // runs on a miss). Real values, not a placeholder: they are part of what is weighed below,
         // same as "missing" itself.
-        const indexPaths = result.missing.length === 0 ? [] : index.all().map((e) => e.path);
-        const suggestions = result.missing
-          .map((p) => ({ path: p, didYouMean: suggestPaths(indexPaths, p) }))
+        const suggest =
+          result.missing.length === 0 ? null : buildSuggester(index.all().map((e) => e.path));
+        const allSuggestions = result.missing
+          .map((p) => ({ path: p, didYouMean: suggest ? suggest(p) : [] }))
           .filter((s) => s.didYouMean.length > 0);
+        // Suggestions are a convenience: they get at most a quarter of the result, one name each
+        // before none at all, and never make a call fail that would answer without them.
+        const fitSuggestions = (room: number) => {
+          const full = fitWithinBudget(allSuggestions, room);
+          if (!full.cut) return full.kept;
+          const single = allSuggestions.map((s) => ({
+            ...s,
+            didYouMean: s.didYouMean.slice(0, 1),
+          }));
+          return fitWithinBudget(single, room).kept;
+        };
+        let suggestions: typeof allSuggestions = [];
 
         // The budget covers what the client receives, and everything is measured: a path can be
         // a thousand characters, a body can open with characters JSON escapes sixfold. First the
@@ -378,6 +391,12 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           }).length;
 
         const everything = new Set(result.notes.map((_, i) => i));
+        if (allSuggestions.length > 0) {
+          const without = weigh(everything); // `suggestions` is still empty here
+          const room = Math.min(CLIENT_SAFE_RESULT_CHARS / 4, CLIENT_SAFE_RESULT_CHARS - without);
+          // `"suggestions":[]` and its comma are paid from the same room
+          suggestions = room > 40 ? fitSuggestions(room - 20) : [];
+        }
         const bare = weigh(everything);
         if (bare > CLIENT_SAFE_RESULT_CHARS) {
           throw new VaultError(

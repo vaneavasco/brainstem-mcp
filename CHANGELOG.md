@@ -283,7 +283,7 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 - `vault_query` adds a `hint` when a `pathPrefix` matches nothing because no note exists under it
   at all (as against notes existing there but none matching `where`/`tags`), so a reader is not
   left to double-check with a separate listing.
-- `vault_list` gains `folders` (`{ path, files }`, files counted directly inside each subfolder)
+- `vault_list` gains `folders` (`{ path, files }`: every note and attachment under each listed folder, at any depth, counted from the index whatever depth or glob was asked)
   and orders `entries` shallowest first — but only when the listing would otherwise be truncated.
   A deep listing used to return the first ~2,000 paths in on-disk order, i.e. the contents of
   whichever big folder came first alphabetically, and the reader learned nothing about the shape

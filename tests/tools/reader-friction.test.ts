@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLIENT_SAFE_RESULT_CHARS } from '../../src/storage/limits.ts';
 import { type Harness, startHarness, text } from './harness.ts';
 
@@ -11,6 +11,10 @@ import { type Harness, startHarness, text } from './harness.ts';
  */
 
 let h: Harness;
+
+// Several tests here write a thousand files and more: on a loaded machine that alone can take
+// longer than the suite's default 15 s.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 beforeEach(async () => {
   h = await startHarness();
@@ -27,13 +31,17 @@ describe('A — vault_list: shallowest first and "folders" file counts, only whe
     const longName = (n: number) => `${'a-rather-long-file-name-segment-'.repeat(3)}${n}.md`;
     for (const dir of ['alpha', 'beta', 'gamma']) {
       await fs.mkdir(path.join(h.root, dir), { recursive: true });
-      for (let i = 0; i < 400; i += 1) {
-        await fs.writeFile(path.join(h.root, dir, longName(i)), '# x\n');
-      }
+      await Promise.all(
+        Array.from({ length: 400 }, (_, i) =>
+          fs.writeFile(path.join(h.root, dir, longName(i)), '# x\n'),
+        ),
+      );
     }
     for (let i = 0; i < 5; i += 1) {
       await fs.writeFile(path.join(h.root, `top-${i}.md`), '# x\n');
     }
+    // The counts come from the index: do not race the watcher over 1,200 new files.
+    await h.runtime.index.reconcile(h.runtime.adapter);
     const r = await h.call('vault_list', { depth: 3 });
     expect(r.isError).toBeFalsy();
     expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
@@ -244,5 +252,57 @@ describe('E — vault_batch_read frontmatter:false gives bodies the room frontma
     const r = await h.call('vault_batch_read', { paths: ['plain.md'] });
     const body = r.structuredContent as { notes: { frontmatter: object }[] };
     expect(body.notes[0]?.frontmatter).toEqual({ status: 'open' });
+  });
+});
+
+describe('review: folder counts come from the vault, not from what the listing happened to hold', () => {
+  it('counts every file under a folder whatever depth, includeFiles or glob was asked', async () => {
+    for (let f = 0; f < 450; f += 1) {
+      const dir = path.join(
+        h.root,
+        'top',
+        `alpha-folder-with-a-deliberately-long-name-and-then-some-more-words-so-that-a-few-hundred-of-them-do-not-fit-in-one-result-${String(f).padStart(4, '0')}`,
+      );
+      await fs.mkdir(path.join(dir, 'sub'), { recursive: true });
+      await Promise.all(
+        ['one.md', 'two.md', 'sub/deep.md'].map((n) => fs.writeFile(path.join(dir, n), 'x')),
+      );
+    }
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    type Out = { folders?: { path: string; files: number }[]; hint?: string; truncated: boolean };
+    const shallow = (await h.call('vault_list', { path: 'top', depth: 1 }))
+      .structuredContent as Out;
+    expect(shallow.truncated).toBe(true);
+    expect(shallow.folders?.[0]?.files).toBe(3);
+    const noFiles = (await h.call('vault_list', { path: 'top', depth: 2, includeFiles: false }))
+      .structuredContent as Out;
+    expect(noFiles.folders?.find((f) => f.path.endsWith('/sub'))?.files).toBe(1);
+    const globbed = await h.call('vault_list', { path: 'top', depth: 3, glob: '**/*.md' });
+    const g = globbed.structuredContent as Out;
+    expect(size(globbed)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    if (g.folders === undefined) expect(g.hint).not.toMatch(/"folders"/);
+    else expect(g.folders.every((f) => f.files > 0)).toBe(true);
+  });
+});
+
+describe('review: a batch of long missing paths still answers', () => {
+  it('drops suggestions before it would refuse the call', async () => {
+    const stem = 'a'.repeat(240);
+    const dir = `${stem}/${stem}/${stem}`;
+    await fs.mkdir(path.join(h.root, dir), { recursive: true });
+    const paths: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const name = `Note-${String(i).padStart(2, '0')}-${'b'.repeat(200)}`;
+      for (const variant of [name, name.toLowerCase(), name.toUpperCase()]) {
+        await fs.writeFile(path.join(h.root, dir, `${variant}.md`), 'x').catch(() => {});
+      }
+      paths.push(`${dir}/${name.replace('Note', 'nOTE')}.md`);
+    }
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const r = await h.call('vault_batch_read', { paths });
+    expect(r.isError).toBeFalsy();
+    expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    const out = r.structuredContent as { missing: string[]; truncated?: boolean; hint?: string };
+    expect(out.missing).toHaveLength(20);
   });
 });

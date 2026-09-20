@@ -235,27 +235,44 @@ export function parseWholeWikilink(
   return parts.target === '' ? null : parts;
 }
 
-/**
- * Compare-forms for a frontmatter scalar that might be a wikilink: the link target, and (when
- * the target has a folder) its last path segment — so a value of `[[people/Alpha Person]]` is
- * found equal by both "Alpha Person" (the plain name) and "people/Alpha Person" (the full
- * target). A value that is not one whole wikilink yields itself, unchanged: "contains" and
- * "startsWith" never call this (they stay substring/prefix ops on the raw text), and `eq`/`in`
- * try the exact string first, so `[[Alpha Person]]` still equals `[[Alpha Person]]` as before.
- */
-export function linkAwareForms(value: string): string[] {
-  const link = parseWholeWikilink(value);
-  if (!link) return [value];
-  const base = link.target.slice(link.target.lastIndexOf('/') + 1);
-  return base === link.target ? [link.target] : [link.target, base];
+/** What a link-aware comparison looks at: the target without a trailing `.md`, lower-cased, and
+ *  its last path segment. `isLink` says whether the text was one whole wikilink. */
+export interface LinkKey {
+  full: string;
+  base: string;
+  hasFolder: boolean;
+  isLink: boolean;
 }
 
-/** True when `a` and `b` name the same wikilink target under `linkAwareForms`, case-insensitively
- *  (a plain name, a full target, or a wikilink string, any combination). Non-string values never
- *  match here — numeric/date/boolean equality is `typedCompare`'s job, not this one's. */
+/** The key of a string or number; `null` for anything else (a list, a boolean, null). */
+export function linkKey(value: unknown): LinkKey | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const text = String(value);
+  const link = typeof value === 'string' && text.includes('[[') ? parseWholeWikilink(text) : null;
+  const target = (link ? link.target : text).trim().replace(/\.md$/i, '').toLowerCase();
+  const slash = target.lastIndexOf('/');
+  return {
+    full: target,
+    base: slash === -1 ? target : target.slice(slash + 1),
+    hasFolder: slash !== -1,
+    isLink: link !== null,
+  };
+}
+
+/** Whether two keys name the same note. Only when at least one side is a wikilink: two plain
+ *  texts are the business of ordinary equality ("Open" is not "open"). With a folder on both
+ *  sides the whole target decides (`[[a/Name]]` is not `[[b/Name]]`); otherwise the name does. */
+export function sameLinkKey(a: LinkKey | null, b: LinkKey | null): boolean {
+  if (!a || !b || (!a.isLink && !b.isLink)) return false;
+  return a.hasFolder && b.hasFolder ? a.full === b.full : a.base === b.base;
+}
+
+/**
+ * A frontmatter value that is one whole wikilink (`[[Alpha Person]]`, `[[people/Alpha Person]]`,
+ * `[[Alpha Person|Alpha]]`, `[[Alpha Person#Heading]]`, `[[Alpha Person.md]]`) equals the plain
+ * name, the full target, and another link to the same note. "contains" and "startsWith" never
+ * come here: they stay substring and prefix operations on the raw text.
+ */
 export function linkAwareEquals(a: unknown, b: unknown): boolean {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const af = linkAwareForms(a).map((f) => f.toLowerCase());
-  const bf = linkAwareForms(b).map((f) => f.toLowerCase());
-  return af.some((x) => bf.includes(x));
+  return sameLinkKey(linkKey(a), linkKey(b));
 }

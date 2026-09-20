@@ -4,7 +4,7 @@ import { VaultError } from '../storage/types.ts';
 import { fitWithinBudget } from './budget.ts';
 import { getPath, type IndexEntry } from './frontmatter-index.ts';
 import type { VaultGraph } from './graph.ts';
-import { linkAwareEquals } from './note-parse.ts';
+import { type LinkKey, linkKey, sameLinkKey } from './note-parse.ts';
 import { compileSafePattern, type SafeMatcher } from './safe-regex.ts';
 import { isTagOrDescendant } from './tags.ts';
 
@@ -196,30 +196,47 @@ function asArray(v: unknown): unknown[] | null {
   return Array.isArray(v) ? v : null;
 }
 
-function eq(a: unknown, b: unknown): boolean {
-  // The exact string still matches first (typedCompare); linkAwareEquals is a fallback that
-  // never fires for non-strings, so it changes nothing for numbers, dates or booleans.
-  return typedCompare(a, b) === 0 || linkAwareEquals(a, b);
+/** The query side of an eq / in, prepared once per condition rather than once per note: over
+ *  40,000 notes and fifty values, parsing both sides at every comparison cost five times the
+ *  plain comparison. */
+interface Wanted {
+  value: unknown;
+  key: LinkKey | null;
 }
 
-function matchesEq(fieldVal: unknown, value: unknown): boolean {
+function wanted(value: unknown): Wanted {
+  return { value, key: linkKey(value) };
+}
+
+/** One field element against the prepared query values. The element is parsed as a link at most
+ *  once, and only when a link is in play: its text starts one, or a query value is one. */
+function elementMatches(fieldEl: unknown, ws: Wanted[], anyLinkWanted: boolean): boolean {
+  for (const w of ws) if (typedCompare(fieldEl, w.value) === 0) return true;
+  const fieldMayBeLink = typeof fieldEl === 'string' && fieldEl.trimStart().startsWith('[[');
+  if (!fieldMayBeLink && !anyLinkWanted) return false;
+  const key = linkKey(fieldEl);
+  return key !== null && ws.some((w) => sameLinkKey(key, w.key));
+}
+
+function matchesEq(fieldVal: unknown, w: Wanted): boolean {
   // A missing field equals nothing (not even the text "undefined"); "exists: false" finds it.
   if (fieldVal === undefined) return false;
   // A null field equals null and nothing else (not the text "null").
-  if (fieldVal === null || value === null) return fieldVal === value;
+  if (fieldVal === null || w.value === null) return fieldVal === w.value;
+  const link = w.key?.isLink === true;
   const arr = asArray(fieldVal);
-  if (arr) return arr.some((el) => eq(el, value));
-  return eq(fieldVal, value);
+  if (arr) return arr.some((el) => elementMatches(el, [w], link));
+  return elementMatches(fieldVal, [w], link);
 }
 
 /** Membership check for the "in" op. `value` is guaranteed to be an array by compileCond's
  *  up-front check before this ever runs — see the comment there. */
-function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
+function matchesIn(fieldVal: unknown, ws: Wanted[], anyLink: boolean): boolean {
   if (fieldVal === undefined) return false;
-  if (fieldVal === null) return value.includes(null);
+  if (fieldVal === null) return ws.some((w) => w.value === null);
   const arr = asArray(fieldVal);
-  if (arr) return arr.some((el) => value.some((v) => eq(el, v)));
-  return value.some((v) => eq(fieldVal, v));
+  if (arr) return arr.some((el) => elementMatches(el, ws, anyLink));
+  return elementMatches(fieldVal, ws, anyLink);
 }
 
 function matchesOneContains(fieldVal: unknown, needleValue: unknown): boolean {
@@ -336,13 +353,16 @@ function compileCond(cond: Cond): CompiledCond {
       );
     }
   }
+  const one = wanted(cond.value);
+  const many = cond.op === 'in' ? (cond.value as unknown[]).map(wanted) : [];
+  const anyLink = many.some((w) => w.key?.isLink === true);
   return (entry, graph) => {
     const fv = fieldValue(entry, graph, cond.field);
     switch (cond.op) {
       case 'eq':
-        return matchesEq(fv, cond.value);
+        return matchesEq(fv, one);
       case 'neq':
-        return !matchesEq(fv, cond.value);
+        return !matchesEq(fv, one);
       case 'contains':
         return matchesContains(fv, cond.value);
       case 'startsWith':
@@ -357,7 +377,7 @@ function compileCond(cond: Cond): CompiledCond {
       case 'lte':
         return matchesOrder(fv, cond.value, cond.op);
       case 'in':
-        return matchesIn(fv, cond.value as unknown[]);
+        return matchesIn(fv, many, anyLink);
       default:
         return false;
     }
@@ -424,11 +444,14 @@ function budgetHint(kept: number, asked: number): string {
  *  being left out. Built via Map -> Object.fromEntries, never `obj[field] =`, so a field literally
  *  named "__proto__" becomes an ordinary own key instead of silently reassigning the prototype
  *  (the same hazard `buildRow` guards against for selected columns). */
+/** Totals over every match. A total that stops being a finite number (two values of 1e308) is
+ *  left out of `sums` and named in `overflowed`: JSON has no Infinity, and a result that fails
+ *  its own schema answers nothing. `sumCounted` still says how many values there were. */
 function computeSums(
   entries: IndexEntry[],
   graph: VaultGraph,
   fields: string[],
-): { sums: Record<string, number>; sumCounted: Record<string, number> } {
+): { sums: Record<string, number>; sumCounted: Record<string, number>; overflowed: string[] } {
   const sums = new Map<string, number>(fields.map((f) => [f, 0]));
   const counted = new Map<string, number>(fields.map((f) => [f, 0]));
   for (const entry of entries) {
@@ -440,7 +463,17 @@ function computeSums(
       }
     }
   }
-  return { sums: Object.fromEntries(sums), sumCounted: Object.fromEntries(counted) };
+  const overflowed = fields.filter((f) => !Number.isFinite(sums.get(f) ?? 0));
+  for (const f of overflowed) sums.delete(f);
+  return {
+    sums: Object.fromEntries(sums),
+    sumCounted: Object.fromEntries(counted),
+    overflowed,
+  };
+}
+
+function overflowHint(fields: string[]): string {
+  return `The total of ${fields.map((f) => `"${f}"`).join(', ')} is too large for a number and was left out of "sums".`;
 }
 
 interface QueryPayload {
@@ -546,7 +579,11 @@ function buildGroups(
       count: g.count,
       paths: g.paths,
       ...(sumFields.length > 0
-        ? { sums: Object.fromEntries(g.sums), sumCounted: Object.fromEntries(g.sumCounted) }
+        ? {
+            // a total that is no longer a finite number is left out, as at the top level
+            sums: Object.fromEntries([...g.sums].filter(([, v]) => Number.isFinite(v))),
+            sumCounted: Object.fromEntries(g.sumCounted),
+          }
         : {}),
     }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -625,7 +662,7 @@ export function evaluateQuery(
   const limit = Math.min(Math.max(q.limit ?? 100, 0), MAX_QUERY_ROWS);
   const limitTruncated = total > limit;
   const limited = limitTruncated ? matched.slice(0, limit) : matched;
-  const sumFields = q.sum ?? [];
+  const sumFields = [...new Set(q.sum ?? [])]; // a name listed twice is one total, not two
   // Over EVERY match, never only the rows a result can carry — the whole reason "sum" exists.
   const summed = sumFields.length === 0 ? undefined : computeSums(matched, graph, sumFields);
 
@@ -654,6 +691,9 @@ export function evaluateQuery(
     if (summed) {
       counted.sums = summed.sums;
       counted.sumCounted = summed.sumCounted;
+      if (summed.overflowed.length > 0) {
+        counted.hint = joinHints(counted.hint, overflowHint(summed.overflowed));
+      }
     }
     return withGroupsHint(counted, fitted?.overlapping ?? false);
   }
@@ -684,6 +724,9 @@ export function evaluateQuery(
   if (summed) {
     result.sums = summed.sums;
     result.sumCounted = summed.sumCounted;
+    if (summed.overflowed.length > 0) {
+      result.hint = joinHints(result.hint, overflowHint(summed.overflowed));
+    }
   }
   return withGroupsHint(result, fitted?.overlapping ?? false);
 }
@@ -713,8 +756,9 @@ function wrapperChars(q: Query, total: number): number {
     GROUP_PATHS_DROPPED_HINT,
     groupsShownHint(widest, widest),
     OVERLAPPING_GROUPS_HINT,
+    ...((q.sum ?? []).length === 0 ? [] : [overflowHint([...new Set(q.sum ?? [])])]),
   ].join(' ');
-  const sumFields = q.sum ?? [];
+  const sumFields = [...new Set(q.sum ?? [])];
   const sumsPlaceholder =
     sumFields.length === 0
       ? {}

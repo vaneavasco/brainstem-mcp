@@ -111,21 +111,28 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         const orderedCapped =
           ordered.length > MAX_LIST_ENTRIES ? ordered.slice(0, MAX_LIST_ENTRIES) : ordered;
 
-        const filesByParent = new Map<string, number>();
-        for (const e of entries) {
-          if (e.kind !== 'file') continue;
-          const parent = parentDir(e.path);
-          filesByParent.set(parent, (filesByParent.get(parent) ?? 0) + 1);
-        }
+        // Counted from the index, not from this listing: a folder at the depth limit, a listing
+        // without files, or a glob would otherwise report 0 files for a folder that holds
+        // hundreds. `files` is every note and attachment under the folder, at any depth.
+        const filesUnder = new Map<string, number>();
+        const countUp = (filePath: string): void => {
+          for (let dir = parentDir(filePath); dir !== ''; dir = parentDir(dir)) {
+            filesUnder.set(dir, (filesUnder.get(dir) ?? 0) + 1);
+          }
+        };
+        for (const e of index.all()) countUp(e.path);
+        for (const asset of index.assets()) countUp(asset);
         const allFolders = entries
           .filter((e) => e.kind === 'dir')
-          .map((e) => ({ path: e.path, files: filesByParent.get(e.path) ?? 0 }))
+          .map((e) => ({ path: e.path, files: filesUnder.get(e.path) ?? 0 }))
           .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
         const hintFor = (shown: number, foldersCut: boolean) =>
-          `${shown} of ${entries.length} entries shown, shallowest first; "folders" counts files ` +
-          `directly inside each subfolder${foldersCut ? ' (itself truncated too)' : ''}: list one ` +
-          'folder, narrow with glob, or count with vault_query { pathPrefix, countOnly: true }.';
+          `${shown} of ${entries.length} entries shown, shallowest first` +
+          (allFolders.length === 0
+            ? ''
+            : `; "folders" counts every file under each listed folder, at any depth, whatever glob or depth was asked${foldersCut ? ' (itself truncated too)' : ''}`) +
+          ': list one folder, narrow with glob, or count with vault_query { pathPrefix, countOnly: true }.';
         // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
         // for entries/folders never overshoots what the final, possibly-shorter hint leaves.
         const longestHint = hintFor(entries.length, true);
@@ -135,7 +142,13 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         );
         const foldersFit = fitWithinBudget(allFolders, Math.floor(baseRoom / 4));
         const entriesRoom = roomBeside(
-          { path: base, entries: [], folders: foldersFit.kept, truncated: true, hint: longestHint },
+          {
+            path: base,
+            entries: [],
+            ...(allFolders.length === 0 ? {} : { folders: foldersFit.kept }),
+            truncated: true,
+            hint: longestHint,
+          },
           CLIENT_SAFE_RESULT_CHARS,
         );
         const entriesFit = fitWithinBudget(orderedCapped, entriesRoom);
@@ -143,7 +156,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         return okJson({
           path: base,
           entries: entriesFit.kept,
-          folders: foldersFit.kept,
+          ...(allFolders.length === 0 ? {} : { folders: foldersFit.kept }),
           truncated: true,
           hint: hintFor(entriesFit.kept.length, foldersFit.cut),
         });
