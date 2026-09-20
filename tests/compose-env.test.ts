@@ -7,9 +7,7 @@ import { describe, expect, it } from 'vitest';
  * notices. Settings that are deliberately not passed (or are not the app's) are listed here.
  */
 const NOT_FOR_THE_APP = new Set([
-  'VAULT_PATH', // mounted at /vault, the container always sees VAULT_PATH=/vault
   'TUNNEL_TOKEN', // the tunnel container's
-  'STATE_DIR', // tests and `npm run dev` only, see compose.yaml
   'HOST_UID', // compose `user:`
   'HOST_GID',
   'BRAINSTEM_IMAGE', // image selection

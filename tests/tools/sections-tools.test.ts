@@ -260,7 +260,8 @@ describe('vault_batch_read shares one budget fairly', () => {
   });
 
   it('two notes of very different length both arrive whole when they fit together', async () => {
-    const long = `# Long\n\n${'word '.repeat(9_000)}\n`; // 45k characters
+    // more than half of MAX_BATCH_RESULT_CHARS: an even split would have cut it
+    const long = `# Long\n\n${'word '.repeat(6_000)}\n`; // 30k characters
     await h.call('vault_write', { path: 'long.md', content: long });
     await h.call('vault_write', { path: 'short.md', content: '# Short\nhi\n' });
     const r = await h.call('vault_batch_read', { paths: ['short.md', 'long.md'] });

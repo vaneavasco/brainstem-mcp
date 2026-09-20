@@ -85,8 +85,8 @@ function pickSections(content: string, headings: string[]): PickedSections {
 
 /**
  * How many characters each text may take from one shared budget. Shorter texts are served first
- * and whole; what they leave is split among the longer ones, so two notes of 100 and 45,000
- * characters both arrive whole under a 60,000 budget instead of the second being cut at 30,000.
+ * and whole; what they leave is split among the longer ones, so a short note and one that
+ * needs more than an even share both arrive whole when together they fit the budget.
  * `cap` is the caller's own per-text limit.
  */
 export function shareBudget(lengths: number[], budget: number, cap?: number): number[] {

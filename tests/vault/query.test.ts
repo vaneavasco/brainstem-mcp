@@ -565,6 +565,26 @@ describe('evaluateQuery — contains/startsWith on what is not there', () => {
     );
   });
 
+  it('a missing field equals nothing and matches no pattern', () => {
+    expect(run({ where: [{ field: 'no_such_field', op: 'eq', value: 'undefined' }] }).total).toBe(
+      0,
+    );
+    expect(run({ where: [{ field: 'no_such_field', op: 'in', value: ['undefined'] }] }).total).toBe(
+      0,
+    );
+    expect(run({ where: [{ field: 'no_such_field', op: 'regex', value: 'undef.*' }] }).total).toBe(
+      0,
+    );
+    // "neq" stays the complement: a note without the field is not equal to anything
+    expect(run({ where: [{ field: 'no_such_field', op: 'neq', value: 'x' }] }).total).toBe(4);
+  });
+
+  it('an empty scalar needle is refused too, with the operators that test presence named', () => {
+    expect(() => run({ where: [{ field: 'owners', op: 'contains', value: '' }] })).toThrow(
+      /nonEmpty/,
+    );
+  });
+
   it('an empty needle in a list is refused: it would match every note', () => {
     expect(() =>
       run({ where: [{ field: 'owners', op: 'contains', value: ['Alice', ''] }] }),

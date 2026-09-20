@@ -159,6 +159,9 @@ export interface StorageAdapter {
   search(query: string, opts?: SearchOpts): Promise<Match[]>;
   /** sha256hex of the file's decoded text, or null when it does not exist or is a directory (non-text files hash their raw bytes). */
   hashOf(path: string): Promise<string | null>;
+  /** True when a file is at `path`. Optional: a cheap existence check (no read, no hash) for
+   *  callers that only need to confirm an absence, such as the index reconcile. */
+  exists?(path: string): Promise<boolean>;
   /** Unlinks a file outright, bypassing .trash. Internal use only (transaction rollback). */
   hardDelete(path: string): Promise<void>;
   /** `onError` surfaces the underlying watcher's own error event (e.g. an inotify overflow);

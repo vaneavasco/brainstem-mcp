@@ -10,8 +10,17 @@ export const MAX_BATCH = 20;
 export const MAX_READ_SECTIONS = 10;
 export const MAX_SEARCH_RESULTS = 50;
 export const MAX_RESULT_CHARS = 120_000;
-/** Bodies of one vault_batch_read together: metadata of 20 notes rides on top, and clients refuse results near 100k characters. */
-export const MAX_BATCH_RESULT_CHARS = 60_000;
+/**
+ * What the strictest client seen accepts in one tool result. Measured, not guessed: a client with
+ * a token limit on tool results took results of about 51,000 characters and refused (or diverted
+ * to a file the model cannot read) results of 55,100 and 59,800; another client took 120,000.
+ * JSON costs more tokens per character than prose, so the bound keeps a margin below the
+ * smallest refusal.
+ */
+export const CLIENT_SAFE_RESULT_CHARS = 48_000;
+/** Bodies of one vault_batch_read together. Frontmatter, metadata and a truncation marker per
+ *  note ride on top of the bodies, hence less than CLIENT_SAFE_RESULT_CHARS. */
+export const MAX_BATCH_RESULT_CHARS = 40_000;
 export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;
@@ -20,12 +29,10 @@ export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;
-/** Character budget for a vault_query row payload (the "rows" array, or the "values" array in
- *  "columns" format) — independent of `limit`, since a handful of wide selected fields across a
- *  few hundred rows can still blow past what a client will accept. */
-export const MAX_QUERY_RESULT_CHARS = 60_000;
-/** Same budget for the "groups" array: example paths are dropped first when it is exceeded. */
-export const MAX_QUERY_GROUPS_CHARS = 60_000;
+/** Character budget for a vault_query / vault_recent payload: rows (or "values") and groups
+ *  together, independent of `limit` — a handful of wide selected fields across a few hundred
+ *  rows outgrow what a client accepts. */
+export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS;
 /** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
 export const DEFAULT_RECONCILE_MS = 300_000;
 /** Shortest allowed reconcile interval: each pass lists the whole vault. */

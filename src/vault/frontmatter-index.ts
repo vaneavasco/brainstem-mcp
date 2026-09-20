@@ -336,7 +336,10 @@ export class FrontmatterIndex {
     }
     for (const p of [...this.assetPaths]) {
       if (seenAssets.has(p)) continue;
-      if ((await adapter.hashOf(p).catch(() => undefined)) === null) {
+      const gone = adapter.exists
+        ? !(await adapter.exists(p).catch(() => true))
+        : (await adapter.hashOf(p).catch(() => undefined)) === null;
+      if (gone) {
         this.removeAsset(p);
         removed += 1;
       }

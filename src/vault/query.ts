@@ -1,8 +1,4 @@
-import {
-  MAX_QUERY_GROUPS_CHARS,
-  MAX_QUERY_RESULT_CHARS,
-  MAX_QUERY_ROWS,
-} from '../storage/limits.ts';
+import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS } from '../storage/limits.ts';
 import { baseName, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import type { IndexEntry } from './frontmatter-index.ts';
@@ -192,6 +188,8 @@ function asArray(v: unknown): unknown[] | null {
 }
 
 function matchesEq(fieldVal: unknown, value: unknown): boolean {
+  // A missing field equals nothing (not even the text "undefined"); "exists: false" finds it.
+  if (fieldVal === undefined) return false;
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => typedCompare(el, value) === 0);
   return typedCompare(fieldVal, value) === 0;
@@ -200,6 +198,7 @@ function matchesEq(fieldVal: unknown, value: unknown): boolean {
 /** Membership check for the "in" op. `value` is guaranteed to be an array by compileCond's
  *  up-front check before this ever runs — see the comment there. */
 function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
+  if (fieldVal === undefined) return false;
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => value.some((v) => typedCompare(el, v) === 0));
   return value.some((v) => typedCompare(fieldVal, v) === 0);
@@ -302,13 +301,22 @@ type CompiledCond = (entry: IndexEntry, graph: VaultGraph) => boolean;
 function compileCond(cond: Cond): CompiledCond {
   if (cond.op === 'regex') {
     const matcher = compileSafeRegex(cond.value);
-    return (entry, graph) => matcher.test(String(fieldValue(entry, graph, cond.field)));
+    return (entry, graph) => {
+      const fv = fieldValue(entry, graph, cond.field);
+      return fv !== undefined && fv !== null && matcher.test(String(fv));
+    };
   }
   if (cond.op === 'in' && !Array.isArray(cond.value)) {
     throw new VaultError('INVALID_INPUT', '"in" requires an array value.');
   }
-  if ((cond.op === 'contains' || cond.op === 'startsWith') && Array.isArray(cond.value)) {
-    validateNeedleArray(cond.op, cond.value);
+  if (cond.op === 'contains' || cond.op === 'startsWith') {
+    if (Array.isArray(cond.value)) validateNeedleArray(cond.op, cond.value);
+    else if (cond.value === '' || cond.value === undefined || cond.value === null) {
+      throw new VaultError(
+        'INVALID_INPUT',
+        `"${cond.op}" needs a non-empty value; use "exists" or "nonEmpty" to test for presence.`,
+      );
+    }
   }
   return (entry, graph) => {
     const fv = fieldValue(entry, graph, cond.field);
@@ -551,7 +559,9 @@ export function evaluateQuery(
   // One budget for the whole result: the groups take what they need first (at most half when rows
   // are wanted too), the rows get the rest. Two independent budgets would add up to twice what a
   // client accepts.
-  const groupsBudget = q.countOnly ? MAX_QUERY_RESULT_CHARS : MAX_QUERY_GROUPS_CHARS;
+  const groupsBudget = q.countOnly
+    ? MAX_QUERY_RESULT_CHARS
+    : Math.floor(MAX_QUERY_RESULT_CHARS / 2);
   const fitted =
     q.groupBy === undefined
       ? undefined
@@ -566,6 +576,7 @@ export function evaluateQuery(
     const counted: QueryResult = { rows: [], total, truncated: false };
     if (fitted) {
       counted.groups = fitted.groups;
+      counted.truncated = fitted.cut;
       if (fitted.hint) counted.hint = fitted.hint;
     }
     return withGroupsHint(counted, fitted?.overlapping ?? false);
@@ -580,11 +591,16 @@ export function evaluateQuery(
   const result: QueryResult = {
     rows: payload.rows,
     total,
-    truncated: limitTruncated || payload.truncated,
+    truncated: limitTruncated || payload.truncated || (fitted?.cut ?? false),
   };
   if (payload.columns) result.columns = payload.columns;
   if (payload.values) result.values = payload.values;
-  if (payload.hint) result.hint = payload.hint;
+  if (payload.hint) {
+    // With groups in the result the rows had less room: say so, or the advice cannot help.
+    result.hint = fitted
+      ? `${payload.hint} The groups took ${JSON.stringify(fitted.groups).length} characters of it: drop groupBy, or ask for the counts alone with countOnly.`
+      : payload.hint;
+  }
   if (fitted) {
     result.groups = fitted.groups;
     if (fitted.hint) result.hint = joinHints(result.hint, fitted.hint);
@@ -605,11 +621,12 @@ function fitGroups(
   budget: number,
   countsOnly: boolean,
   total: number,
-): { groups: Group[]; hint?: string; overlapping: boolean } {
+): { groups: Group[]; hint?: string; overlapping: boolean; cut: boolean } {
   // A note with several values sits in several groups: only then do the counts exceed the total.
   const overlapping = all.reduce((n, g) => n + g.count, 0) > total;
   let groups = countsOnly ? all.map((g) => ({ ...g, paths: [] })) : all;
   let hint: string | undefined;
+  let cut = false; // a group was left out (dropping example paths loses no count)
   if (JSON.stringify(groups).length > budget) {
     if (!countsOnly) hint = GROUP_PATHS_DROPPED_HINT;
     groups = groups.map((g) => ({ ...g, paths: [] }));
@@ -624,8 +641,9 @@ function fitGroups(
       `${shown.length} of ${groups.length} groups shown, the largest ones; filter with "where" to see the others.`,
     );
     groups = shown;
+    cut = true;
   }
-  return { groups, ...(hint ? { hint } : {}), overlapping };
+  return { groups, ...(hint ? { hint } : {}), overlapping, cut };
 }
 
 function withGroupsHint(result: QueryResult, overlapping: boolean): QueryResult {

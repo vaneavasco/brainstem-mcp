@@ -291,6 +291,13 @@ export class LocalFSAdapter implements StorageAdapter {
    * attachment written via vault_write_binary) is hashed over its raw bytes instead, so every
    * existing file gets a real, round-trippable hash for expectedHash.
    */
+  async exists(inputPath: string): Promise<boolean> {
+    const abs = this.abs(requireFilePath(inputPath));
+    await this.assertInsideRoot(abs); // the same containment check every other path goes through
+    const stat = await this.statOrNull(abs);
+    return stat?.isFile() === true;
+  }
+
   async hashOf(inputPath: string): Promise<string | null> {
     const p = requireFilePath(inputPath);
     const abs = this.abs(p);
@@ -485,8 +492,9 @@ export class LocalFSAdapter implements StorageAdapter {
       try {
         dirents = await fs.readdir(this.abs(dir), { withFileTypes: true });
       } catch (error) {
-        if (dir !== base && isEnoent(error)) return;
-        throw error;
+        if (!isEnoent(error)) throw error;
+        if (dir !== base) return;
+        throw new VaultError('NOT_FOUND', `${base || '/'} does not exist.`);
       }
       dirents.sort((a, b) => a.name.localeCompare(b.name, 'en'));
       for (const dirent of dirents) {

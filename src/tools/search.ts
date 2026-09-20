@@ -261,8 +261,8 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           const candidateOpts: CandidateOpts = { tags, where, pathPrefix, glob };
           const candidates = computeCandidates(index, graph, candidateOpts);
           if (candidates.incomplete) {
-            // evaluateQuery's own row cap means `candidates.paths` cannot be trusted as
-            // exhaustive here — fall back to a bounded whole-vault scan, filtered per file.
+            // More candidates than one path list may carry: `candidates.paths` is only a slice —
+            // fall back to a bounded whole-vault scan, filtered per file.
             ({ matches, truncated } = await searchScanAndFilter(
               adapter,
               index,

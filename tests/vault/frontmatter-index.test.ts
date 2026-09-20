@@ -278,6 +278,24 @@ describe('reconcile', () => {
     expect(index.get('a.md')).toBeUndefined();
   });
 
+  it('confirms that an asset is gone without reading it', async () => {
+    await fs.mkdir(path.join(root, 'img'), { recursive: true });
+    await fs.writeFile(path.join(root, 'img', 'big.png'), Buffer.alloc(1024));
+    const index = await FrontmatterIndex.build(vault);
+    expect(index.assets().has('img/big.png')).toBe(true);
+    await fs.unlink(path.join(root, 'img', 'big.png'));
+    let hashed = 0;
+    const hashOf = vault.hashOf.bind(vault);
+    vault.hashOf = async (p: string) => {
+      hashed += 1;
+      return hashOf(p);
+    };
+    const result = await index.reconcile(vault);
+    expect(index.assets().has('img/big.png')).toBe(false);
+    expect(result.removed).toBe(1);
+    expect(hashed).toBe(0);
+  });
+
   it('does not read an unindexable file again on every sweep', async () => {
     await fs.writeFile(path.join(root, 'binary.md'), Buffer.from([0xff, 0xfe, 0xfd, 0x00]));
     const index = await FrontmatterIndex.build(vault);
