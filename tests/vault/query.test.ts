@@ -605,6 +605,27 @@ describe('evaluateQuery — groups budget', () => {
     expect(counted.total).toBe(4000);
   });
 
+  it('the whole result, wrapper and hints included, stays within what a client accepts', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const filler = 'x'.repeat(300);
+    for (let i = 0; i < 450; i += 1) {
+      index.upsert(
+        entry(`whole/n${i}.md`, `---\nblurb: "${filler}"\nkinds: [k${i}, shared]\n---\nbody`),
+      );
+    }
+    for (const format of ['rows', 'columns'] as const) {
+      const r = run({
+        pathPrefix: 'whole',
+        select: ['blurb'],
+        limit: 450,
+        groupBy: 'kinds',
+        format,
+      });
+      expect(r.hint).toBeDefined(); // budget hint + groups hint + overlapping-groups hint
+      expect(JSON.stringify(r).length).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    }
+  });
+
   it('rows and groups share one budget', () => {
     const filler = 'x'.repeat(300);
     for (let i = 0; i < 450; i += 1) {

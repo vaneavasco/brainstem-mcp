@@ -43,8 +43,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   lists first), `vault_tags`, `vault_search_frontmatter` and `vault_analytics_findings` keep the
   longest prefix that fits 48,000 characters, set `truncated`, and where there is something
   useful to say, a `hint` with the counts and the narrower call.
-- `vault_query` and `vault_recent` bound the whole result, not only the rows: rows (or `values`)
-  and `groups` share 48,000 characters. Groups get at most half when rows are wanted too (all of
+- `vault_query` and `vault_recent` bound the whole result, not only the rows: the result stays
+  within 48,000 characters, rows (or `values`), `groups`, hints and all. Groups get at most half when rows are wanted too (all of
   it with `countOnly`); their example paths are dropped before any group is, and when thousands
   of keys still do not fit the largest groups are kept. A cut is never silent: `truncated` is
   set and a `hint` says what was cut; the row hint counts against the rows asked for (`limit`),

@@ -34,7 +34,7 @@ export const MAX_QUERY_ROWS = 500;
 /** Character budget for a vault_query / vault_recent payload: rows (or "values") and groups
  *  together, independent of `limit` — a handful of wide selected fields across a few hundred
  *  rows outgrow what a client accepts. */
-export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS;
+export const MAX_QUERY_RESULT_CHARS = CLIENT_SAFE_RESULT_CHARS - 1_000; // total, flags and hints ride on top
 /** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
 export const DEFAULT_RECONCILE_MS = 300_000;
 /** Shortest allowed reconcile interval: each pass lists the whole vault. */
