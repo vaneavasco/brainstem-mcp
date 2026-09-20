@@ -67,10 +67,12 @@ describe('vault_search', () => {
     expect(empty.isError).toBe(true);
   });
 
-  it('adds a hint only on zero hits, pointing at spelling/regex alternatives', async () => {
+  it('adds a hint only on zero hits, and only advice that is true for the call', async () => {
     const zero = await h.call('vault_search', { query: 'nonexistentword' });
     expect((zero.structuredContent as { total: number }).total).toBe(0);
-    expect((zero.structuredContent as { hint?: string }).hint).toMatch(/regex.*true/);
+    expect((zero.structuredContent as { hint?: string }).hint).toContain('spelling');
+    // regex needs ripgrep, which a given install may lack: never send a caller into UNSUPPORTED
+    expect((zero.structuredContent as { hint?: string }).hint).not.toContain('regex');
 
     const some = await h.call('vault_search', { query: 'milk' });
     expect((some.structuredContent as { hint?: string }).hint).toBeUndefined();

@@ -83,6 +83,8 @@ export class FrontmatterIndex {
   private bytes = 0;
   private overBudgetLogged = false;
   private _reconciledAt: Date | null = null;
+  /** Markdown paths a reconcile could not index, with the size:mtime they had then. */
+  private readonly unindexable = new Map<string, string>();
 
   private constructor() {
     this.builtAt = new Date();
@@ -273,10 +275,10 @@ export class FrontmatterIndex {
    * index never stores their content). `adapter.list()` already excludes the reserved folder and
    * hidden paths, so reconcile can never surface either.
    *
-   * Safe to call while tools are writing: every mutation goes through the same
-   * upsert/remove/addAsset/removeAsset the live watcher path uses, and a single file that fails
-   * to read (raced away between the listing and the read) is skipped, never thrown — the
-   * counters simply don't credit it.
+   * Safe to call while tools are writing: additions and refreshes go through the same
+   * upsert/addAsset the live watcher path uses; a removal is never decided on the listing alone
+   * but confirmed against the disk; and a single file that fails to read (raced away between the
+   * listing and the read) is skipped, never thrown — the counters simply don't credit it.
    */
   async reconcile(adapter: StorageAdapter): Promise<ReconcileResult> {
     const start = Date.now();
@@ -288,43 +290,59 @@ export class FrontmatterIndex {
     let removed = 0;
 
     for (const file of files) {
-      if (isMarkdownPath(file.path)) {
-        seenNotes.add(file.path);
-        const existing = this.entries.get(file.path);
-        if (existing && existing.size === file.size && existing.modifiedAt === file.modifiedAt) {
-          continue;
-        }
-        try {
-          await this.refreshPath(adapter, file.path);
-        } catch {
-          continue; // one unreadable file must never abort the whole reconcile pass
-        }
-        // refreshPath silently removes on a race (NOT_FOUND/ENCODING) instead of adding — only
-        // credit refreshed/added when an entry actually landed.
-        if (this.entries.has(file.path)) {
-          if (existing) refreshed += 1;
-          else added += 1;
-        }
-      } else {
+      if (!isMarkdownPath(file.path)) {
         seenAssets.add(file.path);
         if (!this.assetPaths.has(file.path)) {
           this.addAsset(file.path);
           added += 1;
         }
+        continue;
+      }
+      seenNotes.add(file.path);
+      const stamp = `${file.size}:${file.modifiedAt}`;
+      const existing = this.entries.get(file.path);
+      if (existing && existing.size === file.size && existing.modifiedAt === file.modifiedAt) {
+        continue;
+      }
+      // A file that could not be indexed last time (not UTF-8, say) and has not changed since is
+      // not worth another full read on every sweep.
+      if (!existing && this.unindexable.get(file.path) === stamp) continue;
+      try {
+        await this.refreshPath(adapter, file.path);
+      } catch {
+        continue; // one unreadable file must never abort the whole reconcile pass
+      }
+      if (this.entries.has(file.path)) {
+        this.unindexable.delete(file.path);
+        if (existing) refreshed += 1;
+        else added += 1;
+      } else {
+        this.unindexable.set(file.path, stamp);
       }
     }
 
+    // The listing is a snapshot. A note a tool wrote, or moved, after it was taken is in the index
+    // and not in the snapshot: removing on the snapshot alone would drop a note that exists (and a
+    // later move of one of its link targets would then leave its links unrewritten). So absence
+    // is confirmed against the disk, one candidate at a time; candidates are rare.
     for (const p of [...this.entries.keys()]) {
-      if (!seenNotes.has(p)) {
-        this.remove(p);
-        removed += 1;
+      if (seenNotes.has(p)) continue;
+      try {
+        await this.refreshPath(adapter, p); // removes the entry itself when the file is gone
+      } catch {
+        continue;
       }
+      if (!this.entries.has(p)) removed += 1;
     }
     for (const p of [...this.assetPaths]) {
-      if (!seenAssets.has(p)) {
+      if (seenAssets.has(p)) continue;
+      if ((await adapter.hashOf(p).catch(() => undefined)) === null) {
         this.removeAsset(p);
         removed += 1;
       }
+    }
+    for (const p of [...this.unindexable.keys()]) {
+      if (!seenNotes.has(p)) this.unindexable.delete(p);
     }
 
     this._reconciledAt = new Date();

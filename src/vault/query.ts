@@ -490,11 +490,17 @@ function compareBySortKey(
 /** Evaluates a Bases-style Query against the in-memory index. Pure and synchronous: no disk
  *  reads, no I/O. `limit` is always clamped to [0, MAX_QUERY_ROWS] as a safety net even when a
  *  caller bypasses the tool-layer Zod validation (e.g. vault_recent building its own Query). */
-export function evaluateQuery(
+/**
+ * The entries that pass `pathPrefix`, `tags` and `where`, sorted by `sort`: every match, with no
+ * row limit and no character budget. `evaluateQuery` presents a page of this; a caller that
+ * needs the complete set (vault_search narrowing its candidates) must use this, never the rows
+ * of a presented result.
+ */
+export function matchEntries(
   entries: Iterable<IndexEntry>,
   graph: VaultGraph,
-  q: Query,
-): QueryResult {
+  q: Pick<Query, 'where' | 'tags' | 'pathPrefix' | 'sort'>,
+): IndexEntry[] {
   const compiledWhere = (q.where ?? []).map(compileCond);
 
   let matched = [...entries].filter(
@@ -514,6 +520,15 @@ export function evaluateQuery(
       return 0;
     });
   }
+  return matched;
+}
+
+export function evaluateQuery(
+  entries: Iterable<IndexEntry>,
+  graph: VaultGraph,
+  q: Query,
+): QueryResult {
+  const matched = matchEntries(entries, graph, q);
 
   const total = matched.length;
   const limit = Math.min(Math.max(q.limit ?? 100, 0), MAX_QUERY_ROWS);

@@ -231,7 +231,9 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         );
         const perNote = maxChars === undefined ? share : Math.min(maxChars, share);
         const notes = result.notes.map((note) => {
-          const picked = sections ? pickSections(note.body, sections) : undefined;
+          // note.content, as vault_read does: findSection skips the frontmatter itself, and a body that
+          // opens with a horizontal rule would otherwise be taken for a second frontmatter block.
+          const picked = sections ? pickSections(note.content, sections) : undefined;
           const clamped = clampText(picked ? picked.text : note.body, perNote);
           return {
             path: note.path,

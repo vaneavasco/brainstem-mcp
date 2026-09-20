@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { promises as fs, type Stats } from 'node:fs';
+import { type Dirent, promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
@@ -479,7 +479,15 @@ export class LocalFSAdapter implements StorageAdapter {
 
     const out: Entry[] = [];
     const walk = async (dir: string, level: number): Promise<void> => {
-      const dirents = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      // A folder or file that disappears between being listed and being read is not an error of
+      // the listing: on a vault that other programs write to, it is a Tuesday.
+      let dirents: Dirent[];
+      try {
+        dirents = await fs.readdir(this.abs(dir), { withFileTypes: true });
+      } catch (error) {
+        if (dir !== base && isEnoent(error)) return;
+        throw error;
+      }
       dirents.sort((a, b) => a.name.localeCompare(b.name, 'en'));
       for (const dirent of dirents) {
         if (dirent.name.startsWith('.')) continue;
@@ -491,7 +499,8 @@ export class LocalFSAdapter implements StorageAdapter {
           if (includeDirs && matches) out.push({ path: rel, kind: 'dir' });
           if (level < depth) await walk(rel, level + 1);
         } else if (dirent.isFile() && includeFiles && matches) {
-          const stat = await fs.stat(this.abs(rel));
+          const stat = await this.statOrNull(this.abs(rel));
+          if (!stat) continue;
           out.push({
             path: rel,
             kind: 'file',

@@ -106,7 +106,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         path: DetailedPathArg,
         include: z.array(LinkInclude).optional(),
         filter: z
-          .object({
+          .strictObject({
             pathPrefix: z
               .string()
               .optional()

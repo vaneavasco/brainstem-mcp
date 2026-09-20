@@ -15,16 +15,26 @@ import { VaultError } from '../storage/types.ts';
 import type { FrontmatterIndex, IndexEntry } from '../vault/frontmatter-index.ts';
 import type { VaultGraph } from '../vault/graph.ts';
 import type { Cond, Query } from '../vault/query.ts';
-import { evaluateQuery } from '../vault/query.ts';
+import { matchEntries } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
 import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
-/** Only ever attached when a search found nothing — vault_search is a literal substring match,
- *  so a plausible next step costs nothing to suggest. */
-const ZERO_HITS_HINT =
-  'No matches: this is a literal substring search. Try a spelling variant, a shorter word, or regex: true.';
+/** Attached only when a search found nothing, and only with advice that is true for that call:
+ *  which of the caller's own choices could explain the empty result, never a generic tip. */
+function zeroHitsHint(why: { regex: boolean; noCandidates: boolean; truncated: boolean }): string {
+  if (why.noCandidates) {
+    return 'No note passed the tags/where/glob filter, so no text was searched: check the filter with vault_query (countOnly) before changing the words.';
+  }
+  if (why.truncated) {
+    return 'No matches in the part of the vault that was scanned before the scan limit: narrow the search with pathPrefix, tags or where.';
+  }
+  if (why.regex) {
+    return 'No matches for this regular expression: it is matched per line; try a simpler pattern or a literal search.';
+  }
+  return 'No matches: this is a literal substring search. Try a spelling variant or a shorter word.';
+}
 
 interface CandidateOpts {
   tags?: Query['tags'];
@@ -33,8 +43,8 @@ interface CandidateOpts {
   glob?: string;
 }
 
-/** The `where`/`tags`/`pathPrefix` portion of `CandidateOpts` as an `evaluateQuery` `Query`
- *  (glob is applied separately — evaluateQuery doesn't know about it). Shared by candidate-list
+/** The `where`/`tags`/`pathPrefix` portion of `CandidateOpts` as a `Query` for `matchEntries`
+ *  (glob is applied separately — the query engine doesn't know about it). Shared by candidate-list
  *  computation and by the single-entry re-check used when the candidate list itself was
  *  truncated (see `filterPassingPaths` below). */
 function filterQuery(opts: CandidateOpts, limit: number): Query {
@@ -53,12 +63,11 @@ function matchesGlob(p: string, glob: string, pathPrefix?: string): boolean {
 }
 
 interface Candidates {
-  /** Candidate paths from evaluateQuery (bounded by MAX_QUERY_ROWS), already glob-filtered. */
+  /** The first MAX_QUERY_ROWS candidate paths from matchEntries, already glob-filtered. */
   paths: string[];
-  /** True when evaluateQuery's own `total` exceeded MAX_QUERY_ROWS — `paths` may then be an
-   *  incomplete slice of the true candidate set (evaluateQuery always clamps `rows` to
-   *  MAX_QUERY_ROWS regardless of the `limit` requested), so it cannot be trusted as exhaustive
-   *  for either the ≤200/chunked path-list strategies or the "total" reported to the caller. */
+  /** True when more than MAX_QUERY_ROWS notes matched: `paths` is then only a slice of the
+   *  candidate set and cannot be trusted as exhaustive, neither for the path-list strategies nor
+   *  for the "total" reported to the caller. */
   incomplete: boolean;
 }
 
@@ -73,31 +82,24 @@ function computeCandidates(
   graph: VaultGraph,
   opts: CandidateOpts,
 ): Candidates {
-  const { rows, total } = evaluateQuery(index.all(), graph, filterQuery(opts, MAX_QUERY_ROWS));
-  let paths = rows.map((r) => r.path);
+  // matchEntries, not evaluateQuery: a presented query result is cut by a row limit AND by a
+  // character budget, and a candidate list cut by either silently loses matches.
+  const matched = matchEntries(index.all(), graph, filterQuery(opts, MAX_QUERY_ROWS));
+  let paths = matched.slice(0, MAX_QUERY_ROWS).map((entry) => entry.path);
   const glob = opts.glob;
   if (glob) paths = paths.filter((p) => matchesGlob(p, glob, opts.pathPrefix));
-  return { paths, incomplete: total > MAX_QUERY_ROWS };
+  return { paths, incomplete: matched.length > MAX_QUERY_ROWS };
 }
 
-/**
- * Which of `entries` pass the `where`/`tags`/`pathPrefix` filter. Evaluated in chunks of at most
- * MAX_QUERY_ROWS entries so evaluateQuery's own row cap — the exact thing `computeCandidates`
- * above cannot exceed — never truncates a chunk (`rows` covers every match in it), while the
- * `where` pattern is compiled once per chunk instead of once per file.
- */
+/** Which of `entries` pass the `where`/`tags`/`pathPrefix` filter: every one of them. */
 function filterPassingPaths(
   entries: IndexEntry[],
   graph: VaultGraph,
   opts: CandidateOpts,
 ): Set<string> {
-  const passing = new Set<string>();
-  for (let i = 0; i < entries.length; i += MAX_QUERY_ROWS) {
-    const chunk = entries.slice(i, i + MAX_QUERY_ROWS);
-    const { rows } = evaluateQuery(chunk, graph, filterQuery(opts, MAX_QUERY_ROWS));
-    for (const row of rows) passing.add(row.path);
-  }
-  return passing;
+  return new Set(
+    matchEntries(entries, graph, filterQuery(opts, MAX_QUERY_ROWS)).map((entry) => entry.path),
+  );
 }
 
 /**
@@ -251,6 +253,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         const hasFilter = tags !== undefined || where !== undefined || glob !== undefined;
         let matches: Match[];
         let truncated: boolean;
+        let noCandidates = false;
         if (!hasFilter) {
           matches = await adapter.search(query, baseOpts);
           truncated = matches.length >= max;
@@ -272,6 +275,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           } else if (candidates.paths.length === 0) {
             matches = [];
             truncated = false;
+            noCandidates = true;
           } else if (candidates.paths.length <= MAX_SEARCH_PATHS) {
             matches = await adapter.search(query, { ...baseOpts, paths: candidates.paths });
             truncated = matches.length >= max;
@@ -296,7 +300,9 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           matches,
           total: matches.length,
           truncated,
-          ...(matches.length === 0 ? { hint: ZERO_HITS_HINT } : {}),
+          ...(matches.length === 0
+            ? { hint: zeroHitsHint({ regex: regex === true, noCandidates, truncated }) }
+            : {}),
         });
       }),
   );

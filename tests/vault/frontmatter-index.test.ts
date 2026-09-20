@@ -238,6 +238,60 @@ describe('applyNote', () => {
 });
 
 describe('reconcile', () => {
+  it('never drops a note that was written or moved while the sweep was running', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    // The listing is a snapshot: whatever a tool indexes after it was taken is not in it.
+    const list = vault.list.bind(vault);
+    vault.list = async (...args: Parameters<typeof list>) => {
+      const snapshot = await list(...args);
+      index.applyNote(await vault.write('fresh.md', '---\nstatus: new\n---\nfresh'));
+      await vault.move('a.md', 'moved.md');
+      index.rename('a.md', 'moved.md');
+      return snapshot;
+    };
+    const result = await index.reconcile(vault);
+    expect(index.get('fresh.md')?.frontmatter).toMatchObject({ status: 'new' });
+    expect(index.get('moved.md')).toBeDefined();
+    expect(index.get('a.md')).toBeUndefined();
+    expect(result.removed).toBe(0);
+  });
+
+  it('a file that vanishes in the middle of the listing does not abort the sweep', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    await fs.writeFile(path.join(root, 'sub', 'b.md'), '---\nstatus: CHANGED\n---\nB');
+    const stat = fs.stat;
+    let tripped = false;
+    (fs as { stat: unknown }).stat = async (p: Parameters<typeof stat>[0], ...rest: unknown[]) => {
+      if (!tripped && String(p).endsWith(`${path.sep}a.md`)) {
+        tripped = true;
+        await fs.unlink(String(p));
+      }
+      return (stat as (...a: unknown[]) => unknown)(p, ...rest);
+    };
+    try {
+      await index.reconcile(vault);
+    } finally {
+      (fs as { stat: unknown }).stat = stat;
+    }
+    expect(tripped).toBe(true);
+    expect(index.get('sub/b.md')?.frontmatter).toMatchObject({ status: 'CHANGED' });
+    expect(index.get('a.md')).toBeUndefined();
+  });
+
+  it('does not read an unindexable file again on every sweep', async () => {
+    await fs.writeFile(path.join(root, 'binary.md'), Buffer.from([0xff, 0xfe, 0xfd, 0x00]));
+    const index = await FrontmatterIndex.build(vault);
+    let reads = 0;
+    const read = vault.read.bind(vault);
+    vault.read = async (p: string) => {
+      if (p === 'binary.md') reads += 1;
+      return read(p);
+    };
+    await index.reconcile(vault);
+    await index.reconcile(vault);
+    expect(reads).toBeLessThanOrEqual(1);
+  });
+
   it('is null until the first call, and set after — regardless of whether anything changed', async () => {
     const index = await FrontmatterIndex.build(vault);
     expect(index.reconciledAt).toBeNull();
