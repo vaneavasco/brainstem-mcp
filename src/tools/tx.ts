@@ -15,23 +15,23 @@ import { guarded, okJson } from './results.ts';
 /** Built at module scope: the shared argument fragments live in the leaf module `args.ts`, which
  *  is fully initialized before any tool module runs (see the note there). */
 const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('write'),
     path: PathArg,
     content: z.string(),
     mergeFrontmatter: z.boolean().optional(),
     expectedHash: ExpectedHashArg,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('edit'),
     path: PathArg,
     patches: z
-      .array(z.object({ find: z.string().min(1), replace: z.string() }))
+      .array(z.strictObject({ find: z.string().min(1), replace: z.string() }))
       .min(1)
       .max(50),
     expectedHash: ExpectedHashArg,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('append'),
     path: PathArg,
     content: z.string().min(1),
@@ -53,20 +53,20 @@ const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
       ),
     expectedHash: ExpectedHashArg,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('frontmatter_update'),
     path: PathArg,
     set: z.record(z.string(), z.unknown()).optional(),
     unset: z.array(z.string()).optional(),
     expectedHash: ExpectedHashArg,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('move'),
     from: PathArg,
     to: PathArg,
     expectedHash: ExpectedHashArg,
   }),
-  z.object({
+  z.strictObject({
     op: z.literal('delete'),
     path: PathArg,
     confirm: z.boolean(),
@@ -130,7 +130,7 @@ export function registerTxTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Run several writes as one transaction',
       description: `Apply up to ${MAX_TX_OPS} write/edit/append/frontmatter_update/move/delete ops to at most ${MAX_TX_FILES} files as one all-or-nothing unit. Every op is checked first (hashes, patches, move destinations); if any check fails nothing is written. If a write fails half-way, every touched file is restored from a journalled copy. Ops on the same path compose in order. An append op takes "heading" (insert inside a section) and "unique" (skip when an equivalent line is already there), so a note plus every reciprocal bullet on other notes can be written as one unit. Use dryRun=true to see the diffs first.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         // No Zod .min/.max here on purpose: both caps are enforced inside runTransaction so a
         // violation comes back as INVALID_INPUT like every other vault error, instead of the
         // SDK's generic "Input validation error".

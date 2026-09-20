@@ -31,7 +31,7 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
       title: 'Vault health summary',
       description:
         'Counts and examples of vault hygiene issues: notes without frontmatter, missing required frontmatter keys, broken wikilinks, ambiguous links, orphan notes, inconsistent tag spellings, non-UTF-8 files and oversized files. Also reports the top hub notes by backlink count. Results are cached for 10 minutes unless refresh=true.',
-      inputSchema: z.object({ refresh: z.boolean().optional() }),
+      inputSchema: z.strictObject({ refresh: z.boolean().optional() }),
       outputSchema: z.object({
         scannedFiles: z.number(),
         truncated: z.boolean(),
@@ -54,7 +54,7 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
     {
       title: 'Vault health findings',
       description: `Detailed findings for one category: ${ANALYTICS_CATEGORIES.join(', ')}.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         category: z.enum(ANALYTICS_CATEGORIES),
         limit: z.number().int().min(1).max(100).optional(),
         refresh: z.boolean().optional(),

@@ -102,7 +102,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Note links',
       description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) for plain-text mentions of the note's basename or aliases in notes that don't already link to it. "filter.pathPrefix" (vault-relative, case-sensitive) keeps only backlinks/embeds/unlinkedMentions whose source starts with it, applied before the caps (check one folder at a time); "total" reports the filtered, pre-cap counts. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions. countOnly:true returns just total, no lists.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: DetailedPathArg,
         include: z.array(LinkInclude).optional(),
         filter: z
@@ -221,7 +221,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Tags',
       description: `List every tag in the vault with note counts, or the notes carrying one tag (with includeNested, default true, rolling up nested children like "project/alpha" into "project"). Filter the tag list with prefix (case-insensitive). Caps notes at ${MAX_GRAPH_ITEMS} for a given tag.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         tag: z.string().optional(),
         prefix: z.string().optional(),
         includeNested: z.boolean().optional(),
@@ -262,7 +262,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
       title: 'Note outline',
       description:
         'Structural summary of one note from the in-memory index: frontmatter keys, tags, a heading tree, block IDs, word count, and link/backlink counts. Never reads the file from disk.',
-      inputSchema: z.object({ path: DetailedPathArg }),
+      inputSchema: z.strictObject({ path: DetailedPathArg }),
       outputSchema: z.object({
         path: z.string(),
         hash: z.string(),

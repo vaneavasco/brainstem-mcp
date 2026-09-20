@@ -42,7 +42,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
       description:
         'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional(),
         depth: z.number().int().min(1).max(50).optional(),
         glob: z.string().optional(),
@@ -92,7 +92,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
         'updateLinks:false to restore the old behaviour of never rewriting them. Links whose target is ' +
         'ambiguous are reported, never guessed, and left untouched. expectedHash is only honoured when ' +
         'moving a single file (not a folder).',
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         from: z.string(),
         to: z.string(),
         expectedHash: ExpectedHashArg,
@@ -150,7 +150,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
       title: 'Delete (to trash)',
       description:
         "Soft-delete a file or folder by moving it into the vault's .trash/ folder. Requires confirm=true — call without it first only if you need the user to confirm. Nothing is erased permanently. expectedHash is only honoured when deleting a single file (not a folder).",
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string(),
         confirm: z.boolean(),
         expectedHash: ExpectedHashArg,

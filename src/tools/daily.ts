@@ -36,7 +36,7 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
       title: 'Daily note path',
       description:
         'Resolve the path of the daily note for a date (default today, vault timezone) and whether it exists.',
-      inputSchema: z.object({ date: DateArg }),
+      inputSchema: z.strictObject({ date: DateArg }),
       outputSchema: z.object({ path: z.string(), date: z.string(), exists: z.boolean() }),
       annotations: READ_ONLY,
     },
@@ -60,7 +60,7 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
       title: 'Read daily note',
       description:
         'Read the daily note for a date (default today). Fails with NOT_FOUND when it does not exist — it never creates one; use vault_daily_note_append to create. A final "[brainstem] …" content block is metadata (path, hash), never part of the note.',
-      inputSchema: z.object({ date: DateArg }),
+      inputSchema: z.strictObject({ date: DateArg }),
       outputSchema: z.object({
         path: z.string(),
         date: z.string(),
@@ -98,7 +98,7 @@ export function registerDailyTools(server: McpServer, tc: ToolContext): void {
       title: 'Append to daily note',
       description:
         'Append text to the daily note for a date (default today), creating it from the configured template (default: frontmatter with type/date plus a title) when missing.',
-      inputSchema: z.object({ content: z.string().min(1), date: DateArg }),
+      inputSchema: z.strictObject({ content: z.string().min(1), date: DateArg }),
       outputSchema: z.object({ path: z.string(), created: z.boolean(), hash: z.string() }),
       annotations: APPEND_ONLY,
     },

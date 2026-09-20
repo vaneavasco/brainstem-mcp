@@ -95,6 +95,12 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- Tool arguments nobody asked for are now an error instead of being ignored. A misspelled key
+  used to be dropped without a word: `vault_frontmatter_update { updates: … }` answered "ok" and
+  changed nothing, and `expected_hash` (for `expectedHash`) silently switched the concurrency
+  check off for that write. Every tool input, and the nested `where` conditions, sort keys,
+  edit patches, transaction ops and batch items, is strict; the error names the unknown key.
+
 - The content block of a truncated `vault_read` carried two truncation markers, the
   second with a wrong total (the already-clamped text was clamped again).
 - Frontmatter parsing no longer emits a Node process warning for every note whose

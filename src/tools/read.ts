@@ -93,7 +93,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
       description:
         'Read one file: the full text (frontmatter + body), cut at 120k characters ("maxChars" cuts earlier; a cut result carries a "hint": read it by section). "section" (a heading path like "Heading" or "H1 > H2", case-insensitive) returns only that section and its sectionRange; "sections" returns several in document order with sectionRanges — text inside a section is verbatim, the blank line between sections is added. A final "[brainstem] …" content block is metadata (path, hash), never part of the note. ' +
         GUIDE_POINTER,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: DetailedPathArg,
         section: z
           .string()
@@ -190,7 +190,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Read several notes',
       description: `Read up to ${MAX_BATCH} files in one call; the bodies share 60k characters (20 notes: 3k each). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) to get only those sections of every note — a note lacking one still answers and lists it in "missingSections" — and/or "maxChars" to cut each note. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         paths: z.array(DetailedPathArg).min(1).max(MAX_BATCH),
         sections: z
           .array(z.string().min(1))

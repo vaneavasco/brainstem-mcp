@@ -201,7 +201,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         `handful of files. Returns up to ${MAX_SEARCH_RESULTS} matching lines grouped per file ` +
         'in "files" (prefer this); "matches" is the same hits as a flat array, kept for ' +
         `compatibility. ${GUIDE_POINTER}`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         query: z.string().min(1),
         regex: z
           .boolean()
@@ -306,7 +306,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Search by frontmatter',
       description: `Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported. Returns at most ${MAX_FRONTMATTER_HITS} hits; narrow the query if truncated.`,
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         field: z.string().min(1),
         equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
         contains: z.string().optional(),

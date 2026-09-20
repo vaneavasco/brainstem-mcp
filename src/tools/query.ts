@@ -10,7 +10,7 @@ import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 
-const SortSchema = z.object({ field: z.string().min(1), order: z.enum(['asc', 'desc']) });
+const SortSchema = z.strictObject({ field: z.string().min(1), order: z.enum(['asc', 'desc']) });
 
 /**
  * Typed `z.ZodType<Query>` (not just `z.object({...})`) so this schema's inferred output is
@@ -18,7 +18,7 @@ const SortSchema = z.object({ field: z.string().min(1), order: z.enum(['asc', 'd
  * `TxOp`. If the two ever drift, this fails typecheck instead of silently succeeding behind an
  * `as Query` cast at the call site.
  */
-const QuerySchema: z.ZodType<Query> = z.object({
+const QuerySchema: z.ZodType<Query> = z.strictObject({
   where: z.array(CondSchema).optional(),
   tags: TagsFilterSchema.optional(),
   pathPrefix: z.string().optional(),
@@ -54,7 +54,7 @@ const QueryResultSchema = z.object({
   values: z.array(z.array(z.unknown())).optional(),
 });
 
-const RecentInputSchema = z.object({
+const RecentInputSchema = z.strictObject({
   since: z
     .string()
     .regex(

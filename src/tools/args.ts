@@ -49,14 +49,14 @@ export const QueryOpSchema = z
 
 /** One `where` condition, shared by vault_query and vault_search (typed against the pure
  *  `Cond` interface so schema and engine cannot drift). */
-export const CondSchema: z.ZodType<Cond> = z.object({
+export const CondSchema: z.ZodType<Cond> = z.strictObject({
   field: z.string().min(1),
   op: QueryOpSchema,
   value: z.unknown().optional(),
 });
 
 /** The nested-aware tags filter (any/all/none), shared by vault_query and vault_search. */
-export const TagsFilterSchema: z.ZodType<NonNullable<Query['tags']>> = z.object({
+export const TagsFilterSchema: z.ZodType<NonNullable<Query['tags']>> = z.strictObject({
   any: z.array(z.string()).optional(),
   all: z.array(z.string()).optional(),
   none: z.array(z.string()).optional(),
