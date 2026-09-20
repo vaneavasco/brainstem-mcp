@@ -9,6 +9,10 @@ RUN npm run build
 
 FROM node:24-slim AS runtime
 ENV NODE_ENV=production
+# The commit this image was built from; the server reports it as `<version>+<sha>` (src/version.ts).
+# CI passes it; a local build without it reports the package version alone.
+ARG BRAINSTEM_BUILD_SHA=""
+ENV BRAINSTEM_BUILD_SHA=${BRAINSTEM_BUILD_SHA}
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ripgrep ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*

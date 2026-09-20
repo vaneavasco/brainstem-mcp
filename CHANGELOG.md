@@ -128,6 +128,11 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   cache hint is five minutes, and the server version changes with every release so a client
   that keys its cache on it sees the change. After an upgrade, reconnect the connector if the
   new arguments do not show up.
+- The server went on reporting 0.3.1 through four pull requests that changed its tools: a
+  release is a manual step and nothing noticed that it had not been made. The reported version
+  now carries the commit the image was built from (`0.4.0+3c421e3` in `brainstem_ping` and
+  `/health`), a test fails when package.json, the changelog and the README disagree, CI fails on
+  a release tag that does not match package.json, and AGENTS.md says when and how to release.
 - The index no longer keeps the text of the whole vault in memory. Every string it stored (a
   link target, a heading, a frontmatter value) was a piece cut out of the note it came from, and
   in V8 such a piece keeps the whole note alive. Measured on a 37,000-note vault: heap after
