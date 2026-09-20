@@ -10,6 +10,8 @@ export const MAX_BATCH = 20;
 export const MAX_READ_SECTIONS = 10;
 export const MAX_SEARCH_RESULTS = 50;
 export const MAX_RESULT_CHARS = 120_000;
+/** Bodies of one vault_batch_read together: metadata of 20 notes rides on top, and clients refuse results near 100k characters. */
+export const MAX_BATCH_RESULT_CHARS = 60_000;
 export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;

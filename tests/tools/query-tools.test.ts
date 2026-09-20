@@ -78,6 +78,24 @@ describe('vault_query', () => {
     );
   });
 
+  it('grouping by a list field says that the groups overlap', async () => {
+    await h.call('vault_write', {
+      path: 'projects/gamma.md',
+      content: '---\nstatus: active\nkinds: [draft, review]\n---\n# Gamma',
+    });
+    const lists = await h.call('vault_query', {
+      where: [{ field: 'kinds', op: 'exists' }],
+      groupBy: 'kinds',
+      countOnly: true,
+    });
+    const body = lists.structuredContent as QueryResult & { hint?: string };
+    expect(body.total).toBe(1);
+    expect(body.groups?.map((g) => g.count)).toEqual([1, 1]);
+    expect(body.hint).toContain('more than "total"');
+    const scalar = await h.call('vault_query', { pathPrefix: 'projects', groupBy: 'status' });
+    expect(scalar.structuredContent).not.toHaveProperty('hint');
+  });
+
   it('countOnly without groupBy is just the total, whatever limit says', async () => {
     const r = await h.call('vault_query', { pathPrefix: 'projects', countOnly: true, limit: 1 });
     expect(r.structuredContent).toEqual({ rows: [], total: 2, truncated: false });

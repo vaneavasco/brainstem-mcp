@@ -198,6 +198,55 @@ describe('truncated reads', () => {
   });
 });
 
+describe('vault_batch_read sections and maxChars', () => {
+  type BatchNote = { path: string; body: string; truncated: boolean; missingSections?: string[] };
+  const notesOf = (r: { structuredContent?: unknown }) =>
+    (r.structuredContent as { notes: BatchNote[] }).notes;
+  const BIG = `# Big\n\n## Head\nshort\n\n## Tail\n${'word '.repeat(30_000)}\n`;
+
+  it('returns only the asked sections of every note, in document order', async () => {
+    await h.call('vault_write', { path: 'a.md', content: NOTE });
+    await h.call('vault_write', { path: 'b.md', content: NOTE.replace('alpha content', 'other') });
+    const r = await h.call('vault_batch_read', {
+      paths: ['a.md', 'b.md'],
+      sections: ['Gamma', 'Alpha'],
+    });
+    expect(r.isError).toBeFalsy();
+    const [a, b] = notesOf(r);
+    expect(a?.body).toBe('## Alpha\nalpha content\n\n## Gamma\ngamma content\n');
+    expect(b?.body).toBe('## Alpha\nother\n\n## Gamma\ngamma content\n');
+    expect(a).not.toHaveProperty('missingSections');
+  });
+
+  it('a note without one of the sections still answers, and names what it lacks', async () => {
+    await h.call('vault_write', { path: 'a.md', content: NOTE });
+    await h.call('vault_write', { path: 'short.md', content: '# T\n\n## Alpha\nonly alpha\n' });
+    await h.call('vault_write', { path: 'none.md', content: '# T\n\nplain\n' });
+    const r = await h.call('vault_batch_read', {
+      paths: ['a.md', 'short.md', 'none.md'],
+      sections: ['Alpha', 'Beta'],
+    });
+    expect(r.isError).toBeFalsy();
+    const [a, short, none] = notesOf(r);
+    expect(a?.body).toContain('beta content');
+    expect(short?.body).toBe('## Alpha\nonly alpha\n');
+    expect(short?.missingSections).toEqual(['Beta']);
+    expect(none?.body).toBe('');
+    expect(none?.missingSections).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('maxChars cuts every note on its own and the result says so', async () => {
+    await h.call('vault_write', { path: 'big.md', content: BIG });
+    await h.call('vault_write', { path: 'n.md', content: NOTE });
+    const r = await h.call('vault_batch_read', { paths: ['big.md', 'n.md'], maxChars: 600 });
+    const [big, n] = notesOf(r);
+    expect(big?.truncated).toBe(true);
+    expect(big?.body.length).toBeLessThan(800);
+    expect(n?.truncated).toBe(false);
+    expect((r.structuredContent as { hint?: string }).hint ?? '').toContain('vault_outline');
+  });
+});
+
 describe('document reads for clients that show only the content blocks', () => {
   const meta = (r: { content: { type: string; text?: string }[] }) =>
     r.content[1]?.type === 'text' ? (r.content[1].text ?? '') : '';

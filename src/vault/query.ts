@@ -47,7 +47,12 @@ export interface QueryResult {
   total: number;
   truncated: boolean;
   groups?: { key: string; count: number; paths: string[] }[];
+  /** Set when notes landed in several groups, so nobody adds the group counts up to "total". */
+  hint?: string;
 }
+
+export const OVERLAPPING_GROUPS_HINT =
+  'groupBy field is a list: a note counts once in each of its values, so the group counts add up to more than "total".';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
 const MAX_GROUP_PATHS = 20;
@@ -381,7 +386,7 @@ export function evaluateQuery(
     if (q.groupBy !== undefined) {
       counted.groups = buildGroups(matched, graph, q.groupBy).map((g) => ({ ...g, paths: [] }));
     }
-    return counted;
+    return withGroupsHint(counted);
   }
   const result: QueryResult = {
     rows: limited.map((entry) => buildRow(entry, graph, q.select)),
@@ -389,5 +394,10 @@ export function evaluateQuery(
     truncated,
   };
   if (q.groupBy !== undefined) result.groups = buildGroups(matched, graph, q.groupBy);
-  return result;
+  return withGroupsHint(result);
+}
+
+function withGroupsHint(result: QueryResult): QueryResult {
+  const sum = result.groups?.reduce((n, g) => n + g.count, 0) ?? 0;
+  return sum > result.total ? { ...result, hint: OVERLAPPING_GROUPS_HINT } : result;
 }

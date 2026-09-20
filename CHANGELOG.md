@@ -8,6 +8,15 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Added
 
+- `vault_batch_read` takes `sections` and `maxChars`, as `vault_read` does: the named sections
+  of every note in one call. A note that lacks one of the sections still answers and lists it in
+  `missingSections`, so a batch over notes of mixed shape never fails. Found by running
+  multi-step questions through a fresh model: reading the summaries of a dozen long notes was
+  the natural next step, and the only way to do it was one call per note.
+- `vault_query` results carry a `hint` when `groupBy` ran over a list field: a note counts once
+  under each of its values, so the group counts add up to more than `total`. Two test runs
+  out of sixteen took the sum for the total, or suspected a bug.
+
 - `brainstem_guide`: the connection instructions (server conventions plus the owner's
   `_brainstem/instructions.md`) as a tool. Measured on the claude.ai connector: the model
   never sees the MCP `instructions` field, so an owner's vault guide did not reach it at all.
@@ -110,6 +119,11 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   as any restart does.
 
 ### Changed
+
+- `vault_batch_read` shares 60,000 characters between the note bodies (was 120,000). Frontmatter
+  and metadata of twenty notes ride on top of the bodies, and clients refuse a tool result near
+  100,000 characters outright: a full batch returned nothing at all. The cut is reported per note
+  (`truncated`) with the usual hint.
 
 - Positioning: the README intro, `llms.txt` and the GitHub description/topics
   now say what brainstem is *for* — your Obsidian vault as Claude's second brain

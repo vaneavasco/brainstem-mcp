@@ -42,6 +42,7 @@ const QueryResultSchema = z.object({
   total: z.number(),
   truncated: z.boolean(),
   groups: z.array(GroupSchema).optional(),
+  hint: z.string().optional(),
 });
 
 const RecentInputSchema = z.object({
