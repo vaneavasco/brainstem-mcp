@@ -8,6 +8,26 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Added
 
+- `vault_query` takes `format: "columns"`: a `columns` name list plus one `values` array per
+  note, instead of repeating every field name on every row. Both formats now share a
+  `MAX_QUERY_RESULT_CHARS` (60,000) budget on the row payload — a large result is cut to the
+  longest prefix that fits, `truncated: true`, and a `hint` says how many rows fit of how many
+  matched and how to get the rest (fewer `select` fields, `format: "columns"`, a lower `limit`,
+  or `countOnly`). Found running a few hundred selected rows through a client that refused a
+  result past 85,000 characters.
+- `vault_query`'s `contains`/`startsWith` `where` conditions accept an array value (any of up to
+  50 needles, validated up front); useful when checking a list field against many candidates
+  would otherwise mean one query per candidate. `vault_search`'s `where` shares the same
+  compiler, so it gets this too.
+- `vault_query` gains a `nonEmpty` op: true when a field is present and not `null`, `""` or
+  `[]`. `exists` alone cannot tell an empty list or string from a filled one.
+- `vault_links` takes `countOnly`: keeps `total` (the per-kind counts it already reports) and
+  returns an empty array for every link list — for a plain "does this note have backlinks"
+  check that doesn't need the 9,000-character answer.
+- `vault_search` adds a `hint` only on zero hits: it is a literal substring search, so a
+  spelling variant, a shorter word, or `regex: true` may find what a plain miss did not.
+  `vault_list`'s description now points at `vault_query { pathPrefix, countOnly: true }` as the
+  cheaper way to count or size a folder instead of a deep listing.
 - The in-memory index reconciles itself in the background: `FrontmatterIndex.reconcile()`
   re-reads any note whose size or modified time drifted from what the index has, drops entries
   for files that are gone, and adds ones that appeared — recovering from a watcher event the
