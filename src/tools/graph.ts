@@ -101,7 +101,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
     'vault_links',
     {
       title: 'Note links',
-      description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) for plain-text mentions of the note's basename or aliases in notes that don't already link to it. "filter.pathPrefix" (vault-relative, case-sensitive) keeps only backlinks/embeds/unlinkedMentions whose source starts with it, applied before the caps — so a note with hundreds of backlinks can still be checked one folder at a time; "total" reports the filtered, pre-cap counts. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions.`,
+      description: `Outgoing links, backlinks and embeds for one note, from the in-memory index (no ripgrep pass). Add "unlinkedMentions" to include (off by default) for plain-text mentions of the note's basename or aliases in notes that don't already link to it. "filter.pathPrefix" (vault-relative, case-sensitive) keeps only backlinks/embeds/unlinkedMentions whose source starts with it, applied before the caps (check one folder at a time); "total" reports the filtered, pre-cap counts. Caps: ${MAX_GRAPH_ITEMS} outgoing/backlinks/embeds, ${MAX_UNLINKED_MENTIONS} unlinked mentions. countOnly:true returns just total, no lists.`,
       inputSchema: z.object({
         path: DetailedPathArg,
         include: z.array(LinkInclude).optional(),
@@ -115,6 +115,10 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
               ),
           })
           .optional(),
+        countOnly: z
+          .boolean()
+          .optional()
+          .describe('Return just "total" (the per-kind counts) with every link list empty.'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -137,7 +141,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
       }),
       annotations: READ_ONLY,
     },
-    ({ path, include, filter }) =>
+    ({ path, include, filter, countOnly }) =>
       guarded(tc.log, async () => {
         const p = normalizeVaultPath(path);
         const entry = index.get(p);
@@ -149,7 +153,11 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
 
         const outgoingAll = want.has('outgoing') ? graph.outgoing(p).map(toOutgoingLink) : [];
         const outgoingTruncated = outgoingAll.length > MAX_GRAPH_ITEMS;
-        const outgoing = outgoingTruncated ? outgoingAll.slice(0, MAX_GRAPH_ITEMS) : outgoingAll;
+        const outgoing = countOnly
+          ? []
+          : outgoingTruncated
+            ? outgoingAll.slice(0, MAX_GRAPH_ITEMS)
+            : outgoingAll;
 
         const backlinksAll = want.has('backlinks') ? graph.backlinks(p).filter(bySource) : [];
         const backlinksTruncated = backlinksAll.length > MAX_GRAPH_ITEMS;
@@ -161,13 +169,16 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         const embedsTruncated = embedsAll.length > MAX_GRAPH_ITEMS;
         const embedsCapped = embedsTruncated ? embedsAll.slice(0, MAX_GRAPH_ITEMS) : embedsAll;
 
-        const contextFor = await contextByLine(adapter, [
-          ...backlinksCapped.map((b) => ({ source: b.source, line: b.link.line })),
-          ...embedsCapped.map((b) => ({ source: b.source, line: b.link.line })),
-        ]);
+        // countOnly never needs the source-line context text — skip the disk reads for it.
+        const contextFor = countOnly
+          ? new Map<string, string>()
+          : await contextByLine(adapter, [
+              ...backlinksCapped.map((b) => ({ source: b.source, line: b.link.line })),
+              ...embedsCapped.map((b) => ({ source: b.source, line: b.link.line })),
+            ]);
 
-        const backlinks = backlinksCapped.map((b) => toContextHit(b, contextFor));
-        const embeds = embedsCapped.map((b) => toContextHit(b, contextFor));
+        const backlinks = countOnly ? [] : backlinksCapped.map((b) => toContextHit(b, contextFor));
+        const embeds = countOnly ? [] : embedsCapped.map((b) => toContextHit(b, contextFor));
 
         let unlinkedMentions: { path: string; line: number; context: string }[] = [];
         let unlinkedTruncated = false;
@@ -178,7 +189,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           const found = await findUnlinkedMentions(adapter, p, entry.frontmatter, backlinkSources, {
             pathPrefix,
           });
-          unlinkedMentions = found.mentions;
+          unlinkedMentions = countOnly ? [] : found.mentions;
           unlinkedTruncated = found.truncated;
           unlinkedTotal = found.total;
         }
