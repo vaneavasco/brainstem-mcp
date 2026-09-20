@@ -1,4 +1,4 @@
-import { baseName, isReservedPath } from '../storage/path-policy.ts';
+import { isReservedPath } from '../storage/path-policy.ts';
 
 /** True for a path under `_brainstem/` or with any dot-segment: the index never holds these, so
  *  a suggestion built from index paths never needs this filter to actually trigger — kept as a
@@ -53,8 +53,12 @@ export function buildSuggester(
     add(byName, folded.slice(folded.lastIndexOf('/') + 1), p); // the tail of the folded path: folding the name again would double the cost
   }
   return (wanted, max = 3) => {
-    const exact = byPath.get(foldPath(wanted)) ?? [];
-    const found = exact.length > 0 ? exact : (byName.get(foldPath(baseName(wanted))) ?? []);
+    const folded = foldPath(wanted);
+    const exact = byPath.get(folded) ?? [];
+    // the name is the tail of the FOLDED path, as in suggestPaths: a full-width slash folds to a
+    // slash, and both lookups must then agree on what the name is
+    const name = folded.slice(folded.lastIndexOf('/') + 1);
+    const found = exact.length > 0 ? exact : (byName.get(name) ?? []);
     return [...found].sort().slice(0, max);
   };
 }

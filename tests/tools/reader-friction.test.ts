@@ -306,3 +306,98 @@ describe('review: a batch of long missing paths still answers', () => {
     expect(out.missing).toHaveLength(20);
   });
 });
+
+describe('a deep listing that fits is still not an answer', () => {
+  // Measured: a folder of ~600 generated pages listed at depth 2 fits the budget (45,000
+  // characters) and was paid for by 8 of 16 readers who only wanted to know what is there.
+  async function seed(): Promise<void> {
+    for (const dir of ['alpha', 'beta']) {
+      await fs.mkdir(path.join(h.root, 'pages', dir), { recursive: true });
+      await Promise.all(
+        Array.from({ length: 150 }, (_, i) =>
+          fs.writeFile(
+            path.join(h.root, 'pages', dir, `page-${String(i).padStart(3, '0')}.md`),
+            'x',
+          ),
+        ),
+      );
+    }
+    await fs.writeFile(path.join(h.root, 'pages', 'index.md'), 'x');
+    await h.runtime.index.reconcile(h.runtime.adapter);
+  }
+  type Out = {
+    entries: { path: string }[];
+    folders?: { path: string; files: number }[];
+    truncated: boolean;
+    hint?: string;
+  };
+
+  it('over 200 entries, deeper than one level, no glob: the shape first, and how to get it all', async () => {
+    await seed();
+    const r = await h.call('vault_list', { path: 'pages', depth: 2 });
+    const out = r.structuredContent as Out;
+    expect(out.truncated).toBe(true);
+    expect(out.entries.length).toBeLessThanOrEqual(200);
+    expect(out.entries.slice(0, 3).map((e) => e.path)).toEqual([
+      'pages/alpha',
+      'pages/beta',
+      'pages/index.md',
+    ]);
+    expect(out.folders).toEqual([
+      { path: 'pages/alpha', files: 150 },
+      { path: 'pages/beta', files: 150 },
+    ]);
+    expect(out.hint).toMatch(/glob/);
+    expect(size(r)).toBeLessThan(20_000);
+  });
+
+  it('a glob, or one level, still lists everything that fits', async () => {
+    await seed();
+    const all = (await h.call('vault_list', { path: 'pages', depth: 2, glob: '**/*.md' }))
+      .structuredContent as Out;
+    expect(all.truncated).toBe(false);
+    expect(all.entries).toHaveLength(301);
+    const one = (await h.call('vault_list', { path: 'pages/alpha' })).structuredContent as Out;
+    expect(one.truncated).toBe(false);
+    expect(one.entries).toHaveLength(150);
+  });
+});
+
+describe('second review of suggestions', () => {
+  it('vault_read and vault_batch_read suggest the same note for the same wanted path', async () => {
+    await fs.mkdir(path.join(h.root, 'dir'), { recursive: true });
+    await fs.writeFile(path.join(h.root, 'dir', 'note.md'), 'x');
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const wanted = 'other\uff0fnote.md'; // a full-width slash folds to a slash
+    const single = text(await h.call('vault_read', { path: wanted }));
+    const batch = (await h.call('vault_batch_read', { paths: [wanted] })).structuredContent as {
+      suggestions?: { path: string; didYouMean: string[] }[];
+    };
+    const inSingle = single.includes('dir/note.md');
+    const inBatch = (batch.suggestions ?? []).some((s) => s.didYouMean.includes('dir/note.md'));
+    expect(inBatch).toBe(inSingle);
+  });
+
+  it('says how many missing paths lost their suggestion to the budget', async () => {
+    const stem = 'a'.repeat(240);
+    const dir = `${stem}/${stem}/${stem}`;
+    await fs.mkdir(path.join(h.root, dir), { recursive: true });
+    const paths: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const name = `Note-${String(i).padStart(2, '0')}-${'b'.repeat(160)}`;
+      await fs.writeFile(path.join(h.root, dir, `${name}.md`), 'x');
+      paths.push(`${dir}/${name.replace('Note', 'nOTE')}.md`);
+    }
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const r = await h.call('vault_batch_read', { paths });
+    const out = r.structuredContent as {
+      missing: string[];
+      suggestions?: unknown[];
+      suggestionsOmitted?: number;
+    };
+    expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    expect(out.missing).toHaveLength(20);
+    expect((out.suggestions?.length ?? 0) + (out.suggestionsOmitted ?? 0)).toBe(20);
+    expect(out.suggestionsOmitted ?? 0).toBeGreaterThan(0);
+  });
+});

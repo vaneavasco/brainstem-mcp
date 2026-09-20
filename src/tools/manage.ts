@@ -1,6 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { CLIENT_SAFE_RESULT_CHARS, MAX_GLOB_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
+import {
+  CLIENT_SAFE_RESULT_CHARS,
+  MAX_DEEP_LIST_ENTRIES,
+  MAX_GLOB_CHARS,
+  MAX_LIST_ENTRIES,
+} from '../storage/limits.ts';
 import { isMarkdownPath, normalizeVaultPath, parentDir } from '../storage/path-policy.ts';
 import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
@@ -60,9 +65,9 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
             modifiedAt: z.string().optional(),
           }),
         ),
-        /** Only present when the result was truncated: files directly inside each subfolder of
-         *  the listing, vault-relative paths, sorted by path — counted from the full (untruncated)
-         *  listing, so it stays true even when "entries" itself had to lose some deep ones. */
+        /** Only when the listing shows its shape instead of every path (cut by the budget, or a
+         *  long deep listing without a glob): every note and attachment under each listed
+         *  folder, at any depth, counted from the index, whatever depth or glob was asked. */
         folders: z.array(z.looseObject({ path: z.string(), files: z.number() })).optional(),
         truncated: z.boolean(),
         hint: z.string().optional(),
@@ -92,8 +97,14 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           entries.length > MAX_LIST_ENTRIES ? entries.slice(0, MAX_LIST_ENTRIES) : entries;
         const plainFit = fitWithinBudget(capped, plainRoom);
         const wouldTruncate = plainFit.cut || entries.length > MAX_LIST_ENTRIES;
+        // A deep listing that fits is still not an answer to "what is in here": a folder of 600
+        // generated pages listed at depth 2 fits the budget at 45,000 characters, and 8 of 16
+        // readers paid that to learn the names of three sub-folders. Deeper than one level, with
+        // no glob, a long listing shows its shape first; a glob asks for the paths themselves.
+        const shapeFirst =
+          (depth ?? 1) > 1 && glob === undefined && entries.length > MAX_DEEP_LIST_ENTRIES;
 
-        if (!wouldTruncate) {
+        if (!wouldTruncate && !shapeFirst) {
           return okJson({ path: base, entries: plainFit.kept, truncated: false });
         }
 
@@ -108,8 +119,8 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           const d = depthOf(a.path) - depthOf(b.path);
           return d !== 0 ? d : a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
         });
-        const orderedCapped =
-          ordered.length > MAX_LIST_ENTRIES ? ordered.slice(0, MAX_LIST_ENTRIES) : ordered;
+        const cap = shapeFirst ? MAX_DEEP_LIST_ENTRIES : MAX_LIST_ENTRIES;
+        const orderedCapped = ordered.length > cap ? ordered.slice(0, cap) : ordered;
 
         // Counted from the index, not from this listing: a folder at the depth limit, a listing
         // without files, or a glob would otherwise report 0 files for a folder that holds
@@ -132,7 +143,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           (allFolders.length === 0
             ? ''
             : `; "folders" counts every file under each listed folder, at any depth, whatever glob or depth was asked${foldersCut ? ' (itself truncated too)' : ''}`) +
-          ': list one folder, narrow with glob, or count with vault_query { pathPrefix, countOnly: true }.';
+          ': list one folder, pass glob (e.g. "**/*.md") for the paths themselves, or count with vault_query { pathPrefix, countOnly: true }.';
         // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
         // for entries/folders never overshoots what the final, possibly-shorter hint leaves.
         const longestHint = hintFor(entries.length, true);

@@ -288,7 +288,13 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   A deep listing used to return the first ~2,000 paths in on-disk order, i.e. the contents of
   whichever big folder came first alphabetically, and the reader learned nothing about the shape
   of the rest; eight of sixteen fresh models paid 25,000–48,000 characters for exactly that. An
-  untruncated listing is unchanged: no `folders`, same order as before.
+  untruncated listing is unchanged: no `folders`, same order as before. One more case takes
+  the same form: a listing deeper than one level, without a glob, that holds more than 200
+  entries. It fits the budget (45,000 characters for a folder of 600 pages) and is still not
+  an answer to "what is in here"; a glob asks for the paths themselves.
+- `vault_batch_read` says how many missing paths had a suggestion that did not fit
+  (`suggestionsOmitted`); a `sum` that overflows only inside a group is named in the hint, and
+  totals are accumulated so that an intermediate overflow cannot hide a finite total.
 - `vault_batch_read` takes `frontmatter: false`: every note's `frontmatter` comes back `{}`
   (`frontmatterOmitted: true`) and the room it would have used goes to bodies instead — readers
   who only needed note text were losing several bodies per batch to long frontmatter blocks
@@ -297,7 +303,7 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   `vault_batch_read` gains a `suggestions` entry per missing path that has one, when a requested
   path's folded form (Unicode NFKC; typographic quotes/apostrophes, en/em dashes and the
   non-breaking hyphen to their ASCII equivalents; repeated/non-breaking spaces to one; lower-
-  cased) matches an indexed path exactly, or shares a folder and a folded basename. Cheap and
+  cased) matches an indexed path exactly, or has the same folded file name in another folder. Cheap and
   predictable — no fuzzy distance matching — because it runs on every miss. A reader who typed a
   straight apostrophe where the file name has a typographic one used to be told only "does not
   exist".

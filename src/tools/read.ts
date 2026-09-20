@@ -319,6 +319,8 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         ),
         missing: z.array(z.string()),
         failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
+        /** How many missing paths had a suggestion that did not fit the result. */
+        suggestionsOmitted: z.number().optional(),
         suggestions: z
           .array(z.looseObject({ path: z.string(), didYouMean: z.array(z.string()) }))
           .optional(),
@@ -387,6 +389,8 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             missing: result.missing,
             failed: result.failed,
             ...(suggestions.length > 0 ? { suggestions } : {}),
+            // weighed at its widest whenever it could appear at all
+            ...(allSuggestions.length > 0 ? { suggestionsOmitted: allSuggestions.length } : {}),
             hint: `${TRUNCATED_HINT} ${FRONTMATTER_OMITTED_HINT}`,
           }).length;
 
@@ -395,8 +399,11 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           const without = weigh(everything); // `suggestions` is still empty here
           const room = Math.min(CLIENT_SAFE_RESULT_CHARS / 4, CLIENT_SAFE_RESULT_CHARS - without);
           // `"suggestions":[]` and its comma are paid from the same room
-          suggestions = room > 40 ? fitSuggestions(room - 20) : [];
+          // `"suggestions":[]`, `"suggestionsOmitted":NN` and their commas come out of the room
+          suggestions = room > 80 ? fitSuggestions(room - 50) : [];
         }
+        // Never silent: how many missing paths had a suggestion that did not fit.
+        const suggestionsOmitted = allSuggestions.length - suggestions.length;
         const bare = weigh(everything);
         if (bare > CLIENT_SAFE_RESULT_CHARS) {
           throw new VaultError(
@@ -438,6 +445,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           missing: result.missing,
           failed: result.failed,
           ...(suggestions.length > 0 ? { suggestions } : {}),
+          ...(suggestionsOmitted > 0 ? { suggestionsOmitted } : {}),
           ...(hints.length > 0 ? { hint: hints.join(' ') } : {}),
         });
       }),

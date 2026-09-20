@@ -968,7 +968,7 @@ describe('review of sum and link-aware equality', () => {
     const r = run({ pathPrefix: 'big', sum: ['big', 'ok'], groupBy: 'ok', countOnly: true });
     expect(r.sums).toEqual({ ok: 3 });
     expect(r.sumCounted).toEqual({ big: 2, ok: 2 });
-    expect(r.hint).toMatch(/too large/);
+    expect(r.hint).toMatch(/overflowed/);
     expect(JSON.stringify(r)).not.toContain('null');
     for (const g of r.groups ?? [])
       expect(Number.isFinite((g as { sums: { big?: number } }).sums.big ?? 0)).toBe(true);
@@ -1011,5 +1011,27 @@ describe('review of sum and link-aware equality', () => {
     // measured ~30 ms after precomputing the query side once; ~150 ms before. One second tells
     // a per-comparison regex apart from a precomputed key on any machine.
     expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('second review of sum', () => {
+  it('says so when only a group total overflowed, and never calls a finite total too large', () => {
+    index.upsert(entry('ov/a.md', '---\ng: alpha\nv: 1e308\n---\nx'));
+    index.upsert(entry('ov/b.md', '---\ng: beta\nv: -1e308\n---\nx'));
+    index.upsert(entry('ov/c.md', '---\ng: alpha\nv: 1e308\n---\nx'));
+    index.upsert(entry('ov/d.md', '---\ng: beta\nv: -1e308\n---\nx'));
+    const r = run({ pathPrefix: 'ov', sum: ['v'], groupBy: 'g', countOnly: true });
+    expect(r.sums).toEqual({ v: 0 });
+    expect(r.hint).toMatch(/overflowed/);
+    expect(r.hint).toMatch(/group/);
+  });
+
+  it('adds [1e308, 1e308, -1e308] up to the finite total it has', () => {
+    index.upsert(entry('ord/a.md', '---\nw: 1e308\n---\nx'));
+    index.upsert(entry('ord/b.md', '---\nw: 1e308\n---\nx'));
+    index.upsert(entry('ord/c.md', '---\nw: -1e308\n---\nx'));
+    const r = run({ pathPrefix: 'ord', sum: ['w'], countOnly: true });
+    expect(r.sums?.w).toBe(1e308);
+    expect(r.hint).toBeUndefined();
   });
 });
