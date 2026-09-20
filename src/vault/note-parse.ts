@@ -1,11 +1,14 @@
 export interface LinkRef {
-  raw: string;
   target: string;
   heading?: string;
   block?: string;
   alias?: string;
   embed: boolean;
   kind: 'wiki' | 'md';
+  /** Markdown links only: the target was written `<like this>`, which a rewrite must keep. The
+   *  link's own text is not stored (it is `content.slice(start, end)`): across a large vault it
+   *  was half the weight of all links. */
+  angle?: true;
   line: number;
   start: number;
   end: number;
@@ -95,7 +98,7 @@ export function frontmatterTags(frontmatter: Record<string, unknown>): string[] 
 
 function splitWikiInner(
   inner: string,
-): Omit<LinkRef, 'raw' | 'embed' | 'kind' | 'line' | 'start' | 'end'> {
+): Omit<LinkRef, 'embed' | 'kind' | 'angle' | 'line' | 'start' | 'end'> {
   const pipe = inner.indexOf('|');
   const alias = pipe >= 0 ? inner.slice(pipe + 1) : undefined;
   const ref = pipe >= 0 ? inner.slice(0, pipe) : inner;
@@ -128,7 +131,6 @@ export function parseNote(
       const parts = splitWikiInner(m[2] ?? '');
       if (parts.target === '' && !parts.heading && !parts.block) continue;
       links.push({
-        raw: content.slice(start, end),
         ...parts,
         embed: false,
         kind: 'wiki',
@@ -145,7 +147,6 @@ export function parseNote(
     const parts = splitWikiInner(m[2] ?? '');
     if (parts.target === '' && !parts.heading && !parts.block) continue;
     links.push({
-      raw: content.slice(start, end),
       ...parts,
       embed: m[1] === '!',
       kind: 'wiki',
@@ -169,12 +170,12 @@ export function parseNote(
       target = targetPart;
     }
     links.push({
-      raw: content.slice(start, end),
       target,
       ...(anchor.startsWith('^') ? { block: anchor.slice(1) } : anchor ? { heading: anchor } : {}),
       alias: m[2] ?? undefined,
       embed: m[1] === '!',
       kind: 'md',
+      ...(m[3] !== undefined ? { angle: true as const } : {}),
       line: lineAt(content, start),
       start,
       end,

@@ -80,9 +80,9 @@ describe('resolve', () => {
 describe('outgoing', () => {
   it('reports anchorFound for headings and block ids independently of link resolution', () => {
     const out = graph.outgoing('a.md');
-    const bySec = out.find((o) => o.link.raw === '[[b#Sec]]');
-    const byBlk = out.find((o) => o.link.raw === '[[b#^blk]]');
-    const byNope = out.find((o) => o.link.raw === '[[b#Nope]]');
+    const bySec = out.find((o) => o.link.heading === 'Sec');
+    const byBlk = out.find((o) => o.link.block === 'blk');
+    const byNope = out.find((o) => o.link.heading === 'Nope');
     expect(bySec?.resolution).toEqual({ status: 'resolved', path: 'b.md', anchorFound: true });
     expect(byBlk?.resolution).toEqual({ status: 'resolved', path: 'b.md', anchorFound: true });
     expect(byNope?.resolution).toEqual({ status: 'resolved', path: 'b.md', anchorFound: false });

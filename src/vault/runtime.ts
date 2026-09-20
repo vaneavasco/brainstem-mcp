@@ -4,6 +4,7 @@ import {
   DEFAULT_RECONCILE_MIN_GAP_MS,
   DEFAULT_RECONCILE_MS,
   MAX_BINARY_BYTES,
+  MAX_INDEX_BYTES,
 } from '../storage/limits.ts';
 import { LocalFSAdapter } from '../storage/local-fs.ts';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
@@ -11,7 +12,11 @@ import type { StorageAdapter, Unsubscribe } from '../storage/types.ts';
 import { WriteGate } from '../storage/write-gate.ts';
 import type { AnalyticsReport } from './analytics.ts';
 import { type DailyNoteSettings, DEFAULT_DAILY_NOTE_SETTINGS } from './daily-notes.ts';
-import { FrontmatterIndex, type ReconcileResult } from './frontmatter-index.ts';
+import {
+  FrontmatterIndex,
+  type IndexBudgetState,
+  type ReconcileResult,
+} from './frontmatter-index.ts';
 import { VaultGraph } from './graph.ts';
 
 export interface VaultSettings {
@@ -69,6 +74,12 @@ export interface LocalRuntimeOptions {
   /** Called when a background reconcile pass failed. It gets no error on purpose (an fs error
    *  carries an absolute path); log that it happened, `brainstem_ping` shows `reconciledAt` stall. */
   onReconcileError?: () => void;
+  /** Serialized size of the index above which `onIndexOverBudget` is called; defaults to
+   *  MAX_INDEX_BYTES. A warning line, not a limit: see FrontmatterIndex.watchBudget. */
+  indexBudgetBytes?: number;
+  /** Called once when the index is over its budget: at boot if it already is, otherwise on the
+   *  change that crosses the line (and again only after it has been back under). */
+  onIndexOverBudget?: (state: IndexBudgetState) => void;
   /** How the storage adapter is made; tests inject one whose watcher they can make fail. */
   createAdapter?: typeof LocalFSAdapter.create;
   /** Minimum distance between reconciles triggered by watcher errors; defaults to
@@ -90,6 +101,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     { ripgrepPath: opts.ripgrepPath, watchPollMs: opts.watchPollMs ?? null, maxBinaryBytes },
   );
   const index = await FrontmatterIndex.build(adapter);
+  index.watchBudget(opts.indexBudgetBytes ?? MAX_INDEX_BYTES, opts.onIndexOverBudget);
 
   // One reconcile at a time. The timer simply skips a tick while a pass runs (the next tick is
   // soon enough). A watcher error is different: it means events were lost, so it is never

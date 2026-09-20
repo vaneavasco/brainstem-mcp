@@ -27,6 +27,11 @@ const PingOutput = z.looseObject({
     builtAt: z.string(),
     /** null until the background reconcile has run at least once. */
     reconciledAt: z.string().nullable(),
+    /** Serialized size of the index entries (the process heap holds about twice that). */
+    bytes: z.number(),
+    /** The warning line for `bytes`; nothing is evicted above it, the owner is told. */
+    budgetBytes: z.number(),
+    overBudget: z.boolean(),
   }),
 });
 
@@ -50,7 +55,8 @@ export async function createVaultServer(
       title: 'Ping',
       description:
         'Health check. Returns server name, version, protocol era, current time, and index ' +
-        'freshness (note count, when it was built, when the background reconcile last ran).',
+        'state (note count, when it was built, when the background reconcile last ran, its size ' +
+        'beside its budget).',
       outputSchema: PingOutput,
       annotations: {
         readOnlyHint: true,
@@ -69,6 +75,9 @@ export async function createVaultServer(
           notes: runtime.index.size(),
           builtAt: runtime.index.builtAt.toISOString(),
           reconciledAt: runtime.index.reconciledAt?.toISOString() ?? null,
+          bytes: runtime.index.byteSize(),
+          budgetBytes: runtime.index.budgetBytes,
+          overBudget: runtime.index.byteSize() > runtime.index.budgetBytes,
         },
       };
       return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };

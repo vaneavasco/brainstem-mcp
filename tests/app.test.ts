@@ -89,9 +89,20 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({ server: 'brainstem-mcp', era: 'modern' });
       const body = result.structuredContent as {
-        index: { notes: number; builtAt: string; reconciledAt: string | null };
+        index: {
+          notes: number;
+          builtAt: string;
+          reconciledAt: string | null;
+          bytes: number;
+          budgetBytes: number;
+          overBudget: boolean;
+        };
       };
       expect(body.index.notes).toBe(runtime.index.size());
+      // the size of the index beside its budget: an owner can see a vault outgrow it
+      expect(body.index.bytes).toBe(runtime.index.byteSize());
+      expect(body.index.budgetBytes).toBe(runtime.index.budgetBytes);
+      expect(body.index.overBudget).toBe(false);
       expect(() => new Date(body.index.builtAt).toISOString()).not.toThrow();
       expect(body.index.reconciledAt).toBeNull(); // reconcile() hasn't run in this test
     } finally {

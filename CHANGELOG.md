@@ -118,6 +118,19 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- The index no longer keeps the text of the whole vault in memory. Every string it stored (a
+  link target, a heading, a frontmatter value) was a piece cut out of the note it came from, and
+  in V8 such a piece keeps the whole note alive. Measured on a 37,000-note vault: heap after
+  indexing 940 MB → 254 MB, process memory 1.29 GB → 0.61 GB, build time unchanged. Index entries
+  are now detached copies, and a link no longer stores its own source text (`raw`), only its
+  position. A test builds an index over 90 MB of notes in a child process and fails if more than
+  20 MiB stays held.
+- The index size budget was never connected to anything: no log line, and a vault already over
+  it at boot could not have been reported even if it were. It now warns once at boot or on the
+  change that crosses it, `brainstem_ping` shows `index.bytes`, `index.budgetBytes` and
+  `index.overBudget`, and the budget is the measured one (256 MiB of serialized entries, about
+  75,000 long notes; the earlier 64 MiB assumed 1–2 KB per note, real notes need 3.5 KB). It is
+  a warning line, not a limit: nothing is evicted.
 - Tool results may grow without breaking anyone. Output schemas were closed
   (`additionalProperties: false`), and clients cache the tool list: the first result that
   carried a field added after the client's copy was rejected whole with "data must NOT have

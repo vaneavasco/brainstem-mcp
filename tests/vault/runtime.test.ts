@@ -49,6 +49,41 @@ describe('createLocalRuntime', () => {
   });
 });
 
+describe('index budget', () => {
+  it('says so at boot when the vault is already larger than the budget, once', async () => {
+    const warnings: { bytes: number; budgetBytes: number }[] = [];
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      indexBudgetBytes: 10, // any real vault is over this: the index grew past it DURING the build
+      onIndexOverBudget: (w) => warnings.push(w),
+    });
+    try {
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.budgetBytes).toBe(10);
+      expect(warnings[0]?.bytes).toBe(runtime.index.byteSize());
+      await runtime.adapter.write('another.md', '# one more\n');
+      runtime.index.applyNote(await runtime.adapter.read('another.md'));
+      expect(warnings).toHaveLength(1); // still over: not a new episode
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('stays quiet under the budget', async () => {
+    const warnings: unknown[] = [];
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      onIndexOverBudget: (w) => warnings.push(w),
+    });
+    await runtime.close();
+    expect(warnings).toEqual([]);
+  });
+});
+
 /** A real adapter whose watcher error callback the test can fire: injected, nothing is patched. */
 function adapterWithWatcherErrors(): {
   createAdapter: typeof LocalFSAdapter.create;
