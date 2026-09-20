@@ -20,7 +20,7 @@ Handing this to someone non-technical — a manager, a marketer, anyone who just
 
 ## Status
 
-**v0.3.1 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
+**v0.4.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
 
 Verified end-to-end: Linux host · Claude Code · claude.ai web (all tools, via a live quick tunnel) · Docker smoke test in CI.
 Implemented but not yet verified by a real run: Claude mobile app · `cloudflare` (token) tunnel mode · Windows and macOS launchers · reconnect after a tunnel restart.
@@ -96,6 +96,10 @@ The owner secret lives in `.env`. Show it any time with:
 | `./brainstem update` | Pull the latest version from GitHub, reinstall dependencies and restart | `./brainstem update` |
 | `./brainstem doctor` | Check prerequisites and configuration; explain how to fix any issues | `./brainstem doctor` |
 | `./brainstem revoke-all` | Revoke all OAuth tokens — every connected client must reconnect | `./brainstem revoke-all` |
+
+### After an update
+
+A release can add tools or arguments. A connected client keeps the tool list it fetched earlier: the server lets it be cached for five minutes, and some clients keep it for their whole session. If Claude does not seem to know an argument the changelog mentions, reconnect the connector (Claude Code: `/mcp` → the connector → Reconnect; claude.ai: Settings → Connectors). Nothing breaks in the meantime: the arguments the client already knows keep working, and results may carry new fields without being rejected.
 
 ## Stable URL (recommended)
 

@@ -73,6 +73,17 @@ CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note sca
 
 Multi-tenancy, Google sign-in, Google Drive storage, Postgres, SQLite inside the vault, Dynamic Client Registration, Heroku, a web UI for setup. See ADR 0005 and the spec's "Deferred" section before proposing any of them.
 
+## Releasing
+
+Nothing bumps the version for you. Images are published for every commit on main as `sha-<7>`, so a change can be merged and deployed without a release, and the server then goes on reporting the last released version (it did, across four pull requests that changed the tool surface). **A pull request that adds, removes or changes a tool, an argument or an output field is a release.** The steps, in one `chore(release): vX.Y.Z` commit on the PR's branch:
+
+1. `npm version X.Y.Z --no-git-tag-version` (package.json and package-lock.json).
+2. `CHANGELOG.md`: a `## [X.Y.Z] — YYYY-MM-DD` heading under `## [Unreleased]`, and its compare link at the bottom.
+3. `README.md`: the `**vX.Y.Z — beta.**` line.
+4. After the merge: `git tag vX.Y.Z <merge commit> && git push origin vX.Y.Z` (CI then publishes `vX.Y.Z` and `latest`, and fails if the tag disagrees with package.json), and `gh release create vX.Y.Z` with the changelog section as notes.
+
+`tests/release/version-consistency.test.ts` fails on a half-made release. A running server reports `X.Y.Z+<commit>` (`brainstem_ping`, `/health`), so what is deployed can always be told from what is released.
+
 ## When you finish
 
 `npm run lint:fix && npm run typecheck && npm test`, update `CHANGELOG.md` under *Unreleased* for user-visible changes, keep `README.md` in step with behaviour, and record notable decisions in `docs/adr/` or the relevant plan.

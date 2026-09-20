@@ -16,6 +16,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      # A release tag must name the version the code reports: otherwise images tagged vX.Y.Z would
+      # hold a server that calls itself something else.
+      - name: tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json ($want)"; exit 1
+          fi
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
@@ -109,5 +118,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BRAINSTEM_BUILD_SHA=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}

@@ -44,8 +44,13 @@ export async function createVaultServer(
   const runtime = await deps.resolveRuntime(ctx);
   const server = new McpServer(SERVER_INFO, {
     instructions,
+    // Built per request, this server has no channel to push `notifications/tools/list_changed`
+    // on, so it must not promise to: a client that believes the promise never asks again.
+    capabilities: { tools: { listChanged: false } },
+    // Five minutes. An hour meant that a release which added tool arguments stayed invisible to
+    // connected clients well past the hour; the list is small and the same for everyone.
     cacheHints: {
-      'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
+      'tools/list': { ttlMs: 300_000, cacheScope: 'public' },
     },
   });
 
