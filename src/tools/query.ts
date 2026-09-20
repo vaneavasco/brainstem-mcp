@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_QUERY_ROWS, MAX_RECENT } from '../storage/limits.ts';
+import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS, MAX_RECENT } from '../storage/limits.ts';
 import type { Cond, Query } from '../vault/query.ts';
 import { evaluateQuery } from '../vault/query.ts';
 import { READ_ONLY } from './annotations.ts';
@@ -27,6 +27,13 @@ const QuerySchema: z.ZodType<Query> = z.object({
   limit: z.number().int().min(1).max(MAX_QUERY_ROWS).optional(),
   groupBy: z.string().optional(),
   countOnly: z.boolean().optional(),
+  format: z
+    .enum(['rows', 'columns'])
+    .optional()
+    .describe(
+      '"rows" (default): one object per note. "columns": a "columns" name list plus one ' +
+        '"values" array per note — cheaper for many rows/fields.',
+    ),
 });
 
 const QueryRowSchema = z.object({ path: z.string() }).catchall(z.unknown());
@@ -43,6 +50,8 @@ const QueryResultSchema = z.object({
   truncated: z.boolean(),
   groups: z.array(GroupSchema).optional(),
   hint: z.string().optional(),
+  columns: z.array(z.string()).optional(),
+  values: z.array(z.array(z.unknown())).optional(),
 });
 
 const RecentInputSchema = z.object({
@@ -68,12 +77,13 @@ export function registerQueryTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'Query notes',
       description:
-        'Structured query over the in-memory index — no disk reads. "where" filters on frontmatter ' +
+        'Structured query over the in-memory index — no disk reads. "where" filters frontmatter ' +
         'dot paths or virtual fields (path, basename, folder, modifiedAt, size, wordCount, tags, ' +
-        'hash, backlinks/outgoing counts, backlinkPaths/outgoingPaths arrays) with typed ' +
-        'comparisons; "tags" (any/all/none) is nested-aware. Supports pathPrefix, select, sort, ' +
-        `groupBy, limit (default 100, max ${MAX_QUERY_ROWS}); "countOnly" returns just total and ` +
-        'group counts (limit, select, sort ignored). Prefer it to vault_search_frontmatter. ' +
+        'hash, backlinks/outgoing, backlinkPaths/outgoingPaths); "tags" is nested-aware. Supports ' +
+        `pathPrefix, select, sort, groupBy, limit (default 100, max ${MAX_QUERY_ROWS}), countOnly ` +
+        '(total + group counts only). "format":"columns" trades repeated field names for one ' +
+        `values array per row; rows/values cap at ${MAX_QUERY_RESULT_CHARS.toLocaleString('en-US')} ` +
+        'characters (truncated + hint). Prefer it to vault_search_frontmatter. ' +
         GUIDE_POINTER,
       inputSchema: QuerySchema,
       outputSchema: QueryResultSchema,

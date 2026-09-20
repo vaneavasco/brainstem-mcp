@@ -1,4 +1,4 @@
-import { MAX_QUERY_ROWS } from '../storage/limits.ts';
+import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS } from '../storage/limits.ts';
 import { baseName, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
 import type { IndexEntry } from './frontmatter-index.ts';
@@ -35,6 +35,11 @@ export interface Query {
   /** Counts only: no rows, no example paths in groups — the cheap answer to "how many". */
   countOnly?: boolean;
   groupBy?: string;
+  /** "rows" (default): one object per note. "columns": a "columns" name list (path first) plus
+   *  one "values" array per note in the same order — cheaper to transmit than repeating every
+   *  field name on every row. Either way "rows" is subject to the same MAX_QUERY_RESULT_CHARS
+   *  budget as "values". */
+  format?: 'rows' | 'columns';
 }
 
 export interface QueryRow {
@@ -49,6 +54,10 @@ export interface QueryResult {
   groups?: { key: string; count: number; paths: string[] }[];
   /** Set when notes landed in several groups, so nobody adds the group counts up to "total". */
   hint?: string;
+  /** "columns" format only: field names, "path" first. */
+  columns?: string[];
+  /** "columns" format only: one array per note, aligned with "columns", in the same order "rows" would have been. */
+  values?: unknown[][];
 }
 
 export const OVERLAPPING_GROUPS_HINT =
@@ -294,6 +303,75 @@ function buildRow(entry: IndexEntry, graph: VaultGraph, select?: string[]): Quer
   return row;
 }
 
+/** "path" plus the deduplicated, path-free selected fields, in the order given — the column list
+ *  for "columns" format, and (implicitly) the key order buildRow would have produced. */
+function selectedColumns(select?: string[]): string[] {
+  const fields = select ? [...new Set(select.filter((f) => f !== 'path'))] : [];
+  return ['path', ...fields];
+}
+
+/**
+ * Keeps the longest prefix of `items` whose JSON serialization (as a JSON array: `[` + comma-
+ * joined items + `]`) stays within `budget` characters. Exact, not an estimate: `JSON.stringify`
+ * of a plain array is exactly that shape (no added whitespace), so summing each item's own
+ * stringified length plus one separator comma reproduces it without re-serializing every prefix.
+ */
+function fitWithinBudget<T>(items: T[], budget: number): { kept: T[]; cut: boolean } {
+  let used = 2; // '[' + ']'
+  const kept: T[] = [];
+  for (const item of items) {
+    const addition = JSON.stringify(item).length + (kept.length > 0 ? 1 : 0); // + comma
+    if (used + addition > budget) return { kept, cut: true };
+    used += addition;
+    kept.push(item);
+  }
+  return { kept, cut: false };
+}
+
+function budgetHint(kept: number, total: number): string {
+  return (
+    `${kept} of ${total} matching rows fit within the ${MAX_QUERY_RESULT_CHARS}-character ` +
+    'budget; use fewer select fields, format: "columns", a lower limit, or countOnly.'
+  );
+}
+
+interface QueryPayload {
+  rows: QueryRow[];
+  columns?: string[];
+  values?: unknown[][];
+  truncated: boolean;
+  hint?: string;
+}
+
+function buildRowsPayload(
+  limited: IndexEntry[],
+  graph: VaultGraph,
+  select: string[] | undefined,
+  total: number,
+): QueryPayload {
+  const rows = limited.map((entry) => buildRow(entry, graph, select));
+  const { kept, cut } = fitWithinBudget(rows, MAX_QUERY_RESULT_CHARS);
+  if (!cut) return { rows, truncated: false };
+  return { rows: kept, truncated: true, hint: budgetHint(kept.length, total) };
+}
+
+function buildColumnsPayload(
+  limited: IndexEntry[],
+  graph: VaultGraph,
+  select: string[] | undefined,
+  total: number,
+): QueryPayload {
+  const columns = selectedColumns(select);
+  const fields = columns.slice(1);
+  const values = limited.map((entry) => [
+    entry.path,
+    ...fields.map((f) => fieldValue(entry, graph, f)),
+  ]);
+  const { kept, cut } = fitWithinBudget(values, MAX_QUERY_RESULT_CHARS);
+  if (!cut) return { rows: [], columns, values, truncated: false };
+  return { rows: [], columns, values: kept, truncated: true, hint: budgetHint(kept.length, total) };
+}
+
 function groupKeyForValue(v: unknown): string {
   return v === undefined ? NONE_GROUP_KEY : String(v);
 }
@@ -378,8 +456,8 @@ export function evaluateQuery(
 
   const total = matched.length;
   const limit = Math.min(Math.max(q.limit ?? 100, 0), MAX_QUERY_ROWS);
-  const truncated = total > limit;
-  const limited = truncated ? matched.slice(0, limit) : matched;
+  const limitTruncated = total > limit;
+  const limited = limitTruncated ? matched.slice(0, limit) : matched;
 
   if (q.countOnly) {
     const counted: QueryResult = { rows: [], total, truncated: false };
@@ -388,16 +466,27 @@ export function evaluateQuery(
     }
     return withGroupsHint(counted);
   }
+
+  const payload =
+    q.format === 'columns'
+      ? buildColumnsPayload(limited, graph, q.select, total)
+      : buildRowsPayload(limited, graph, q.select, total);
+
   const result: QueryResult = {
-    rows: limited.map((entry) => buildRow(entry, graph, q.select)),
+    rows: payload.rows,
     total,
-    truncated,
+    truncated: limitTruncated || payload.truncated,
   };
+  if (payload.columns) result.columns = payload.columns;
+  if (payload.values) result.values = payload.values;
+  if (payload.hint) result.hint = payload.hint;
   if (q.groupBy !== undefined) result.groups = buildGroups(matched, graph, q.groupBy);
   return withGroupsHint(result);
 }
 
 function withGroupsHint(result: QueryResult): QueryResult {
   const sum = result.groups?.reduce((n, g) => n + g.count, 0) ?? 0;
-  return sum > result.total ? { ...result, hint: OVERLAPPING_GROUPS_HINT } : result;
+  if (sum <= result.total) return result;
+  const hint = result.hint ? `${result.hint} ${OVERLAPPING_GROUPS_HINT}` : OVERLAPPING_GROUPS_HINT;
+  return { ...result, hint };
 }

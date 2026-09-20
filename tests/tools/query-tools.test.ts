@@ -122,6 +122,24 @@ describe('vault_query', () => {
     expect(text(r)).toMatch(/Invalid arguments for tool vault_query/);
     expect(text(r)).toMatch(/limit/);
   });
+
+  it('format: "columns" carries the same content as rows, with rows empty', async () => {
+    const r = await h.call('vault_query', {
+      where: [{ field: 'status', op: 'eq', value: 'active' }],
+      select: ['status'],
+      format: 'columns',
+    });
+    expect(r.isError).toBeFalsy();
+    const body = r.structuredContent as QueryResult & { columns?: string[]; values?: unknown[][] };
+    expect(body.rows).toEqual([]);
+    expect(body.columns).toEqual(['path', 'status']);
+    expect(body.values).toEqual(
+      expect.arrayContaining([
+        ['archive/old.md', 'active'],
+        ['projects/alpha.md', 'active'],
+      ]),
+    );
+  });
 });
 
 describe('vault_recent', () => {

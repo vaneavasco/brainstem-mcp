@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
 import { splitFrontmatter } from '../../src/storage/frontmatter.ts';
+import { MAX_QUERY_RESULT_CHARS } from '../../src/storage/limits.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import { VaultError } from '../../src/storage/types.ts';
 import { FrontmatterIndex, type IndexEntry } from '../../src/vault/frontmatter-index.ts';
@@ -395,6 +396,99 @@ describe('evaluateQuery — limit/truncated/total', () => {
     const r = run({ limit: 100_000 });
     expect(r.rows.length).toBeLessThanOrEqual(500);
     expect(r.truncated).toBe(false); // only 4 fixture entries, well under the cap
+  });
+});
+
+describe('evaluateQuery — format: columns', () => {
+  it('carries the same content as rows, as columns + values, with rows empty', () => {
+    const rows = run({
+      where: [{ field: 'status', op: 'exists' }],
+      select: ['status', 'priority'],
+    });
+    const cols = run({
+      where: [{ field: 'status', op: 'exists' }],
+      select: ['status', 'priority'],
+      format: 'columns',
+    });
+    expect(cols.rows).toEqual([]);
+    expect(cols.columns).toEqual(['path', 'status', 'priority']);
+    expect(cols.total).toBe(rows.total);
+    expect(cols.truncated).toBe(rows.truncated);
+    const byPath = new Map(rows.rows.map((r) => [r.path, r]));
+    for (const value of cols.values ?? []) {
+      const [path, status, priority] = value as [string, unknown, unknown];
+      const row = byPath.get(path);
+      expect(row).toBeDefined();
+      expect(status).toEqual(row?.status);
+      expect(priority).toEqual(row?.priority);
+    }
+    expect(cols.values).toHaveLength(rows.rows.length);
+  });
+
+  it('defaults to path-only columns when select is omitted', () => {
+    const cols = run({ format: 'columns' });
+    expect(cols.columns).toEqual(['path']);
+    expect((cols.values ?? []).every((v) => v.length === 1)).toBe(true);
+  });
+
+  it('never repeats "path" in columns even if select lists it', () => {
+    const cols = run({ select: ['path', 'status'], format: 'columns' });
+    expect(cols.columns).toEqual(['path', 'status']);
+  });
+});
+
+describe('evaluateQuery — MAX_QUERY_RESULT_CHARS budget', () => {
+  function seedWide(n: number): void {
+    const filler = 'x'.repeat(400);
+    for (let i = 0; i < n; i += 1) {
+      index.upsert(
+        entry(
+          `wide/n${String(i).padStart(4, '0')}.md`,
+          `---\nblurb: "${filler}"\nrefs: [r1, r2]\n---\nbody`,
+        ),
+      );
+    }
+  }
+
+  it('leaves a small result untouched: no hint, truncated: false', () => {
+    const r = run({ pathPrefix: 'notes' });
+    expect(r.truncated).toBe(false);
+    expect(r.hint).toBeUndefined();
+  });
+
+  it('cuts a big row payload at the character budget and explains why', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', select: ['blurb'], limit: 400 });
+    expect(r.total).toBe(400);
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(r.rows.length).toBeLessThan(400);
+    expect(r.truncated).toBe(true);
+    expect(r.hint).toMatch(new RegExp(`of 400.*${MAX_QUERY_RESULT_CHARS}`));
+    expect(JSON.stringify(r.rows).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+  });
+
+  it('cuts the "columns" format at the same budget, over the values payload', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', select: ['blurb'], limit: 400, format: 'columns' });
+    expect(r.truncated).toBe(true);
+    expect(r.values?.length).toBeGreaterThan(0);
+    expect(r.values?.length).toBeLessThan(400);
+    expect(JSON.stringify(r.values).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+  });
+
+  it('does not affect countOnly, which never builds rows', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', countOnly: true });
+    expect(r.total).toBe(400);
+    expect(r.truncated).toBe(false);
+    expect(r.hint).toBeUndefined();
+  });
+
+  it('joins the budget hint and the overlapping-groups hint with a space when both apply', () => {
+    seedWide(400);
+    const r = run({ pathPrefix: 'wide', select: ['blurb'], limit: 400, groupBy: 'refs' });
+    expect(r.hint).toContain(String(MAX_QUERY_RESULT_CHARS));
+    expect(r.hint).toContain('more than "total"');
   });
 });
 

@@ -20,6 +20,10 @@ export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;
+/** Character budget for a vault_query row payload (the "rows" array, or the "values" array in
+ *  "columns" format) — independent of `limit`, since a handful of wide selected fields across a
+ *  few hundred rows can still blow past what a client will accept. */
+export const MAX_QUERY_RESULT_CHARS = 60_000;
 export const MAX_RECENT = 200;
 /** Regex search patterns run only through ripgrep; capped like the query engine's regex op. */
 export const MAX_SEARCH_PATTERN_CHARS = 200;
