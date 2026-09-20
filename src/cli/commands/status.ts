@@ -63,7 +63,7 @@ export async function runStatus(deps: StatusDeps): Promise<number> {
   const health = await fetchHealth(`http://localhost:${deps.localPort}/health`, deps.fetchImpl);
   deps.print(
     health
-      ? `Health: ok (publicUrl=${health.publicUrl}, notes=${health.notes})`
+      ? `Health: ok (publicUrl=${health.publicUrl}, notes=${health.notes}, index checked=${health.reconciledAt ?? 'not yet'})`
       : 'Health: not running (./brainstem up)',
   );
 

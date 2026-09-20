@@ -9,6 +9,8 @@ export interface HealthInfo {
   mcpUrl: string;
   tunnelMode: string;
   notes: number;
+  /** ISO time of the index's last check against the disk; null before the first one or on an older server. */
+  reconciledAt: string | null;
 }
 
 function toHealthInfo(body: unknown): HealthInfo | null {
@@ -22,6 +24,7 @@ function toHealthInfo(body: unknown): HealthInfo | null {
     mcpUrl: rec.mcpUrl,
     tunnelMode: typeof rec.tunnelMode === 'string' ? rec.tunnelMode : 'none',
     notes,
+    reconciledAt: typeof vault?.reconciledAt === 'string' ? vault.reconciledAt : null,
   };
 }
 

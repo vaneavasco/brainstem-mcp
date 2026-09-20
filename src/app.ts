@@ -47,6 +47,8 @@ function errorShape(type: string | undefined): { code: number; message: string }
 
 export interface AppExtras {
   notes?: () => number;
+  /** When the index was last checked against the disk (null until the first reconcile). */
+  reconciledAt?: () => Date | null;
   /** Per-connection MCP `instructions`; see `FactoryDeps.instructions`. */
   instructions?: () => Promise<string>;
 }
@@ -87,7 +89,10 @@ export function createApp(
       publicUrl: config.publicUrl.href,
       mcpUrl: config.mcpUrl.href,
       tunnelMode: config.tunnelMode,
-      vault: { notes: extras.notes?.() ?? 0 },
+      vault: {
+        notes: extras.notes?.() ?? 0,
+        reconciledAt: extras.reconciledAt?.()?.toISOString() ?? null,
+      },
     });
   });
 

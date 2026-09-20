@@ -134,6 +134,9 @@ describe('v2 variables', () => {
   it('rejects nonsense knobs by name', () => {
     expect(() => loadConfig(baseEnv({ VAULT_WATCH_POLL_MS: '-5' }))).toThrow(/VAULT_WATCH_POLL_MS/);
     expect(() => loadConfig(baseEnv({ VAULT_RECONCILE_MS: '-5' }))).toThrow(/VAULT_RECONCILE_MS/);
+    // every pass lists the whole vault: 1 ms would be a busy loop
+    expect(() => loadConfig(baseEnv({ VAULT_RECONCILE_MS: '1' }))).toThrow(/VAULT_RECONCILE_MS/);
+    expect(loadConfig(baseEnv({ VAULT_RECONCILE_MS: '10000' })).reconcileMs).toBe(10_000);
     expect(() => loadConfig(baseEnv({ TUNNEL_MODE: 'ngrok' }))).toThrow(/TUNNEL_MODE/);
     expect(() => loadConfig(baseEnv({ CIMD_ALLOWED_HOSTS: 'https://claude.ai' }))).toThrow(
       /CIMD_ALLOWED_HOSTS/,

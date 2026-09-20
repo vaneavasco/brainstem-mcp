@@ -104,6 +104,7 @@ async function main(): Promise<void> {
     stateDir,
     maxBinaryBytes: config.maxBinaryBytes,
     reconcileMs: config.reconcileMs,
+    onReconcileError: () => logger.warn('index reconcile failed; the next pass will retry'),
     onReconcile: (result) => {
       // Only a reconcile that actually changed something is worth a line — never paths, just
       // what moved and how long the sweep took.
@@ -196,7 +197,13 @@ async function main(): Promise<void> {
     createOwnerResolver(runtime),
     auth,
     config.port,
-    { extras: { notes: () => runtime.index.size(), instructions: () => instructions.get() } },
+    {
+      extras: {
+        notes: () => runtime.index.size(),
+        reconciledAt: () => runtime.index.reconciledAt,
+        instructions: () => instructions.get(),
+      },
+    },
   );
 
   await writeConnectionNote(stateDir, {

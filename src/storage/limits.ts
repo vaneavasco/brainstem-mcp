@@ -28,6 +28,10 @@ export const MAX_QUERY_RESULT_CHARS = 60_000;
 export const MAX_QUERY_GROUPS_CHARS = 60_000;
 /** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
 export const DEFAULT_RECONCILE_MS = 300_000;
+/** Shortest allowed reconcile interval: each pass lists the whole vault. */
+export const MIN_RECONCILE_MS = 10_000;
+/** Minimum distance between reconciles triggered by watcher errors. */
+export const DEFAULT_RECONCILE_MIN_GAP_MS = 30_000;
 export const MAX_RECENT = 200;
 /** Regex search patterns run only through ripgrep; capped like the query engine's regex op. */
 export const MAX_SEARCH_PATTERN_CHARS = 200;

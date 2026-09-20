@@ -63,7 +63,7 @@ describe('GET /health', () => {
       publicUrl: 'https://brainstem.example.com/',
       mcpUrl: 'https://brainstem.example.com/mcp',
       tunnelMode: 'none',
-      vault: { notes: 0 },
+      vault: { notes: 0, reconciledAt: null },
     });
     expect(typeof body.version).toBe('string');
   });

@@ -136,6 +136,69 @@ describe('background reconcile', () => {
     }
   });
 
+  it('a storm of watcher errors costs at most two passes, and close() waits for the one in flight', async () => {
+    let capturedOnError: ((error: unknown) => void) | undefined;
+    const originalWatch = LocalFSAdapter.prototype.watch;
+    LocalFSAdapter.prototype.watch = function (
+      this: LocalFSAdapter,
+      onChange: Parameters<typeof originalWatch>[0],
+      onError?: Parameters<typeof originalWatch>[1],
+    ) {
+      capturedOnError = onError;
+      return originalWatch.call(this, onChange, onError);
+    };
+    try {
+      const runtime = await createLocalRuntime({
+        vaultPath: root,
+        ripgrepPath: null,
+        reconcileMs: 0,
+      });
+      let started = 0;
+      let finished = 0;
+      const original = runtime.index.reconcile.bind(runtime.index);
+      runtime.index.reconcile = (async (adapter) => {
+        started += 1;
+        await new Promise((r) => setTimeout(r, 60));
+        const result = await original(adapter);
+        finished += 1;
+        return result;
+      }) as typeof runtime.index.reconcile;
+      for (let i = 0; i < 25; i += 1) capturedOnError?.(new Error('no space left on device'));
+      await waitFor(() => started >= 1);
+      await runtime.close();
+      expect(finished).toBe(started); // nothing was left running behind close()
+      expect(started).toBeLessThanOrEqual(2);
+      const atClose = started;
+      capturedOnError?.(new Error('late'));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(started).toBe(atClose);
+    } finally {
+      LocalFSAdapter.prototype.watch = originalWatch;
+    }
+  });
+
+  it('a failing pass is reported without the error and does not stop the timer', async () => {
+    let failures = 0;
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 20,
+      onReconcileError: (...args: unknown[]) => {
+        expect(args).toEqual([]); // an fs error carries an absolute path: it never reaches a logger
+        failures += 1;
+      },
+    });
+    try {
+      runtime.index.reconcile = (async () => {
+        throw new Error("ENOENT: no such file or directory, stat '/abs/secret/path.md'");
+      }) as typeof runtime.index.reconcile;
+      await waitFor(() => failures >= 2);
+      expect(failures).toBeGreaterThanOrEqual(2);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('triggers one reconcile when the adapter watcher reports an error', async () => {
     let capturedOnError: ((error: unknown) => void) | undefined;
     const originalWatch = LocalFSAdapter.prototype.watch;

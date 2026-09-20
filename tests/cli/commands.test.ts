@@ -212,6 +212,7 @@ describe('runUp', () => {
         mcpUrl: 'https://brain.example.com/mcp',
         tunnelMode: 'cloudflare',
         notes: 0,
+        reconciledAt: null,
       },
       { secretHint: 'in .env' },
     );
@@ -328,6 +329,8 @@ describe('runStatus', () => {
     expect(output).toContain('/home/u/vault');
     expect(output).toContain('app: running');
     expect(output).not.toContain('super-secret-value');
+    // an older server has no reconciledAt in /health: the line says so instead of "undefined"
+    expect(output).toContain('index checked=not yet');
   });
 });
 
