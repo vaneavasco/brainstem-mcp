@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   CLIENT_SAFE_RESULT_CHARS,
   MAX_GRAPH_ITEMS,
+  MAX_OUTLINE_KEYS_CHARS,
   MAX_TAG_CHARS,
   MAX_UNLINKED_MENTIONS,
 } from '../storage/limits.ts';
@@ -338,6 +339,9 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         blockIds: z.array(z.looseObject({ id: z.string(), line: z.number() })),
         linkCount: z.number(),
         backlinkCount: z.number(),
+        frontmatterKeyCount: z.number().optional(),
+        truncated: z.boolean().optional(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -346,13 +350,23 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         const p = normalizeVaultPath(path);
         const entry = index.get(p);
         if (!entry) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+        // The names of one note's keys are a list like any other: a note may hold thousands.
+        const allKeys = Object.keys(entry.frontmatter);
+        const keys = fitWithinBudget(allKeys, MAX_OUTLINE_KEYS_CHARS);
         return okJson({
           path: p,
           hash: entry.hash,
           modifiedAt: entry.modifiedAt,
           size: entry.size,
           wordCount: entry.wordCount,
-          frontmatterKeys: Object.keys(entry.frontmatter),
+          frontmatterKeys: keys.kept,
+          frontmatterKeyCount: allKeys.length,
+          ...(keys.cut
+            ? {
+                truncated: true,
+                hint: `Showing ${keys.kept.length} of ${allKeys.length} frontmatter keys: read the fields you need with vault_query select.`,
+              }
+            : {}),
           tags: entry.tags,
           headings: buildHeadingTree(entry.headings),
           blockIds: entry.blockIds,

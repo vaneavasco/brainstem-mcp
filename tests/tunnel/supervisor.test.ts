@@ -111,7 +111,7 @@ describe('runSupervisor child environment', () => {
       ac.signal,
     );
 
-    await tick();
+    await until(() => expect(spawns.length).toBeGreaterThanOrEqual(1));
     expect(at(spawns, 0).args).not.toContain('secret-token');
     expect(at(spawns, 0).env?.TUNNEL_TOKEN).toBe('secret-token');
 
@@ -141,8 +141,7 @@ describe('runSupervisor child environment', () => {
       ac.signal,
     );
 
-    await tick();
-    expect(envs).toEqual([undefined]);
+    await until(() => expect(envs).toEqual([undefined]));
 
     ac.abort();
     at(children, 0).exit(0);
@@ -173,7 +172,7 @@ describe('runSupervisor', () => {
       ac.signal,
     );
 
-    await tick();
+    await until(() => expect(children.length).toBeGreaterThanOrEqual(1));
     at(children, 0).stderr.write('INF |  https://one.trycloudflare.com  |\n');
     await until(async () =>
       expect((await fs.readFile(file, 'utf8')).trim()).toBe('https://one.trycloudflare.com'),
@@ -215,20 +214,16 @@ describe('runSupervisor', () => {
       ac.signal,
     );
 
-    await tick();
     // The previous run's URL is gone before cloudflared starts, so the app
     // waits for the new one instead of booting on a URL nothing serves.
-    expect(existedAtSpawn).toEqual([false]);
+    await until(() => expect(existedAtSpawn).toEqual([false]));
 
     at(children, 0).stderr.write('INF |  https://one.trycloudflare.com  |\n');
-    await tick();
-    expect(existsSync(file)).toBe(true);
+    await until(() => expect(existsSync(file)).toBe(true));
 
     // A restart within the same supervisor also yields a brand-new hostname.
     at(children, 0).exit(1);
-    await tick();
-    await tick();
-    expect(existedAtSpawn).toEqual([false, false]);
+    await until(() => expect(existedAtSpawn).toEqual([false, false]));
 
     ac.abort();
     at(children, 1).exit(0);
@@ -255,7 +250,7 @@ describe('runSupervisor', () => {
       ac.signal,
     );
 
-    await tick();
+    await until(() => expect(children.length).toBeGreaterThanOrEqual(1));
     at(children, 0).stderr.write('INF |  https://should-not-be-used.trycloudflare.com  |\n');
     await tick();
     await expect(fs.readFile(file, 'utf8')).rejects.toThrow();
@@ -289,14 +284,14 @@ describe('runSupervisor', () => {
         ac.signal,
       );
 
-      await tick();
+      await until(() => expect(children.length).toBeGreaterThanOrEqual(1));
       at(children, 0).exit(1);
-      await tick();
+      await until(() => expect(children).toHaveLength(2));
       expect(sleeps).toEqual([1_000]);
 
       nowSpy.mockReturnValue(61_000);
       at(children, 1).exit(1);
-      await tick();
+      await until(() => expect(children).toHaveLength(3));
       // Second child lived > 60s, so attempt resets to 0 -> next delay is 1_000 again.
       expect(sleeps).toEqual([1_000, 1_000]);
 
@@ -327,10 +322,9 @@ describe('runSupervisor', () => {
       ac.signal,
     );
 
-    await tick();
+    await until(() => expect(children.length).toBeGreaterThanOrEqual(1));
     ac.abort();
-    await tick();
-    expect(at(children, 0).killed).toBe(true);
+    await until(() => expect(at(children, 0).killed).toBe(true));
 
     at(children, 0).exit(0);
     await run;
@@ -358,7 +352,7 @@ describe('runSupervisor', () => {
       ac.signal,
     );
 
-    await tick();
+    await until(() => expect(children.length).toBeGreaterThanOrEqual(1));
     at(children, 0).exit(1);
     await tick();
     expect(children).toHaveLength(1);

@@ -32,11 +32,13 @@ function admit(root: unknown): unknown {
   const copies = new Map<object, unknown>();
 
   const walk = (value: unknown): { size: number; out: unknown } => {
+    // A tagged scalar arrives as an object; it is a value, not a mapping. Kept as the text YAML
+    // itself would write, so a later update cannot turn `when: 2026-01-01` into `when: {}`.
+    if (value instanceof Date) return walk(value.toISOString());
+    if (value instanceof Uint8Array) return walk(Buffer.from(value).toString('base64'));
     if (value === null || typeof value !== 'object') {
-      return {
-        size: typeof value === 'string' ? value.length + 2 : String(value).length,
-        out: value,
-      };
+      // sized as JSON will write it: a control character is six characters there, not one
+      return { size: (JSON.stringify(value) ?? 'null').length, out: value };
     }
     if (ancestors.has(value)) {
       throw new VaultError('INVALID_INPUT', 'Frontmatter refers to itself (a YAML alias cycle).');
@@ -55,12 +57,20 @@ function admit(root: unknown): unknown {
       }
       out = list;
     } else {
+      const proto = Object.getPrototypeOf(value);
+      if (!(value instanceof Map) && proto !== Object.prototype && proto !== null) {
+        // nothing the parser is known to produce; refused rather than copied as an empty mapping
+        throw new VaultError(
+          'INVALID_INPUT',
+          'Frontmatter holds a value this server cannot represent.',
+        );
+      }
       const entries = value instanceof Map ? [...value.entries()] : Object.entries(value);
       const record: Record<string, unknown> = {};
       for (const [key, item] of entries) {
         const name = typeof key === 'string' ? key : JSON.stringify(walk(key).out);
         const child = walk(item);
-        size += name.length + child.size + 4;
+        size += JSON.stringify(name).length + child.size + 2;
         // defined, not assigned: a `__proto__` key must stay a key
         Object.defineProperty(record, name, {
           value: child.out,

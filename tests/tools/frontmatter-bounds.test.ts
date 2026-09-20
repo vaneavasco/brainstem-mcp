@@ -131,3 +131,60 @@ describe('`__proto__` is a key like any other, or it is refused; never dropped i
     expect(batch.isError === true || (out?.updated ?? []).length === 0).toBe(true);
   });
 });
+
+describe('third review', () => {
+  it('keeps a tagged timestamp as its ISO text through a read and an update', async () => {
+    await fs.writeFile(
+      path.join(h.root, 'when.md'),
+      '---\nwhen: !!timestamp 2026-01-01\ntitle: alpha\n---\nbody\n',
+    );
+    const r = await h.call('vault_read', { path: 'when.md' });
+    expect((r.structuredContent as { frontmatter: unknown }).frontmatter).toEqual({
+      when: '2026-01-01T00:00:00.000Z',
+      title: 'alpha',
+    });
+    await h.call('vault_frontmatter_update', { path: 'when.md', set: { added: 'beta' } });
+    const file = await fs.readFile(path.join(h.root, 'when.md'), 'utf8');
+    expect(file).toContain('2026-01-01');
+    expect(file).not.toContain('when: {}');
+  });
+
+  it('keeps tagged binary as base64 text, not as a mapping of bytes', async () => {
+    await fs.writeFile(path.join(h.root, 'bin.md'), '---\nblob: !!binary aGVsbG8=\n---\nbody\n');
+    const r = await h.call('vault_read', { path: 'bin.md' });
+    expect((r.structuredContent as { frontmatter: unknown }).frontmatter).toEqual({
+      blob: 'aGVsbG8=',
+    });
+  });
+
+  it('sizes aliased frontmatter as JSON will write it, escapes included', async () => {
+    // 100,000 control characters are 600,000 in JSON; with 9 aliases that is 6 MB from 400 KB
+    const content = `---\nbase: &b "${'\\x01'.repeat(100_000)}"\n${Array.from({ length: 9 }, (_, i) => `u${i}: *b`).join('\n')}\n---\nbody\n`;
+    await fs.writeFile(path.join(h.root, 'esc.md'), content);
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    expect(h.runtime.index.get('esc.md')).toMatchObject({ hasFrontmatter: false });
+    expect(h.runtime.index.byteSize()).toBeLessThan(100_000);
+  });
+
+  it('vault_outline bounds the list of frontmatter keys and says so', async () => {
+    const keys = Array.from(
+      { length: 3_000 },
+      (_, i) => `a_rather_long_frontmatter_key_name_${i}: 1`,
+    );
+    await fs.writeFile(path.join(h.root, 'wide.md'), `---\n${keys.join('\n')}\n---\n# T\n`);
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const r = await h.call('vault_outline', { path: 'wide.md' });
+    expect(r.isError).toBeFalsy();
+    expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    const body = r.structuredContent as {
+      frontmatterKeys: string[];
+      frontmatterKeyCount: number;
+      truncated?: boolean;
+      hint?: string;
+    };
+    expect(body.frontmatterKeyCount).toBe(3_000);
+    expect(body.frontmatterKeys.length).toBeLessThan(3_000);
+    expect(body.truncated).toBe(true);
+    expect(body.hint).toMatch(/vault_query/);
+  });
+});

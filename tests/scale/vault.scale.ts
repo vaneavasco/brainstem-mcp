@@ -22,9 +22,9 @@ import { type Harness, startHarness } from '../tools/harness.ts';
  *   heap / serialized ~1.7                                        → under 2.5
  *   build    17–28 s                                              → under 240 s
  *   idle reconcile pass 2–5 s, re-reads nothing                   → under 30 s, 0 changes
+ *   every list-shaped tool result fits the strictest client (CLIENT_SAFE_RESULT_CHARS)
  * A second review showed the first version of this run passing with the retention bug put back:
  * its names were under 13 characters (V8 copies those) and its scalars quoted (already copies).
- *   every list-shaped tool result fits the strictest client (CLIENT_SAFE_RESULT_CHARS)
  * The numbers are logged on every run, so drift shows long before a bound trips.
  */
 const NOTES = 40_000;

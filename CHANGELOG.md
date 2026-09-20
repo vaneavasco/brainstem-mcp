@@ -152,7 +152,10 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   is left out and flagged (`frontmatterOmitted`, with a `hint` naming the narrower call).
 - A YAML `!!set` or `!!omap` value read as `{}` everywhere, and a set that contained itself got
   past the cycle check. A set reads as a list, an ordered map as a mapping; a frontmatter update
-  writes them back as such.
+  writes them back as such. A tagged timestamp reads as its ISO text and tagged binary as base64.
+- `vault_outline` listed the names of a note's frontmatter keys without a bound (a million
+  characters for a note with 9,000 keys). The list has a budget; `frontmatterKeyCount` says how
+  many there are, `truncated` and `hint` say when some were left out.
 - Tool results may grow without breaking anyone. Output schemas were closed
   (`additionalProperties: false`), and clients cache the tool list: the first result that
   carried a field added after the client's copy was rejected whole with "data must NOT have
