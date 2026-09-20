@@ -63,16 +63,23 @@ describe('tool surface parity', () => {
     expect(closed).toEqual([]);
   });
 
-  it('input schemas are closed: an argument nobody declared is refused', async () => {
+  it('input schemas are closed at every level: an argument nobody declared is refused', async () => {
     const { tools } = await h.client.listTools();
-    for (const tool of tools) {
-      const props = (tool.inputSchema as { properties?: object }).properties ?? {};
-      if (Object.keys(props).length === 0) continue; // a tool without arguments has nothing to misspell
-      expect(
-        (tool.inputSchema as { additionalProperties?: unknown }).additionalProperties,
-        tool.name,
-      ).toBe(false);
-    }
+    // JSON Canvas is extensible by design: a canvas node, edge or patch may carry properties this
+    // server does not know, and they are written through. Everything else names its keys.
+    const OPEN_BY_DESIGN =
+      /^vault_canvas_(add_node|add_edge|update_node)\.properties\.(node|edge|patch)/;
+    const open: string[] = [];
+    const walk = (node: unknown, where: string): void => {
+      if (!node || typeof node !== 'object') return;
+      const o = node as Record<string, unknown>;
+      const named = o.properties && Object.keys(o.properties as object).length > 0;
+      if (named && o.additionalProperties !== false && !OPEN_BY_DESIGN.test(where))
+        open.push(where);
+      for (const [k, v] of Object.entries(o)) walk(v, `${where}.${k}`);
+    };
+    for (const tool of tools) walk(tool.inputSchema, tool.name);
+    expect(open).toEqual([]);
   });
 
   it('exposes exactly the 30 vault tools plus brainstem_ping and brainstem_guide, each with title, description and full annotations', async () => {

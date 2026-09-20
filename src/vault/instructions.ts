@@ -8,9 +8,9 @@ import path from 'node:path';
  */
 export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access to the owner's personal Obsidian vault (notes, canvases, bases, attachments).
 - Paths are vault-relative, forward slashes, with extension (\`projects/alpha.md\`).
-- Find, don't scan: vault_search, vault_query for structured filters over frontmatter, vault_recent for what changed lately, vault_tags for tag lookups, vault_links for a note's backlinks and outgoing links.
-- Understand before you edit: vault_outline for headings/tags/word count, vault_read with \`section\` / \`sections\` for just those headings. vault_batch_read reads several notes at once.
-- \`truncated: true\` means the text was cut: read by section instead; never write it back.
+- Find, don't scan: vault_search, vault_query for structured filters over frontmatter (\`countOnly\` to count), vault_recent for what changed lately, vault_tags for tag lookups, vault_links for a note's backlinks and outgoing links.
+- Understand before you edit: vault_outline for headings/tags/word count, vault_read with \`section\` / \`sections\` for just those headings. vault_batch_read takes \`sections\` too (notes share one budget).
+- \`truncated: true\` on a read: the text was cut, read by section, never write it back. On a query: rows were cut, the \`hint\` says why.
 - Edit surgically: vault_edit (exact text replacement) or vault_append (optionally at a \`heading\`) instead of rewriting with vault_write; vault_frontmatter_update and vault_batch_frontmatter_update change metadata only.
 - Concurrency: reads return a \`hash\`. Pass it back as \`expectedHash\` on the write; a stale hash fails with CONFLICT (and the current hash) instead of overwriting silently, so re-read and retry. Several notes together: vault_transaction applies every op, or none.
 - Notes start with YAML frontmatter; keep existing keys. Link with [[wikilinks]]. vault_move rewrites every link that points at the moved note, by default.

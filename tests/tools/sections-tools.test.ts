@@ -247,6 +247,29 @@ describe('vault_batch_read sections and maxChars', () => {
   });
 });
 
+describe('vault_batch_read shares one budget fairly', () => {
+  it('a short note leaves its share to a long one; the total never exceeds the budget', async () => {
+    const { shareBudget } = await import('../../src/tools/read.ts');
+    expect(shareBudget([100, 45_000], 60_000)).toEqual([100, 45_000]);
+    expect(shareBudget([100, 80_000], 60_000)).toEqual([100, 59_900]);
+    expect(shareBudget([50_000, 50_000, 10], 60_000)).toEqual([29_995, 29_995, 10]);
+    expect(shareBudget([9_000, 9_000], 60_000, 600)).toEqual([600, 600]);
+    expect(shareBudget([], 60_000)).toEqual([]);
+    const many = shareBudget(new Array(20).fill(100_000), 60_000);
+    expect(many.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(60_000);
+  });
+
+  it('two notes of very different length both arrive whole when they fit together', async () => {
+    const long = `# Long\n\n${'word '.repeat(9_000)}\n`; // 45k characters
+    await h.call('vault_write', { path: 'long.md', content: long });
+    await h.call('vault_write', { path: 'short.md', content: '# Short\nhi\n' });
+    const r = await h.call('vault_batch_read', { paths: ['short.md', 'long.md'] });
+    const notes = (r.structuredContent as { notes: { truncated: boolean }[] }).notes;
+    expect(notes.map((n) => n.truncated)).toEqual([false, false]);
+    expect(r.structuredContent).not.toHaveProperty('hint');
+  });
+});
+
 describe('document reads for clients that show only the content blocks', () => {
   const meta = (r: { content: { type: string; text?: string }[] }) =>
     r.content[1]?.type === 'text' ? (r.content[1].text ?? '') : '';

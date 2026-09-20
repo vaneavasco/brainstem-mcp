@@ -526,7 +526,7 @@ describe('evaluateQuery — MAX_QUERY_RESULT_CHARS budget', () => {
     expect(r.rows.length).toBeGreaterThan(0);
     expect(r.rows.length).toBeLessThan(400);
     expect(r.truncated).toBe(true);
-    expect(r.hint).toMatch(new RegExp(`of 400.*${MAX_QUERY_RESULT_CHARS}`));
+    expect(r.hint).toMatch(new RegExp(`of the 400 rows asked for.*${MAX_QUERY_RESULT_CHARS}`));
     expect(JSON.stringify(r.rows).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
   });
 
@@ -555,7 +555,58 @@ describe('evaluateQuery — MAX_QUERY_RESULT_CHARS budget', () => {
   });
 });
 
+describe('evaluateQuery — contains/startsWith on what is not there', () => {
+  it('a missing field contains nothing, not the text "undefined"', () => {
+    expect(run({ where: [{ field: 'no_such_field', op: 'contains', value: 'und' }] }).total).toBe(
+      0,
+    );
+    expect(run({ where: [{ field: 'no_such_field', op: 'startsWith', value: 'u' }] }).total).toBe(
+      0,
+    );
+  });
+
+  it('an empty needle in a list is refused: it would match every note', () => {
+    expect(() =>
+      run({ where: [{ field: 'owners', op: 'contains', value: ['Alice', ''] }] }),
+    ).toThrow(/empty/);
+  });
+});
+
 describe('evaluateQuery — groups budget', () => {
+  it('bounds the groups themselves: thousands of keys keep the largest groups and say so', () => {
+    for (let i = 0; i < 4000; i += 1) {
+      const bucket = i < 30 ? 'common' : `a-rather-long-and-unique-bucket-name-number-${i}`;
+      index.upsert(entry(`many/n${i}.md`, `---\nbucket: ${bucket}\n---\nbody`));
+    }
+    const counted = run({ pathPrefix: 'many', groupBy: 'bucket', countOnly: true });
+    expect(JSON.stringify(counted.groups).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+    expect(counted.groups?.find((g) => g.key === 'common')?.count).toBe(30);
+    expect(counted.hint).toMatch(/\d+ of 3971 groups shown/);
+    expect(counted.total).toBe(4000);
+  });
+
+  it('rows and groups share one budget', () => {
+    const filler = 'x'.repeat(300);
+    for (let i = 0; i < 450; i += 1) {
+      index.upsert(entry(`both/n${i}.md`, `---\nblurb: "${filler}"\nbucket: b${i}\n---\nbody`));
+    }
+    const r = run({ pathPrefix: 'both', select: ['blurb'], limit: 450, groupBy: 'bucket' });
+    const size = JSON.stringify(r.rows).length + JSON.stringify(r.groups).length;
+    expect(size).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+    expect(r.truncated).toBe(true);
+  });
+
+  it('the row hint counts against what was asked for, not against every match', () => {
+    const filler = 'x'.repeat(2000);
+    for (let i = 0; i < 300; i += 1) {
+      index.upsert(entry(`asked/n${i}.md`, `---\nblurb: "${filler}"\n---\nbody`));
+    }
+    const r = run({ pathPrefix: 'asked', select: ['blurb'], limit: 100 });
+    expect(r.total).toBe(300);
+    expect(r.hint).toMatch(/of the 100 rows asked for/);
+    expect(r.hint).not.toContain('lower limit');
+  });
+
   it('drops the example paths, never the counts, when hundreds of groups outgrow the budget', () => {
     const long = 'a-rather-long-folder-name-for-a-note/'.repeat(3);
     for (let g = 0; g < 120; g += 1) {

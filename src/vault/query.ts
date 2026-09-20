@@ -206,6 +206,7 @@ function matchesIn(fieldVal: unknown, value: unknown[]): boolean {
 }
 
 function matchesOneContains(fieldVal: unknown, needleValue: unknown): boolean {
+  if (fieldVal === undefined || fieldVal === null) return false; // a missing field contains nothing
   const needle = String(needleValue).toLowerCase();
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => String(el).toLowerCase().includes(needle));
@@ -221,6 +222,7 @@ function matchesContains(fieldVal: unknown, value: unknown): boolean {
 }
 
 function matchesOneStartsWith(fieldVal: unknown, prefixValue: unknown): boolean {
+  if (fieldVal === undefined || fieldVal === null) return false;
   const prefix = String(prefixValue).toLowerCase();
   const arr = asArray(fieldVal);
   if (arr) return arr.some((el) => String(el).toLowerCase().startsWith(prefix));
@@ -285,6 +287,9 @@ function validateNeedleArray(op: 'contains' | 'startsWith', value: unknown[]): v
   for (const needle of value) {
     if (typeof needle !== 'string' && typeof needle !== 'number') {
       throw new VaultError('INVALID_INPUT', `"${op}" array needles must be strings or numbers.`);
+    }
+    if (needle === '') {
+      throw new VaultError('INVALID_INPUT', `"${op}" array needles must not be empty strings.`);
     }
   }
 }
@@ -389,10 +394,12 @@ function fitWithinBudget<T>(items: T[], budget: number): { kept: T[]; cut: boole
   return { kept, cut: false };
 }
 
-function budgetHint(kept: number, total: number): string {
+/** `asked` is how many rows this call could have returned at most (`limit`, or every match). */
+function budgetHint(kept: number, asked: number): string {
   return (
-    `${kept} of ${total} matching rows fit within the ${MAX_QUERY_RESULT_CHARS}-character ` +
-    'budget; use fewer select fields, format: "columns", a lower limit, or countOnly.'
+    `${kept} of the ${asked} rows asked for fit the ${MAX_QUERY_RESULT_CHARS}-character result ` +
+    'budget. For the same rows in fewer characters: fewer select fields or format: "columns". ' +
+    'For the rest: sort, then filter on the sort key past the last row returned.'
   );
 }
 
@@ -408,19 +415,19 @@ function buildRowsPayload(
   limited: IndexEntry[],
   graph: VaultGraph,
   select: string[] | undefined,
-  total: number,
+  budget: number,
 ): QueryPayload {
   const rows = limited.map((entry) => buildRow(entry, graph, select));
-  const { kept, cut } = fitWithinBudget(rows, MAX_QUERY_RESULT_CHARS);
+  const { kept, cut } = fitWithinBudget(rows, budget);
   if (!cut) return { rows, truncated: false };
-  return { rows: kept, truncated: true, hint: budgetHint(kept.length, total) };
+  return { rows: kept, truncated: true, hint: budgetHint(kept.length, limited.length) };
 }
 
 function buildColumnsPayload(
   limited: IndexEntry[],
   graph: VaultGraph,
   select: string[] | undefined,
-  total: number,
+  budget: number,
 ): QueryPayload {
   const columns = selectedColumns(select);
   const fields = columns.slice(1);
@@ -428,9 +435,15 @@ function buildColumnsPayload(
     entry.path,
     ...fields.map((f) => fieldValue(entry, graph, f)),
   ]);
-  const { kept, cut } = fitWithinBudget(values, MAX_QUERY_RESULT_CHARS);
+  const { kept, cut } = fitWithinBudget(values, budget);
   if (!cut) return { rows: [], columns, values, truncated: false };
-  return { rows: [], columns, values: kept, truncated: true, hint: budgetHint(kept.length, total) };
+  return {
+    rows: [],
+    columns,
+    values: kept,
+    truncated: true,
+    hint: budgetHint(kept.length, limited.length),
+  };
 }
 
 function groupKeyForValue(v: unknown): string {
@@ -535,18 +548,34 @@ export function evaluateQuery(
   const limitTruncated = total > limit;
   const limited = limitTruncated ? matched.slice(0, limit) : matched;
 
+  // One budget for the whole result: the groups take what they need first (at most half when rows
+  // are wanted too), the rows get the rest. Two independent budgets would add up to twice what a
+  // client accepts.
+  const groupsBudget = q.countOnly ? MAX_QUERY_RESULT_CHARS : MAX_QUERY_GROUPS_CHARS;
+  const fitted =
+    q.groupBy === undefined
+      ? undefined
+      : fitGroups(
+          buildGroups(matched, graph, q.groupBy),
+          groupsBudget,
+          q.countOnly === true,
+          total,
+        );
+
   if (q.countOnly) {
     const counted: QueryResult = { rows: [], total, truncated: false };
-    if (q.groupBy !== undefined) {
-      counted.groups = buildGroups(matched, graph, q.groupBy).map((g) => ({ ...g, paths: [] }));
+    if (fitted) {
+      counted.groups = fitted.groups;
+      if (fitted.hint) counted.hint = fitted.hint;
     }
-    return withGroupsHint(counted);
+    return withGroupsHint(counted, fitted?.overlapping ?? false);
   }
 
+  const rowsBudget = MAX_QUERY_RESULT_CHARS - (fitted ? JSON.stringify(fitted.groups).length : 0);
   const payload =
     q.format === 'columns'
-      ? buildColumnsPayload(limited, graph, q.select, total)
-      : buildRowsPayload(limited, graph, q.select, total);
+      ? buildColumnsPayload(limited, graph, q.select, rowsBudget)
+      : buildRowsPayload(limited, graph, q.select, rowsBudget);
 
   const result: QueryResult = {
     rows: payload.rows,
@@ -556,22 +585,50 @@ export function evaluateQuery(
   if (payload.columns) result.columns = payload.columns;
   if (payload.values) result.values = payload.values;
   if (payload.hint) result.hint = payload.hint;
-  if (q.groupBy !== undefined) {
-    const groups = buildGroups(matched, graph, q.groupBy);
-    // Hundreds of groups with 20 example paths each outgrow what a client accepts: the counts are
-    // the answer, the paths are a convenience — they go first.
-    if (JSON.stringify(groups).length > MAX_QUERY_GROUPS_CHARS) {
-      result.groups = groups.map((g) => ({ ...g, paths: [] }));
-      result.hint = joinHints(result.hint, GROUP_PATHS_DROPPED_HINT);
-    } else {
-      result.groups = groups;
-    }
+  if (fitted) {
+    result.groups = fitted.groups;
+    if (fitted.hint) result.hint = joinHints(result.hint, fitted.hint);
   }
-  return withGroupsHint(result);
+  return withGroupsHint(result, fitted?.overlapping ?? false);
 }
 
-function withGroupsHint(result: QueryResult): QueryResult {
-  const sum = result.groups?.reduce((n, g) => n + g.count, 0) ?? 0;
-  if (sum <= result.total) return result;
+type Group = { key: string; count: number; paths: string[] };
+
+/**
+ * Groups within `budget` characters. The counts are the answer and the example paths a
+ * convenience, so the paths go first; if thousands of keys still do not fit, the largest groups
+ * are kept (in key order, like the full list) and the hint says how many were left out.
+ * `overlapping` is decided on the full list, before anything is dropped.
+ */
+function fitGroups(
+  all: Group[],
+  budget: number,
+  countsOnly: boolean,
+  total: number,
+): { groups: Group[]; hint?: string; overlapping: boolean } {
+  // A note with several values sits in several groups: only then do the counts exceed the total.
+  const overlapping = all.reduce((n, g) => n + g.count, 0) > total;
+  let groups = countsOnly ? all.map((g) => ({ ...g, paths: [] })) : all;
+  let hint: string | undefined;
+  if (JSON.stringify(groups).length > budget) {
+    if (!countsOnly) hint = GROUP_PATHS_DROPPED_HINT;
+    groups = groups.map((g) => ({ ...g, paths: [] }));
+  }
+  if (JSON.stringify(groups).length > budget) {
+    const bySize = [...groups].sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : 1));
+    const { kept } = fitWithinBudget(bySize, budget);
+    const keep = new Set(kept.map((g) => g.key));
+    const shown = groups.filter((g) => keep.has(g.key));
+    hint = joinHints(
+      hint,
+      `${shown.length} of ${groups.length} groups shown, the largest ones; filter with "where" to see the others.`,
+    );
+    groups = shown;
+  }
+  return { groups, ...(hint ? { hint } : {}), overlapping };
+}
+
+function withGroupsHint(result: QueryResult, overlapping: boolean): QueryResult {
+  if (!overlapping) return result;
   return { ...result, hint: joinHints(result.hint, OVERLAPPING_GROUPS_HINT) };
 }

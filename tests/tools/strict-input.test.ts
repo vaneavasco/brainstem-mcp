@@ -41,8 +41,10 @@ describe('tool arguments nobody asked for are an error, never ignored', () => {
       where: [{ field: 'status', op: 'eq', value: 'draft', caseSensitive: true }],
     });
     expect(where.isError).toBe(true);
+    expect(text(where)).toContain('caseSensitive');
     const sort = await h.call('vault_query', { sort: [{ field: 'status', direction: 'asc' }] });
     expect(sort.isError).toBe(true);
+    expect(text(sort)).toContain('direction');
   });
 
   it('a correct call is unaffected', async () => {

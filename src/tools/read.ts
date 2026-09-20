@@ -83,6 +83,25 @@ function pickSections(content: string, headings: string[]): PickedSections {
   };
 }
 
+/**
+ * How many characters each text may take from one shared budget. Shorter texts are served first
+ * and whole; what they leave is split among the longer ones, so two notes of 100 and 45,000
+ * characters both arrive whole under a 60,000 budget instead of the second being cut at 30,000.
+ * `cap` is the caller's own per-text limit.
+ */
+export function shareBudget(lengths: number[], budget: number, cap?: number): number[] {
+  const out = new Array<number>(lengths.length).fill(0);
+  const order = lengths.map((_, i) => i).sort((a, b) => (lengths[a] ?? 0) - (lengths[b] ?? 0));
+  let remaining = budget;
+  order.forEach((index, position) => {
+    const fair = Math.floor(remaining / (order.length - position));
+    const take = Math.min(lengths[index] ?? 0, fair, cap ?? Number.POSITIVE_INFINITY);
+    out[index] = Math.max(take, 0);
+    remaining -= out[index] ?? 0;
+  });
+  return out;
+}
+
 export function registerReadTools(server: McpServer, tc: ToolContext): void {
   const { adapter } = tc.runtime;
 
@@ -189,7 +208,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     'vault_batch_read',
     {
       title: 'Read several notes',
-      description: `Read up to ${MAX_BATCH} files in one call; the bodies share 60k characters (20 notes: 3k each). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) to get only those sections of every note — a note lacking one still answers and lists it in "missingSections" — and/or "maxChars" to cut each note. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
+      description: `Read up to ${MAX_BATCH} files in one call; the bodies share ${MAX_BATCH_RESULT_CHARS.toLocaleString('en-US')} characters (a short note leaves its share to the long ones). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) to get only those sections of every note — a note lacking one still answers and lists it in "missingSections" — and/or "maxChars" to cut each note. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
       inputSchema: z.strictObject({
         paths: z.array(DetailedPathArg).min(1).max(MAX_BATCH),
         sections: z
@@ -225,16 +244,16 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     ({ paths, sections, maxChars }) =>
       guarded(tc.log, async () => {
         const result = await adapter.batchRead(paths);
-        const share = Math.max(
-          2_000,
-          Math.floor(MAX_BATCH_RESULT_CHARS / Math.max(1, result.notes.length)),
+        // Pick the sections first, then share the budget over what is actually wanted: a short
+        // note leaves its unused share to the long ones instead of wasting it.
+        const wanted = result.notes.map((note) =>
+          sections ? pickSections(note.content, sections) : undefined,
         );
-        const perNote = maxChars === undefined ? share : Math.min(maxChars, share);
-        const notes = result.notes.map((note) => {
-          // note.content, as vault_read does: findSection skips the frontmatter itself, and a body that
-          // opens with a horizontal rule would otherwise be taken for a second frontmatter block.
-          const picked = sections ? pickSections(note.content, sections) : undefined;
-          const clamped = clampText(picked ? picked.text : note.body, perNote);
+        const lengths = result.notes.map((note, i) => (wanted[i]?.text ?? note.body).length);
+        const allowance = shareBudget(lengths, MAX_BATCH_RESULT_CHARS, maxChars);
+        const notes = result.notes.map((note, i) => {
+          const picked = wanted[i];
+          const clamped = clampText(picked ? picked.text : note.body, allowance[i]);
           return {
             path: note.path,
             frontmatter: note.frontmatter,

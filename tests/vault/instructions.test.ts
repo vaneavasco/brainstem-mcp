@@ -37,6 +37,12 @@ describe('DEFAULT_INSTRUCTIONS', () => {
     expect(DEFAULT_INSTRUCTIONS).toContain('`sections`');
   });
 
+  it('knows what this server can do cheaply: it is sent to every client, so stale advice is a defect', () => {
+    expect(DEFAULT_INSTRUCTIONS).toMatch(/vault_batch_read takes `sections`/);
+    expect(DEFAULT_INSTRUCTIONS).toContain('`countOnly`');
+    expect(DEFAULT_INSTRUCTIONS).toMatch(/On a query: rows were cut/);
+  });
+
   it('only names tools that are actually registered', async () => {
     const h = await startHarness();
     try {
