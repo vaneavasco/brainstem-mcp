@@ -32,9 +32,10 @@ export const MAX_MATCH_TEXT_CHARS = 400;
  *  373 MB with the graph). So this line sits near 75,000 such notes and about 0.5 GB of heap for
  *  the index; the earlier 64 MiB was an estimate (1–2 KB per note) that real notes doubled. */
 export const MAX_INDEX_BYTES = 256 * 1024 * 1024;
-/** Room for the names of one note's frontmatter keys in vault_outline. A quarter of what the
- *  strictest client accepts: headings, the point of an outline, keep the rest. */
-export const MAX_OUTLINE_KEYS_CHARS = CLIENT_SAFE_RESULT_CHARS / 4;
+/** Room for each flat list of one note in vault_outline (frontmatter key names, tags, block ids):
+ *  a sixth of what the strictest client accepts each, so headings, the point of an outline, keep
+ *  at least half. */
+export const MAX_OUTLINE_LIST_CHARS = CLIENT_SAFE_RESULT_CHARS / 6;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;

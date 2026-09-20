@@ -167,12 +167,14 @@ describe('compileSafePattern — rejections', () => {
 });
 
 describe('compileSafePattern — linear-time guarantee', () => {
-  it('handles a catastrophic-backtracking pattern in well under 50 ms', () => {
+  it('handles a catastrophic-backtracking pattern in linear time', () => {
     const matcher = compileSafePattern('(a+)+');
     const subject = `${'a'.repeat(2000)}b`;
     const started = performance.now();
     expect(matcher.test(subject)).toBe(false);
-    expect(performance.now() - started).toBeLessThan(50);
+    // A backtracking engine needs about 2^2000 steps here, so any finite bound tells the two
+    // apart. One second, not 50 ms: measured 60 ms once on a machine busy with other suites.
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it('never matches a subject longer than the subject cap', () => {

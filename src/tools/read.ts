@@ -34,6 +34,9 @@ const NoteSummary = z.looseObject({
   frontmatter: z.record(z.string(), z.unknown()),
   /** true when the block was too large for a result and `frontmatter` is `{}` instead. */
   frontmatterOmitted: z.boolean().optional(),
+  /** Why a leading `---` block could not be used (invalid YAML, a cycle, too large): the note
+   *  then reads as body-only, and writers refuse to build a new block on top of the broken one. */
+  frontmatterError: z.string().optional(),
   hasFrontmatter: z.boolean(),
   size: z.number(),
   modifiedAt: z.string(),
@@ -215,6 +218,9 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           {
             path: note.path,
             ...fm,
+            ...(note.frontmatterError === undefined
+              ? {}
+              : { frontmatterError: note.frontmatterError }),
             hasFrontmatter: note.hasFrontmatter,
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
@@ -305,6 +311,9 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             body: MARKER_PLACEHOLDER, // every body may end in a truncation marker: weigh it
             truncated: true,
             ...(withFrontmatter ? {} : { frontmatterOmitted: true }),
+            ...(note.frontmatterError === undefined
+              ? {}
+              : { frontmatterError: note.frontmatterError }),
             ...(wanted[i]?.missing.length ? { missingSections: wanted[i]?.missing } : {}),
           };
         };

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   CLIENT_SAFE_RESULT_CHARS,
   MAX_GRAPH_ITEMS,
-  MAX_OUTLINE_KEYS_CHARS,
+  MAX_OUTLINE_LIST_CHARS,
   MAX_TAG_CHARS,
   MAX_UNLINKED_MENTIONS,
 } from '../storage/limits.ts';
@@ -350,9 +350,17 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
         const p = normalizeVaultPath(path);
         const entry = index.get(p);
         if (!entry) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
-        // The names of one note's keys are a list like any other: a note may hold thousands.
+        // The flat lists of one note are lists like any other: a note may hold thousands of keys,
+        // tags or block ids. Each gets its own room; what was left out is counted and said.
         const allKeys = Object.keys(entry.frontmatter);
-        const keys = fitWithinBudget(allKeys, MAX_OUTLINE_KEYS_CHARS);
+        const keys = fitWithinBudget(allKeys, MAX_OUTLINE_LIST_CHARS);
+        const tags = fitWithinBudget(entry.tags, MAX_OUTLINE_LIST_CHARS);
+        const blockIds = fitWithinBudget(entry.blockIds, MAX_OUTLINE_LIST_CHARS);
+        const cutLists = [
+          keys.cut && `${keys.kept.length} of ${allKeys.length} frontmatter keys`,
+          tags.cut && `${tags.kept.length} of ${entry.tags.length} tags`,
+          blockIds.cut && `${blockIds.kept.length} of ${entry.blockIds.length} block ids`,
+        ].filter((said): said is string => typeof said === 'string');
         return okJson({
           path: p,
           hash: entry.hash,
@@ -361,15 +369,15 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           wordCount: entry.wordCount,
           frontmatterKeys: keys.kept,
           frontmatterKeyCount: allKeys.length,
-          ...(keys.cut
+          ...(cutLists.length > 0
             ? {
                 truncated: true,
-                hint: `Showing ${keys.kept.length} of ${allKeys.length} frontmatter keys: read the fields you need with vault_query select.`,
+                hint: `Showing ${cutLists.join(', ')}: read the fields you need with vault_query select (tags is a field too).`,
               }
             : {}),
-          tags: entry.tags,
+          tags: tags.kept,
           headings: buildHeadingTree(entry.headings),
-          blockIds: entry.blockIds,
+          blockIds: blockIds.kept,
           linkCount: entry.links.length,
           backlinkCount: graph.backlinks(p).length,
         });

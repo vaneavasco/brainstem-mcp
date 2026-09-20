@@ -187,4 +187,37 @@ describe('third review', () => {
     expect(body.truncated).toBe(true);
     expect(body.hint).toMatch(/vault_query/);
   });
+
+  it('vault_read says why a frontmatter block could not be used', async () => {
+    await fs.writeFile(path.join(h.root, 'cycle.md'), '---\na: &x\n  b: *x\n---\nbody\n');
+    const r = await h.call('vault_read', { path: 'cycle.md' });
+    const body = r.structuredContent as { hasFrontmatter: boolean; frontmatterError?: string };
+    expect(body.hasFrontmatter).toBe(false);
+    expect(body.frontmatterError).toMatch(/refers to itself/);
+    const batch = await h.call('vault_batch_read', { paths: ['cycle.md'] });
+    const item = (batch.structuredContent as { notes: { frontmatterError?: string }[] }).notes[0];
+    expect(item?.frontmatterError).toMatch(/refers to itself/);
+  });
+
+  it('vault_outline bounds tags and block ids as it bounds keys', async () => {
+    const tags = Array.from({ length: 4_000 }, (_, i) => `  - a-rather-long-tag-name-${i}`).join(
+      '\n',
+    );
+    const blocks = Array.from({ length: 2_000 }, (_, i) => `line ${i} ^a-long-block-id-${i}`).join(
+      '\n\n',
+    );
+    await fs.writeFile(
+      path.join(h.root, 'many.md'),
+      `---\ntags:\n${tags}\n---\n# T\n\n${blocks}\n`,
+    );
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    const r = await h.call('vault_outline', { path: 'many.md' });
+    expect(r.isError).toBeFalsy();
+    expect(size(r)).toBeLessThanOrEqual(CLIENT_SAFE_RESULT_CHARS);
+    const body = r.structuredContent as { truncated?: boolean; hint?: string; tags: string[] };
+    expect(body.truncated).toBe(true);
+    expect(body.hint).toMatch(/of 4000 tags/);
+    expect(body.hint).toMatch(/of 2000 block ids/);
+    expect(body.tags.length).toBeGreaterThan(100);
+  });
 });

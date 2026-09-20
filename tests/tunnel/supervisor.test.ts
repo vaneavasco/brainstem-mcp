@@ -31,13 +31,15 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
  *  child asynchronously, and on a loaded machine (the full suite, CI) 20 ms is sometimes not
  *  enough. Fails with the last error after 5 s. */
 async function until(check: () => Promise<void> | void): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  // performance.now, not Date.now: one test here mocks Date.now to a constant, and a deadline
+  // computed from it would never pass, turning a failed assertion into a bare timeout.
+  const deadline = performance.now() + 5_000;
   for (;;) {
     try {
       await check();
       return;
     } catch (error) {
-      if (Date.now() > deadline) throw error;
+      if (performance.now() > deadline) throw error;
       await tick();
     }
   }
