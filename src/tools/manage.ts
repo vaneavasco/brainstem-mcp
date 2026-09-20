@@ -40,7 +40,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated. ' +
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
       inputSchema: z.object({
         path: z.string().optional(),

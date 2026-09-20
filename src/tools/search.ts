@@ -21,6 +21,11 @@ import { CondSchema, TagsFilterSchema } from './args.ts';
 import type { ToolContext } from './register.ts';
 import { GUIDE_POINTER, guarded, okJson } from './results.ts';
 
+/** Only ever attached when a search found nothing — vault_search is a literal substring match,
+ *  so a plausible next step costs nothing to suggest. */
+const ZERO_HITS_HINT =
+  'No matches: this is a literal substring search. Try a spelling variant, a shorter word, or regex: true.';
+
 interface CandidateOpts {
   tags?: Query['tags'];
   where?: Cond[];
@@ -229,6 +234,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
         matches: z.array(z.object({ path: z.string(), line: z.number(), text: z.string() })),
         total: z.number(),
         truncated: z.boolean(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -290,6 +296,7 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           matches,
           total: matches.length,
           truncated,
+          ...(matches.length === 0 ? { hint: ZERO_HITS_HINT } : {}),
         });
       }),
   );

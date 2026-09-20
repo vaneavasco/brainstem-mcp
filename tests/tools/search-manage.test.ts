@@ -67,6 +67,15 @@ describe('vault_search', () => {
     expect(empty.isError).toBe(true);
   });
 
+  it('adds a hint only on zero hits, pointing at spelling/regex alternatives', async () => {
+    const zero = await h.call('vault_search', { query: 'nonexistentword' });
+    expect((zero.structuredContent as { total: number }).total).toBe(0);
+    expect((zero.structuredContent as { hint?: string }).hint).toMatch(/regex.*true/);
+
+    const some = await h.call('vault_search', { query: 'milk' });
+    expect((some.structuredContent as { hint?: string }).hint).toBeUndefined();
+  });
+
   it('reports total and truncated alongside the matches', async () => {
     const r = await h.call('vault_search', { query: 'milk' });
     expect(r.structuredContent).toMatchObject({ total: 2, truncated: false });
@@ -247,6 +256,12 @@ describe('vault_search_frontmatter', () => {
 });
 
 describe('vault_list', () => {
+  it('description points at vault_query countOnly for counting/sizing a folder', async () => {
+    const { tools } = await h.client.listTools();
+    const tool = tools.find((t) => t.name === 'vault_list');
+    expect(tool?.description).toMatch(/vault_query.*countOnly/);
+  });
+
   it('lists with depth and glob and rejects hidden folders', async () => {
     const top = await h.call('vault_list', {});
     expect(top.structuredContent).toMatchObject({ truncated: false });
