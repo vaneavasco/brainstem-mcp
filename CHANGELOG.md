@@ -37,6 +37,12 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   and shutdown waits for the pass in flight. `brainstem_ping` (`index: { notes, builtAt, reconciledAt }`), `/health`
   (`vault.reconciledAt`) and `./brainstem status` show when the index was last checked. An idle
   pass over 37,000 notes takes about a second.
+- Every tool that returns a list is bounded the same way (ADR 0007), because on a 37,000-note
+  vault they were not: `vault_list` returned 283,000 characters, `vault_links` on a hub 161,000,
+  `vault_tags` 146,000. `vault_list`, `vault_links` (its four lists share one budget, short
+  lists first), `vault_tags`, `vault_search_frontmatter` and `vault_analytics_findings` keep the
+  longest prefix that fits 48,000 characters, set `truncated`, and where there is something
+  useful to say, a `hint` with the counts and the narrower call.
 - `vault_query` and `vault_recent` bound the whole result, not only the rows: rows (or `values`)
   and `groups` share 48,000 characters. Groups get at most half when rows are wanted too (all of
   it with `countOnly`); their example paths are dropped before any group is, and when thousands
@@ -190,12 +196,14 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 - The owner's `_brainstem/instructions.md` may be up to 12,000 characters (was 8,000) before it is cut with a marker: a guide for a large, structured vault (folders, queryable fields, reading recipes) did not fit, and it is read once per conversation through `brainstem_guide`.
 
-- `vault_batch_read` shares 40,000 characters between the note bodies (was 120,000, which a
-  client refused outright with the metadata of twenty notes on top: a full batch returned
-  nothing). Frontmatter, metadata and a truncation marker per note ride on top of the bodies,
-  hence less than the 48,000 of a query. The budget is shared fairly: a short note leaves its
-  unused share to the long ones, so a note that needs more than an even share still arrives
-  whole when the batch fits. A cut is reported per note (`truncated`) with the usual hint;
+- `vault_batch_read` bounds what the client receives, at 48,000 characters (it was 120,000 of
+  bodies alone, which a client refused outright: a full batch returned nothing). The budget
+  covers frontmatter as well as bodies: on a real vault the frontmatter of twenty long notes
+  weighed as much as their bodies (45,000 characters), so bounding the bodies alone still
+  produced a 91,000-character result. Frontmatter gets at most half; beyond that the largest
+  blocks are left out and flagged (`frontmatterOmitted`, with a hint that names `vault_query
+  select`). The bodies share the rest fairly, in serialized characters: a short note leaves its
+  unused share to the long ones. A cut is reported per note (`truncated`) with the usual hint;
   `sections` is the intended call for long notes.
 - Positioning: the README intro, `llms.txt` and the GitHub description/topics
   now say what brainstem is *for* — your Obsidian vault as Claude's second brain

@@ -285,7 +285,7 @@ describe('vault_list', () => {
     expect(text(hidden)).toMatch(/INVALID_PATH/);
   });
 
-  it('caps entries at MAX_LIST_ENTRIES and sets truncated', async () => {
+  it('caps entries by count and by characters, and says how many there were', async () => {
     // Plain .txt files written in parallel batches: they are ignored by the frontmatter index,
     // so this exercises the list cap without a 2005-event watcher/index storm (slow on CI).
     const dir = path.join(h.root, 'bulk');
@@ -295,9 +295,13 @@ describe('vault_list', () => {
       await Promise.all(names.slice(i, i + 250).map((n) => fs.writeFile(path.join(dir, n), 'x')));
     }
     const r = await h.call('vault_list', { path: 'bulk', depth: 1 });
-    const sc = r.structuredContent as { entries: unknown[]; truncated: boolean };
-    expect(sc.entries).toHaveLength(2000);
+    const sc = r.structuredContent as { entries: unknown[]; truncated: boolean; hint?: string };
+    // two caps: never more than MAX_LIST_ENTRIES, and never more characters than a client accepts
+    expect(sc.entries.length).toBeGreaterThan(100);
+    expect(sc.entries.length).toBeLessThanOrEqual(2000);
+    expect(JSON.stringify(sc).length).toBeLessThanOrEqual(48_000);
     expect(sc.truncated).toBe(true);
+    expect(sc.hint).toContain('of 2005 entries');
   }, 60_000);
 });
 

@@ -260,7 +260,7 @@ describe('vault_batch_read shares one budget fairly', () => {
   });
 
   it('two notes of very different length both arrive whole when they fit together', async () => {
-    // more than half of MAX_BATCH_RESULT_CHARS: an even split would have cut it
+    // more than an even share of the budget: an even split would have cut it
     const long = `# Long\n\n${'word '.repeat(6_000)}\n`; // 30k characters
     await h.call('vault_write', { path: 'long.md', content: long });
     await h.call('vault_write', { path: 'short.md', content: '# Short\nhi\n' });
@@ -268,6 +268,48 @@ describe('vault_batch_read shares one budget fairly', () => {
     const notes = (r.structuredContent as { notes: { truncated: boolean }[] }).notes;
     expect(notes.map((n) => n.truncated)).toEqual([false, false]);
     expect(r.structuredContent).not.toHaveProperty('hint');
+  });
+});
+
+describe('vault_batch_read bounds what the client receives, not only the bodies', () => {
+  it('twenty notes with heavy frontmatter and long bodies stay within the client-safe size', async () => {
+    const { CLIENT_SAFE_RESULT_CHARS } = await import('../../src/storage/limits.ts');
+    const paths: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const ids = Array.from({ length: 60 }, (_, k) => `"<id-${i}-${k}-${'x'.repeat(40)}>"`);
+      const content = `---\nids: [${ids.join(', ')}]\nstatus: open\n---\n# N${i}\n\n## Summary\n${'word '.repeat(2_000)}\n`;
+      paths.push(`heavy/n${i}.md`);
+      await h.call('vault_write', { path: `heavy/n${i}.md`, content });
+    }
+    const r = await h.call('vault_batch_read', { paths, sections: ['Summary'] });
+    expect(r.isError).toBeFalsy();
+    expect(JSON.stringify(r.structuredContent).length).toBeLessThanOrEqual(
+      CLIENT_SAFE_RESULT_CHARS,
+    );
+    const body = r.structuredContent as {
+      notes: { frontmatter: object; frontmatterOmitted?: boolean; body: string }[];
+      hint?: string;
+    };
+    const omitted = body.notes.filter((n) => n.frontmatterOmitted);
+    expect(omitted.length).toBeGreaterThan(0);
+    expect(omitted.every((n) => Object.keys(n.frontmatter).length === 0)).toBe(true);
+    expect(body.notes.every((n) => n.body.includes('## Summary'))).toBe(true); // every note still answers
+    expect(body.hint).toContain('frontmatterOmitted');
+  });
+
+  it('small frontmatter is never touched', async () => {
+    await h.call('vault_write', { path: 'a.md', content: '---\nstatus: open\n---\n# A\n' });
+    const r = await h.call('vault_batch_read', { paths: ['a.md'] });
+    const note = (r.structuredContent as { notes: Record<string, unknown>[] }).notes[0];
+    expect(note?.frontmatter).toEqual({ status: 'open' });
+    expect(note).not.toHaveProperty('frontmatterOmitted');
+  });
+
+  it('omitLargest drops the biggest blocks first, only as many as needed', async () => {
+    const { omitLargest } = await import('../../src/tools/read.ts');
+    expect([...omitLargest([10, 5_000, 20, 3_000], 4_000)]).toEqual([1]);
+    expect([...omitLargest([10, 20], 4_000)]).toEqual([]);
+    expect(omitLargest([3_000, 3_000, 3_000], 0).size).toBe(3);
   });
 });
 

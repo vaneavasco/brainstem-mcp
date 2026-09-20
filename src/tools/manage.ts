@@ -1,12 +1,16 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_LIST_ENTRIES } from '../storage/limits.ts';
+import { CLIENT_SAFE_RESULT_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
 import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
+import { fitWithinBudget } from '../vault/budget.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
 import { applyLinkRewrites, planMove } from './move.ts';
 import { locked, type ToolContext, touch } from './register.ts';
 import { GUIDE_POINTER, guarded, okJson } from './results.ts';
+
+/** Room for the entries of one listing; the path, the flags and the hint ride on top. */
+const LIST_BUDGET_CHARS = CLIENT_SAFE_RESULT_CHARS - 500;
 
 export function registerManageTools(server: McpServer, tc: ToolContext): void {
   const { adapter, index } = tc.runtime;
@@ -40,7 +44,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
     {
       title: 'List folder',
       description:
-        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
+        'List files and folders under a vault path (default: root, depth 1). Use depth for recursion and glob (relative to the listed folder, e.g. "**/*.md") to filter. Hidden folders such as .obsidian are never listed. Returns at most 2000 entries and 48k characters; narrow with path/glob/depth if truncated. Counting or sizing a folder is cheaper with vault_query { pathPrefix, countOnly: true } than a deep listing. ' +
         GUIDE_POINTER,
       inputSchema: z.strictObject({
         path: z.string().optional(),
@@ -60,6 +64,7 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           }),
         ),
         truncated: z.boolean(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -72,11 +77,18 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           ...(includeFiles !== undefined ? { includeFiles } : {}),
           ...(includeDirs !== undefined ? { includeDirs } : {}),
         });
-        const truncated = entries.length > MAX_LIST_ENTRIES;
+        const capped = entries.slice(0, MAX_LIST_ENTRIES);
+        const { kept, cut } = fitWithinBudget(capped, LIST_BUDGET_CHARS);
+        const truncated = cut || entries.length > MAX_LIST_ENTRIES;
         return okJson({
           path: base,
-          entries: truncated ? entries.slice(0, MAX_LIST_ENTRIES) : entries,
+          entries: kept,
           truncated,
+          ...(truncated
+            ? {
+                hint: `${kept.length} of ${entries.length} entries shown: narrow with path, glob or depth; to count or size a folder use vault_query { pathPrefix, countOnly: true }.`,
+              }
+            : {}),
         });
       }),
   );

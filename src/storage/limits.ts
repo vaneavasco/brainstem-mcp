@@ -18,9 +18,11 @@ export const MAX_RESULT_CHARS = 120_000;
  * smallest refusal.
  */
 export const CLIENT_SAFE_RESULT_CHARS = 48_000;
-/** Bodies of one vault_batch_read together. Frontmatter, metadata and a truncation marker per
- *  note ride on top of the bodies, hence less than CLIENT_SAFE_RESULT_CHARS. */
-export const MAX_BATCH_RESULT_CHARS = 40_000;
+/** What one note costs in a vault_batch_read besides its frontmatter and body: path, hash, size,
+ *  modifiedAt, the JSON around them and a truncation marker. */
+export const BATCH_NOTE_OVERHEAD_CHARS = 300;
+/** The hints and the "missing" / "failed" lists of one vault_batch_read. */
+export const BATCH_FIXED_OVERHEAD_CHARS = 1_000;
 export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;

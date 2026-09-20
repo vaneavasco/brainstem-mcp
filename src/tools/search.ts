@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import picomatch from 'picomatch';
 import { z } from 'zod';
 import {
+  CLIENT_SAFE_RESULT_CHARS,
   MAX_FRONTMATTER_HITS,
   MAX_QUERY_ROWS,
   MAX_SEARCH_PATHS,
@@ -12,6 +13,7 @@ import {
 import { normalizeVaultPath } from '../storage/path-policy.ts';
 import type { Match, SearchOpts, StorageAdapter } from '../storage/types.ts';
 import { VaultError } from '../storage/types.ts';
+import { fitWithinBudget } from '../vault/budget.ts';
 import type { FrontmatterIndex, IndexEntry } from '../vault/frontmatter-index.ts';
 import type { VaultGraph } from '../vault/graph.ts';
 import type { Cond, Query } from '../vault/query.ts';
@@ -339,11 +341,14 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           ...(contains !== undefined ? { contains } : {}),
           ...(exists !== undefined ? { exists } : {}),
         });
-        const truncated = hits.length > MAX_FRONTMATTER_HITS;
+        const fitted = fitWithinBudget(
+          hits.slice(0, MAX_FRONTMATTER_HITS),
+          CLIENT_SAFE_RESULT_CHARS - 500,
+        );
         return okJson({
           field,
-          hits: truncated ? hits.slice(0, MAX_FRONTMATTER_HITS) : hits,
-          truncated,
+          hits: fitted.kept,
+          truncated: fitted.cut || hits.length > MAX_FRONTMATTER_HITS,
         });
       }),
   );

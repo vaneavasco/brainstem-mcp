@@ -1,6 +1,7 @@
 import { MAX_QUERY_RESULT_CHARS, MAX_QUERY_ROWS } from '../storage/limits.ts';
 import { baseName, parentDir } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
+import { fitWithinBudget } from './budget.ts';
 import type { IndexEntry } from './frontmatter-index.ts';
 import type { VaultGraph } from './graph.ts';
 import { compileSafePattern, type SafeMatcher } from './safe-regex.ts';
@@ -382,24 +383,6 @@ function buildRow(entry: IndexEntry, graph: VaultGraph, select?: string[]): Quer
 function selectedColumns(select?: string[]): string[] {
   const fields = select ? [...new Set(select.filter((f) => f !== 'path'))] : [];
   return ['path', ...fields];
-}
-
-/**
- * Keeps the longest prefix of `items` whose JSON serialization (as a JSON array: `[` + comma-
- * joined items + `]`) stays within `budget` characters. Exact, not an estimate: `JSON.stringify`
- * of a plain array is exactly that shape (no added whitespace), so summing each item's own
- * stringified length plus one separator comma reproduces it without re-serializing every prefix.
- */
-function fitWithinBudget<T>(items: T[], budget: number): { kept: T[]; cut: boolean } {
-  let used = 2; // '[' + ']'
-  const kept: T[] = [];
-  for (const item of items) {
-    const addition = JSON.stringify(item).length + (kept.length > 0 ? 1 : 0); // + comma
-    if (used + addition > budget) return { kept, cut: true };
-    used += addition;
-    kept.push(item);
-  }
-  return { kept, cut: false };
 }
 
 /** `asked` is how many rows this call could have returned at most (`limit`, or every match). */

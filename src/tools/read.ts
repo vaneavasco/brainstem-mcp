@@ -1,8 +1,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
+  BATCH_FIXED_OVERHEAD_CHARS,
+  BATCH_NOTE_OVERHEAD_CHARS,
+  CLIENT_SAFE_RESULT_CHARS,
   MAX_BATCH,
-  MAX_BATCH_RESULT_CHARS,
   MAX_READ_SECTIONS,
   MAX_RESULT_CHARS,
 } from '../storage/limits.ts';
@@ -81,6 +83,22 @@ function pickSections(content: string, headings: string[]): PickedSections {
     })),
     missing,
   };
+}
+
+const FRONTMATTER_OMITTED_HINT =
+  'Frontmatter was left out of some notes ("frontmatterOmitted") to keep the result within what clients accept: read the fields you need with vault_query select, or one note with vault_read.';
+
+/** Indices to leave out, largest first, until the sizes that remain fit `budget`. */
+export function omitLargest(sizes: number[], budget: number): Set<number> {
+  const out = new Set<number>();
+  let total = sizes.reduce((a, b) => a + b, 0);
+  const bySize = sizes.map((_, i) => i).sort((a, b) => (sizes[b] ?? 0) - (sizes[a] ?? 0));
+  for (const i of bySize) {
+    if (total <= budget) break;
+    out.add(i);
+    total -= sizes[i] ?? 0;
+  }
+  return out;
 }
 
 /**
@@ -208,7 +226,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     'vault_batch_read',
     {
       title: 'Read several notes',
-      description: `Read up to ${MAX_BATCH} files in one call; the bodies share ${MAX_BATCH_RESULT_CHARS.toLocaleString('en-US')} characters (a short note leaves its share to the long ones). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) to get only those sections of every note — a note lacking one still answers and lists it in "missingSections" — and/or "maxChars" to cut each note. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
+      description: `Read up to ${MAX_BATCH} files in one call; the notes share ${CLIENT_SAFE_RESULT_CHARS.toLocaleString('en-US')} characters, frontmatter included (a short note leaves its share to the long ones; oversized frontmatter is left out and flagged). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) to get only those sections of every note — a note lacking one still answers and lists it in "missingSections" — and/or "maxChars" to cut each note. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
       inputSchema: z.strictObject({
         paths: z.array(DetailedPathArg).min(1).max(MAX_BATCH),
         sections: z
@@ -233,6 +251,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             body: z.string(),
             truncated: z.boolean(),
             missingSections: z.array(z.string()).optional(),
+            frontmatterOmitted: z.boolean().optional(),
           }),
         ),
         missing: z.array(z.string()),
@@ -249,28 +268,50 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         const wanted = result.notes.map((note) =>
           sections ? pickSections(note.content, sections) : undefined,
         );
-        const lengths = result.notes.map((note, i) => (wanted[i]?.text ?? note.body).length);
-        const allowance = shareBudget(lengths, MAX_BATCH_RESULT_CHARS, maxChars);
+        // The budget covers what the client receives, not only the bodies: the frontmatter of
+        // twenty long notes can weigh as much as their bodies. Frontmatter gets at most half;
+        // beyond that the largest blocks are left out (and said so), the bodies share the rest.
+        const room =
+          CLIENT_SAFE_RESULT_CHARS -
+          BATCH_FIXED_OVERHEAD_CHARS -
+          result.notes.length * BATCH_NOTE_OVERHEAD_CHARS;
+        const fmSizes = result.notes.map((note) => JSON.stringify(note.frontmatter).length);
+        const omitted = omitLargest(fmSizes, Math.floor(room / 2));
+        const fmKept = fmSizes.reduce((sum, size, i) => sum + (omitted.has(i) ? 0 : size), 0);
+        // Shared in serialized characters (a line break costs two in JSON), handed out in raw ones.
+        const texts = result.notes.map((note, i) => wanted[i]?.text ?? note.body);
+        const serialized = texts.map((text) => JSON.stringify(text).length);
+        const allowance = shareBudget(serialized, room - fmKept).map((chars, i) => {
+          const raw = Math.floor(
+            (chars * (texts[i]?.length ?? 0)) / Math.max(serialized[i] ?? 1, 1),
+          );
+          return Math.min(raw, maxChars ?? Number.POSITIVE_INFINITY);
+        });
         const notes = result.notes.map((note, i) => {
           const picked = wanted[i];
-          const clamped = clampText(picked ? picked.text : note.body, allowance[i]);
+          const clamped = clampText(texts[i] ?? '', allowance[i]);
           return {
             path: note.path,
-            frontmatter: note.frontmatter,
+            frontmatter: omitted.has(i) ? {} : note.frontmatter,
             hasFrontmatter: note.hasFrontmatter,
             size: note.meta.size,
             modifiedAt: note.meta.modifiedAt,
             hash: note.hash,
             body: clamped.text,
             truncated: clamped.truncated,
+            ...(omitted.has(i) ? { frontmatterOmitted: true } : {}),
             ...(picked?.missing.length ? { missingSections: picked.missing } : {}),
           };
         });
+        const hints = [
+          ...(notes.some((n) => n.truncated) ? [TRUNCATED_HINT] : []),
+          ...(omitted.size > 0 ? [FRONTMATTER_OMITTED_HINT] : []),
+        ];
         return okJson({
           notes,
           missing: result.missing,
           failed: result.failed,
-          ...(notes.some((n) => n.truncated) ? { hint: TRUNCATED_HINT } : {}),
+          ...(hints.length > 0 ? { hint: hints.join(' ') } : {}),
         });
       }),
   );

@@ -1,8 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { MAX_GRAPH_ITEMS, MAX_UNLINKED_MENTIONS } from '../storage/limits.ts';
+import {
+  CLIENT_SAFE_RESULT_CHARS,
+  MAX_GRAPH_ITEMS,
+  MAX_UNLINKED_MENTIONS,
+} from '../storage/limits.ts';
 import { normalizeVaultPath } from '../storage/path-policy.ts';
 import { VaultError } from '../storage/types.ts';
+import { fitListsWithinBudget, fitWithinBudget } from '../vault/budget.ts';
 import type { Backlink, ResolvedLink } from '../vault/graph.ts';
 import { contextByLine, findUnlinkedMentions } from '../vault/mentions.ts';
 import type { Heading } from '../vault/note-parse.ts';
@@ -94,6 +99,9 @@ function buildHeadingTree(headings: Heading[]): HeadingNode[] {
   return root;
 }
 
+/** Room for the lists of one links or tags result; totals, flags and the hint ride on top. */
+const LINKS_BUDGET_CHARS = CLIENT_SAFE_RESULT_CHARS - 1_000;
+
 export function registerGraphTools(server: McpServer, tc: ToolContext): void {
   const { adapter, index, graph } = tc.runtime;
 
@@ -132,6 +140,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           embeds: z.boolean(),
           unlinkedMentions: z.boolean(),
         }),
+        hint: z.string().optional(),
         total: z.looseObject({
           outgoing: z.number(),
           backlinks: z.number(),
@@ -194,18 +203,30 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           unlinkedTotal = found.total;
         }
 
+        // The caps above bound the counts; a hub's 500 links with their context still outgrow
+        // what a client accepts, so the four lists also share one character budget.
+        const fitted = fitListsWithinBudget<unknown>(
+          [outgoing, backlinks, embeds, unlinkedMentions],
+          LINKS_BUDGET_CHARS,
+        );
+        const cutByBudget = fitted.cut.some(Boolean);
         return okJson({
           path: p,
-          outgoing,
-          backlinks,
-          embeds,
-          unlinkedMentions,
+          outgoing: fitted.kept[0],
+          backlinks: fitted.kept[1],
+          embeds: fitted.kept[2],
+          unlinkedMentions: fitted.kept[3],
           truncated: {
-            outgoing: outgoingTruncated,
-            backlinks: backlinksTruncated,
-            embeds: embedsTruncated,
-            unlinkedMentions: unlinkedTruncated,
+            outgoing: outgoingTruncated || fitted.cut[0] === true,
+            backlinks: backlinksTruncated || fitted.cut[1] === true,
+            embeds: embedsTruncated || fitted.cut[2] === true,
+            unlinkedMentions: unlinkedTruncated || fitted.cut[3] === true,
           },
+          ...(cutByBudget
+            ? {
+                hint: 'Lists were cut to fit ("truncated" says which; "total" has the full counts): ask for one kind with "include", one folder at a time with "filter.pathPrefix", or only the counts with countOnly.',
+              }
+            : {}),
           total: {
             outgoing: outgoingAll.length,
             backlinks: backlinksAll.length,
@@ -239,6 +260,7 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
           .optional(),
         total: z.number(),
         truncated: z.boolean().optional(),
+        hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
@@ -250,12 +272,22 @@ export function registerGraphTools(server: McpServer, tc: ToolContext): void {
             prefix !== undefined
               ? all.filter((t) => t.tag.toLowerCase().startsWith(prefix.toLowerCase()))
               : all;
-          return okJson({ tags: filtered, total: filtered.length });
+          const { kept, cut } = fitWithinBudget(filtered, LINKS_BUDGET_CHARS);
+          return okJson({
+            tags: kept,
+            total: filtered.length,
+            ...(cut
+              ? {
+                  truncated: true,
+                  hint: `${kept.length} of ${filtered.length} tags shown: narrow with "prefix", or look one tag up with "tag".`,
+                }
+              : {}),
+          });
         }
         const all = graph.notesWithTag(tag, includeNested ?? true);
-        const truncated = all.length > MAX_GRAPH_ITEMS;
-        const notes = truncated ? all.slice(0, MAX_GRAPH_ITEMS) : all;
-        return okJson({ tag, notes, total: all.length, truncated });
+        const fittedNotes = fitWithinBudget(all.slice(0, MAX_GRAPH_ITEMS), LINKS_BUDGET_CHARS);
+        const truncated = fittedNotes.cut || all.length > MAX_GRAPH_ITEMS;
+        return okJson({ tag, notes: fittedNotes.kept, total: all.length, truncated });
       }),
   );
 

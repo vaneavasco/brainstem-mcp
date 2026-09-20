@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { CLIENT_SAFE_RESULT_CHARS } from '../storage/limits.ts';
 import { ANALYTICS_CATEGORIES, type AnalyticsReport, analyzeVault } from '../vault/analytics.ts';
+import { fitWithinBudget } from '../vault/budget.ts';
 import { READ_ONLY } from './annotations.ts';
 import type { ToolContext } from './register.ts';
 import { guarded, okJson } from './results.ts';
@@ -72,10 +74,15 @@ export function registerAnalyticsTools(server: McpServer, tc: ToolContext): void
       guarded(tc.log, async () => {
         const { findings } = await report(refresh ?? false);
         const matching = findings.filter((f) => f.category === category);
+        const { kept, cut } = fitWithinBudget(
+          matching.slice(0, limit ?? 100),
+          CLIENT_SAFE_RESULT_CHARS - 500,
+        );
         return okJson({
           category,
           total: matching.length,
-          findings: matching.slice(0, limit ?? 100),
+          findings: kept,
+          ...(cut ? { truncated: true } : {}),
         });
       }),
   );
