@@ -279,6 +279,23 @@ describe('evaluateQuery — where operators by type', () => {
     ]);
   });
 
+  it('nonEmpty: true only when the field is present and not null, "" or []', () => {
+    index.upsert(entry('empty/a.md', '---\nrefs: []\n---\nx'));
+    index.upsert(entry('empty/b.md', '---\nnote: ""\n---\nx'));
+    index.upsert(entry('empty/c.md', '---\nnote: null\n---\nx'));
+    index.upsert(entry('empty/d.md', '---\nnote: hi\nrefs: [x]\n---\nx'));
+    expect(paths(run({ pathPrefix: 'empty', where: [{ field: 'note', op: 'nonEmpty' }] }))).toEqual(
+      ['empty/d.md'],
+    );
+    expect(paths(run({ pathPrefix: 'empty', where: [{ field: 'refs', op: 'nonEmpty' }] }))).toEqual(
+      ['empty/d.md'],
+    );
+  });
+
+  it('nonEmpty: false when the field is missing entirely, like exists:false', () => {
+    expect(paths(run({ where: [{ field: 'nope', op: 'nonEmpty' }] }))).toEqual([]);
+  });
+
   it('gt/gte/lt/lte: numeric ordering', () => {
     expect(paths(run({ where: [{ field: 'priority', op: 'gt', value: 2 }] }))).toEqual([
       'notes/a.md',

@@ -24,13 +24,27 @@ export const DetailedPathArg = z
 
 /** The `where` operator set shared by vault_query and vault_search. */
 export const QueryOpSchema = z
-  .enum(['eq', 'neq', 'contains', 'startsWith', 'exists', 'gt', 'gte', 'lt', 'lte', 'in', 'regex'])
+  .enum([
+    'eq',
+    'neq',
+    'contains',
+    'startsWith',
+    'exists',
+    'nonEmpty',
+    'gt',
+    'gte',
+    'lt',
+    'lte',
+    'in',
+    'regex',
+  ])
   .describe(
     'Comparison operator. "contains"/"startsWith" also accept an array value: true when any ' +
-      'needle matches (max 50). "regex" is a FULL match — the pattern is implicitly anchored to ' +
-      'the whole value — over a reduced, linear-time syntax: literals, ".", "[classes]", ' +
-      '"* + ? {m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", backreferences, ' +
-      'lookarounds or named groups; max 200 characters.',
+      'needle matches (max 50). "exists" is true for an empty list/string too; "nonEmpty" also ' +
+      'requires a non-null, non-"", non-[] value. "regex" is a FULL match — the pattern is ' +
+      'implicitly anchored to the whole value — over a reduced, linear-time syntax: literals, ' +
+      '".", "[classes]", "* + ? {m} {m,} {m,n}" (counts <= 100), "|" and "(...)". No "^"/"$", ' +
+      'backreferences, lookarounds or named groups; max 200 characters.',
   );
 
 /** One `where` condition, shared by vault_query and vault_search (typed against the pure

@@ -140,6 +140,20 @@ describe('vault_query', () => {
     expect(text(r)).toMatch(/^INVALID_INPUT: /);
   });
 
+  it('nonEmpty excludes missing, null, "" and [] but keeps a real value', async () => {
+    await h.call('vault_write', {
+      path: 'projects/gamma.md',
+      content: '---\nstatus: ""\n---\n# Gamma',
+    });
+    const r = await h.call('vault_query', { where: [{ field: 'status', op: 'nonEmpty' }] });
+    const body = r.structuredContent as QueryResult;
+    expect(body.rows.map((row) => row.path).sort()).toEqual([
+      'archive/old.md',
+      'projects/alpha.md',
+      'projects/beta.md',
+    ]);
+  });
+
   it('format: "columns" carries the same content as rows, with rows empty', async () => {
     const r = await h.call('vault_query', {
       where: [{ field: 'status', op: 'eq', value: 'active' }],

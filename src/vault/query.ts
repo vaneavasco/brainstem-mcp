@@ -12,6 +12,7 @@ export type Op =
   | 'contains'
   | 'startsWith'
   | 'exists'
+  | 'nonEmpty'
   | 'gt'
   | 'gte'
   | 'lt'
@@ -226,6 +227,16 @@ function matchesExists(fieldVal: unknown, value: unknown): boolean {
   return wantExists ? fieldVal !== undefined : fieldVal === undefined;
 }
 
+/** True when the field is present and not "empty": not null/undefined, not "" and not []. Unlike
+ *  "exists", which is true for an empty list or string, this is the op for "is there actually
+ *  something here". */
+function matchesNonEmpty(fieldVal: unknown): boolean {
+  if (fieldVal === undefined || fieldVal === null) return false;
+  if (typeof fieldVal === 'string') return fieldVal !== '';
+  if (Array.isArray(fieldVal)) return fieldVal.length > 0;
+  return true;
+}
+
 function matchesOrder(fieldVal: unknown, value: unknown, op: 'gt' | 'gte' | 'lt' | 'lte'): boolean {
   if (fieldVal === undefined) return false;
   const cmp = typedCompare(fieldVal, value);
@@ -296,6 +307,8 @@ function compileCond(cond: Cond): CompiledCond {
         return matchesStartsWith(fv, cond.value);
       case 'exists':
         return matchesExists(fv, cond.value);
+      case 'nonEmpty':
+        return matchesNonEmpty(fv);
       case 'gt':
       case 'gte':
       case 'lt':
