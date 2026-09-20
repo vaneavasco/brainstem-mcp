@@ -19,6 +19,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - run: npm run test:scale
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       # Boots the tool registry through a plain Node import. Vitest resolves modules differently

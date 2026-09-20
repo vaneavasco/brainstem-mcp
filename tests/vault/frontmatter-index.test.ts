@@ -394,3 +394,45 @@ describe('reconcile', () => {
     expect(index.get('a.md')?.frontmatter).toMatchObject({ status: 'DONE' }); // other files still refresh
   });
 });
+
+describe('what a hostile or odd note cannot do to the index', () => {
+  it('keeps a `__proto__` frontmatter key as an ordinary key, never as the prototype', async () => {
+    await fs.writeFile(
+      path.join(root, 'proto.md'),
+      '---\n__proto__:\n  status: smuggled\ntitle: alpha\n---\n',
+    );
+    const index = await FrontmatterIndex.build(vault);
+    const fm = index.get('proto.md')?.frontmatter ?? {};
+    expect(Object.keys(fm).sort()).toEqual(['__proto__', 'title']);
+    expect((fm as { status?: unknown }).status).toBeUndefined(); // not inherited
+    expect(index.query({ field: 'status', equals: 'smuggled' })).toEqual([]);
+  });
+
+  it('builds past a note whose frontmatter refers to itself, and reads it as body-only', async () => {
+    await fs.writeFile(path.join(root, 'cycle.md'), '---\na: &x\n  b: *x\n---\nbody\n');
+    const index = await FrontmatterIndex.build(vault);
+    expect(index.get('a.md')).toBeDefined();
+    expect(index.get('cycle.md')).toMatchObject({ hasFrontmatter: false, frontmatter: {} });
+    const note = await vault.read('cycle.md');
+    expect(note.frontmatterError).toMatch(/refers to itself/);
+    expect(() => JSON.stringify(note)).not.toThrow();
+  });
+
+  it('measures its size in bytes, not in UTF-16 units', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    const base = index.byteSize();
+    const entry = async (p: string, title: string) =>
+      FrontmatterIndex.fromNote(await vault.write(p, `---\ntitle: ${title}\n---\n`));
+    index.upsert(await entry('latin.md', 'a'.repeat(1000)));
+    const latin = index.byteSize() - base;
+    index.remove('latin.md');
+    index.upsert(await entry('other.md', 'ж'.repeat(1000)));
+    expect(index.byteSize() - base).toBe(latin + 1000 + 'other.md'.length - 'latin.md'.length);
+  });
+
+  it('refuses a budget that is not a finite number', async () => {
+    const index = await FrontmatterIndex.build(vault);
+    expect(() => index.watchBudget(Number.POSITIVE_INFINITY)).toThrow(RangeError);
+    expect(() => index.watchBudget(Number.NaN)).toThrow(RangeError);
+  });
+});

@@ -73,8 +73,22 @@ describe('parseNote links', () => {
       ['folder/Sub Note.md', undefined, undefined, undefined, false],
     ]);
     expect(links.every((l) => l.kind === 'wiki')).toBe(true);
-    expect(links[0]?.raw).toBe('[[Note]]');
-    expect(links[5]?.raw).toBe('![[img.png|100]]');
+    // a link's own text is its span in the note, not a stored copy
+    const text =
+      '[[Note]] [[Note|Alias]] [[Note#Head]] [[Note#H1#H2|A]] [[Note#^blk]] ![[img.png|100]] [[#Local]] [[folder/Sub Note.md]]';
+    expect(text.slice(links[0]?.start, links[0]?.end)).toBe('[[Note]]');
+    expect(text.slice(links[5]?.start, links[5]?.end)).toBe('![[img.png|100]]');
+    expect(links.every((l) => !('raw' in l))).toBe(true);
+  });
+
+  it('remembers that a markdown target was written in angle brackets, and only then', () => {
+    const { links } = parse('[a](<notes/my note.md>) and [b](notes/plain.md) and [[wiki]]');
+    const angle = Object.fromEntries(links.map((l) => [l.target, l.angle]));
+    expect(angle).toEqual({
+      'notes/my note.md': true,
+      'notes/plain.md': undefined,
+      wiki: undefined,
+    });
   });
 
   it('parses markdown links to vault paths and skips external schemes', () => {

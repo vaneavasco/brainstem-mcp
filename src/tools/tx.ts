@@ -8,7 +8,7 @@ import {
   type TxResult,
 } from '../storage/transaction.ts';
 import { OVERWRITE } from './annotations.ts';
-import { ExpectedHashArg, PathArg } from './args.ts';
+import { ExpectedHashArg, FrontmatterSetArg, PathArg } from './args.ts';
 import { type ToolContext, touch } from './register.ts';
 import { guarded, okJson } from './results.ts';
 
@@ -56,7 +56,7 @@ const TxOpSchema: z.ZodType<TxOp> = z.discriminatedUnion('op', [
   z.strictObject({
     op: z.literal('frontmatter_update'),
     path: PathArg,
-    set: z.record(z.string(), z.unknown()).optional(),
+    set: FrontmatterSetArg.optional(),
     unset: z.array(z.string()).optional(),
     expectedHash: ExpectedHashArg,
   }),

@@ -28,8 +28,10 @@ export interface Harness {
 export async function startHarness(
   overrides?: LocalRuntimeOptions['settings'],
   ripgrepPath: string | null = null,
+  /** A vault seeded beforehand (the scale run); `close()` removes it like a fresh one. */
+  existingRoot?: string,
 ): Promise<Harness> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-tools-'));
+  const root = existingRoot ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-tools-')));
   const runtime = await createLocalRuntime({
     vaultPath: root,
     ripgrepPath,

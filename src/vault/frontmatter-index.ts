@@ -44,10 +44,13 @@ function isDotOrReservedPath(p: string): boolean {
   return isReservedPath(p) || p.split('/').some((segment) => segment.startsWith('.'));
 }
 
-function getPath(obj: Record<string, unknown>, dotted: string): unknown {
+/** Dot-path lookup over frontmatter. Own properties only: `constructor` or `toString` is a field
+ *  of no note, though every object inherits one. */
+export function getPath(obj: Record<string, unknown>, dotted: string): unknown {
   let current: unknown = obj;
   for (const key of dotted.split('.')) {
     if (typeof current !== 'object' || current === null || Array.isArray(current)) return undefined;
+    if (!Object.hasOwn(current, key)) return undefined;
     current = (current as Record<string, unknown>)[key];
   }
   return current;
@@ -71,13 +74,54 @@ function matchesContains(value: unknown, needle: string): boolean {
   return false;
 }
 
+/** Strings shorter than this are copied by V8 when sliced, never kept as a view of their parent. */
+const SLICE_THRESHOLD = 13;
+
+/**
+ * A deep copy in which every string owns its characters. `JSON.parse(JSON.stringify(s))` is the
+ * copy: exact for any string (lone surrogates included) and, unlike concatenation tricks, not
+ * something an engine may optimise back into a view. Non-string values are kept as they are
+ * (numbers, booleans, null, and whatever else YAML's core schema produced).
+ */
+export function detached<T>(value: T): T {
+  if (typeof value === 'string') {
+    return (value.length < SLICE_THRESHOLD ? value : JSON.parse(JSON.stringify(value))) as T;
+  }
+  if (Array.isArray(value)) return value.map((item) => detached(item)) as T;
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      // defineProperty, not `out[key] =`: YAML may hold a `__proto__` key, and assigning it would
+      // set the copy's prototype, dropping the key and making its content answer as fields.
+      Object.defineProperty(out, detached(key), {
+        value: detached(item),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/** `bytes` is the serialized size of the entries (what `byteSize()` returns), not heap. */
+export interface IndexBudgetState {
+  bytes: number;
+  budgetBytes: number;
+}
+
 export class FrontmatterIndex {
   readonly builtAt: Date;
   /** Bumped by exactly 1 on every upsert/remove/rename/addAsset/removeAsset/renameAsset that actually
    *  changes the index, so consumers (e.g. VaultGraph) can cheaply detect staleness. */
   private _version = 0;
-  /** Called at most once per over-budget episode (reset once back under budget); never throws. */
-  onOverBudget?: () => void;
+  private onOverBudget: ((state: IndexBudgetState) => void) | undefined;
+  private _budgetBytes = MAX_INDEX_BYTES;
   private readonly entries = new Map<string, IndexEntry>();
   private readonly assetPaths = new Set<string>();
   private bytes = 0;
@@ -104,14 +148,38 @@ export class FrontmatterIndex {
   }
 
   private entrySize(entry: IndexEntry): number {
-    return JSON.stringify(entry).length;
+    return Buffer.byteLength(JSON.stringify(entry));
+  }
+
+  get budgetBytes(): number {
+    return this._budgetBytes;
+  }
+
+  /** Sets the budget and who hears about it, and checks at once: an index is built before anyone
+   *  can listen, so a vault that is over the budget from the first minute would otherwise never
+   *  say so. `onOver` is called at most once per over-budget episode (again only after the index
+   *  has been back under the budget). The budget is a warning line, not a limit: nothing is
+   *  evicted or refused, because an index that silently forgets notes is worse than a large one. */
+  watchBudget(budgetBytes: number, onOver?: (state: IndexBudgetState) => void): void {
+    if (!Number.isFinite(budgetBytes)) {
+      // NaN would silently never warn, and neither survives JSON into brainstem_ping's output
+      throw new RangeError('the index budget must be a finite number of bytes');
+    }
+    this._budgetBytes = budgetBytes;
+    this.onOverBudget = onOver;
+    this.overBudgetLogged = false;
+    this.checkByteBudget();
   }
 
   private checkByteBudget(): void {
-    if (this.bytes > MAX_INDEX_BYTES) {
+    if (this.bytes > this._budgetBytes) {
       if (!this.overBudgetLogged) {
         this.overBudgetLogged = true;
-        this.onOverBudget?.();
+        try {
+          this.onOverBudget?.({ bytes: this.bytes, budgetBytes: this._budgetBytes });
+        } catch {
+          // a listener that throws must not fail the write that happened to cross the line
+        }
       }
     } else {
       this.overBudgetLogged = false;
@@ -119,7 +187,11 @@ export class FrontmatterIndex {
   }
 
   static fromNote(note: Note): IndexEntry {
-    return {
+    // Everything stored here outlives the note it came from. In V8 a piece cut out of a larger
+    // string (a link target, a heading, a YAML value) keeps the whole string alive, so without
+    // `detached` the index silently held the text of the entire vault: 940 MB of heap for 264 MB
+    // of index, measured on a 37,000-note vault.
+    return detached({
       path: note.path,
       frontmatter: note.frontmatter,
       hasFrontmatter: note.hasFrontmatter,
@@ -127,7 +199,7 @@ export class FrontmatterIndex {
       modifiedAt: note.meta.modifiedAt,
       hash: note.hash,
       ...parseNote(note.content, note.frontmatter, note.body),
-    };
+    });
   }
 
   static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {

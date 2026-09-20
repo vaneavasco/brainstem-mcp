@@ -104,6 +104,12 @@ async function main(): Promise<void> {
     stateDir,
     maxBinaryBytes: config.maxBinaryBytes,
     reconcileMs: config.reconcileMs,
+    onIndexOverBudget: (state) =>
+      logger.warn(
+        state,
+        'the vault index is over its size budget: nothing is dropped, but expect about twice ' +
+          'that much heap; see brainstem_ping',
+      ),
     onReconcileError: () => logger.warn('index reconcile failed; the next pass will retry'),
     onReconcile: (result) => {
       // Only a reconcile that actually changed something is worth a line — never paths, just
@@ -201,6 +207,7 @@ async function main(): Promise<void> {
       extras: {
         notes: () => runtime.index.size(),
         reconciledAt: () => runtime.index.reconciledAt,
+        indexOverBudget: () => runtime.index.byteSize() > runtime.index.budgetBytes,
         instructions: () => instructions.get(),
       },
     },

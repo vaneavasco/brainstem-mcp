@@ -1,6 +1,6 @@
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { ZodError } from 'zod';
-import { MAX_RESULT_CHARS } from '../storage/limits.ts';
+import { CLIENT_SAFE_RESULT_CHARS, MAX_RESULT_CHARS } from '../storage/limits.ts';
 import { VaultError } from '../storage/types.ts';
 
 /** Travels with every truncated read, so the model knows the text is partial and how to get the rest. */
@@ -56,6 +56,28 @@ export function okDocument<T extends Record<string, unknown>>(
 
 export function fail(message: string): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: message }] };
+}
+
+/** A frontmatter block may be as large as a file. A result that carries one note's frontmatter
+ *  gives it at most half of what the strictest client accepts; a larger block is left out and
+ *  flagged, never cut (half a mapping is a wrong mapping). */
+export const MAX_RESULT_FRONTMATTER_CHARS = CLIENT_SAFE_RESULT_CHARS / 2;
+export const FRONTMATTER_TOO_LARGE_HINT =
+  'The frontmatter is too large for a result and was left out ("frontmatterOmitted"): read the fields you need with vault_query select, or the raw YAML at the top of the note with vault_read and maxChars.';
+
+export function boundedFrontmatter(frontmatter: Record<string, unknown>): {
+  frontmatter: Record<string, unknown>;
+  frontmatterOmitted?: true;
+} {
+  return JSON.stringify(frontmatter).length <= MAX_RESULT_FRONTMATTER_CHARS
+    ? { frontmatter }
+    : { frontmatter: {}, frontmatterOmitted: true };
+}
+
+/** One `hint` string from the hints that apply; undefined when none does. */
+export function joinHints(...hints: (string | false | undefined)[]): { hint?: string } {
+  const said = hints.filter((h): h is string => typeof h === 'string');
+  return said.length === 0 ? {} : { hint: said.join(' ') };
 }
 
 export function clampText(

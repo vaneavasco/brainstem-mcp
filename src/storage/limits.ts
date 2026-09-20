@@ -25,7 +25,17 @@ export const MAX_ANALYTICS_FILES = 2000;
 export const MAX_LIST_ENTRIES = 2000;
 export const MAX_FRONTMATTER_HITS = 500;
 export const MAX_MATCH_TEXT_CHARS = 400;
-export const MAX_INDEX_BYTES = 64 * 1024 * 1024;
+/** Serialized size of the frontmatter index above which the server warns (a log line at boot or
+ *  on the change that crosses it, `index.overBudget` in brainstem_ping). A warning line, not a
+ *  limit: nothing is evicted. Measured on a 37,000-note vault of long notes: 3.5 KB per note
+ *  (127 MiB), and the process heap holds about twice the serialized size (254 MB for the index,
+ *  373 MB with the graph). So this line sits near 75,000 such notes and about 0.5 GB of heap for
+ *  the index; the earlier 64 MiB was an estimate (1–2 KB per note) that real notes doubled. */
+export const MAX_INDEX_BYTES = 256 * 1024 * 1024;
+/** Room for each flat list of one note in vault_outline (frontmatter key names, tags, block ids):
+ *  a sixth of what the strictest client accepts each, so headings, the point of an outline, keep
+ *  at least half. */
+export const MAX_OUTLINE_LIST_CHARS = CLIENT_SAFE_RESULT_CHARS / 6;
 export const MAX_GRAPH_ITEMS = 500;
 export const MAX_UNLINKED_MENTIONS = 100;
 export const MAX_QUERY_ROWS = 500;

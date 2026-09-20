@@ -1,4 +1,5 @@
 import { parse, stringify } from 'yaml';
+import { MAX_FILE_BYTES } from './limits.ts';
 import { VaultError } from './types.ts';
 
 export interface SplitResult {
@@ -12,6 +13,86 @@ const CLOSE = /^---[ \t]*(\r?\n|$)/m;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Makes parsed YAML safe to hold, copy and serialize, or says why it cannot be. YAML can express
+ * three things JSON, the index and every tool result cannot:
+ *  - a value that contains itself (`a: &x {b: *x}`): refused, whatever it runs through (mapping,
+ *    list, `!!set`, `!!omap`). One such note once stopped the server from starting.
+ *  - one anchor used many times: 1 MB of file that is 96 MB once each alias is written out, which
+ *    is what a copy or JSON.stringify does. Refused when the written-out size passes what a file
+ *    may hold, so aliases can say nothing a plain file could not.
+ *  - sets and ordered maps, which JSON shows as `{}`: read as a list and a mapping.
+ * Sizes and copies are memoized per node, so a shared node costs once here however often used.
+ */
+function admit(root: unknown): unknown {
+  const ancestors = new Set<object>();
+  const sizes = new Map<object, number>();
+  const copies = new Map<object, unknown>();
+
+  const walk = (value: unknown): { size: number; out: unknown } => {
+    // A tagged scalar arrives as an object; it is a value, not a mapping. Kept as the text YAML
+    // itself would write, so a later update cannot turn `when: 2026-01-01` into `when: {}`.
+    if (value instanceof Date) return walk(value.toISOString());
+    if (value instanceof Uint8Array) return walk(Buffer.from(value).toString('base64'));
+    if (value === null || typeof value !== 'object') {
+      // sized as JSON will write it: a control character is six characters there, not one
+      return { size: (JSON.stringify(value) ?? 'null').length, out: value };
+    }
+    if (ancestors.has(value)) {
+      throw new VaultError('INVALID_INPUT', 'Frontmatter refers to itself (a YAML alias cycle).');
+    }
+    const known = sizes.get(value);
+    if (known !== undefined) return { size: known, out: copies.get(value) };
+    ancestors.add(value);
+    let size = 2;
+    let out: unknown;
+    if (Array.isArray(value) || value instanceof Set) {
+      const list: unknown[] = [];
+      for (const item of value) {
+        const child = walk(item);
+        size += child.size + 1;
+        list.push(child.out);
+      }
+      out = list;
+    } else {
+      const proto = Object.getPrototypeOf(value);
+      if (!(value instanceof Map) && proto !== Object.prototype && proto !== null) {
+        // nothing the parser is known to produce; refused rather than copied as an empty mapping
+        throw new VaultError(
+          'INVALID_INPUT',
+          'Frontmatter holds a value this server cannot represent.',
+        );
+      }
+      const entries = value instanceof Map ? [...value.entries()] : Object.entries(value);
+      const record: Record<string, unknown> = {};
+      for (const [key, item] of entries) {
+        const name = typeof key === 'string' ? key : JSON.stringify(walk(key).out);
+        const child = walk(item);
+        size += JSON.stringify(name).length + child.size + 2;
+        // defined, not assigned: a `__proto__` key must stay a key
+        Object.defineProperty(record, name, {
+          value: child.out,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      out = record;
+    }
+    ancestors.delete(value);
+    sizes.set(value, size);
+    copies.set(value, out);
+    if (size > MAX_FILE_BYTES) {
+      throw new VaultError(
+        'INVALID_INPUT',
+        `Frontmatter is too large once its YAML aliases are written out (over ${MAX_FILE_BYTES} characters).`,
+      );
+    }
+    return { size, out };
+  };
+  return walk(root).out;
 }
 
 export function splitFrontmatter(text: string): SplitResult {
@@ -43,7 +124,7 @@ export function splitFrontmatter(text: string): SplitResult {
   if (!isPlainObject(parsed)) {
     throw new VaultError('INVALID_INPUT', 'Frontmatter must be a YAML mapping (key: value pairs).');
   }
-  return { frontmatter: parsed, body, hasFrontmatter: true };
+  return { frontmatter: admit(parsed) as Record<string, unknown>, body, hasFrontmatter: true };
 }
 
 export function joinFrontmatter(frontmatter: Record<string, unknown>, body: string): string {
@@ -64,6 +145,10 @@ export function applyFrontmatterUpdate(
   set: Record<string, unknown> = {},
   unset: string[] = [],
 ): Record<string, unknown> {
+  if (Object.hasOwn(set, '__proto__')) {
+    // `{...set}` would drop it and the write would report success having done nothing
+    throw new VaultError('INVALID_INPUT', 'A frontmatter key cannot be named "__proto__".');
+  }
   const out: Record<string, unknown> = { ...existing, ...set };
   for (const key of unset) delete out[key];
   return out;

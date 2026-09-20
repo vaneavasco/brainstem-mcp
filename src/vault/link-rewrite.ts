@@ -63,19 +63,10 @@ function buildWiki(link: LinkRef, newTarget: string): string {
   return `${link.embed ? '!' : ''}[[${inner}]]`;
 }
 
-/**
- * Whether the original markdown link wrapped its target in `<...>` — the label cannot itself
- * contain `]` (excluded by the parser's regex), so the first `](` in `raw` unambiguously marks
- * the label/target boundary.
- */
-function mdUsedAngleBrackets(raw: string): boolean {
-  const sep = raw.indexOf('](');
-  return sep !== -1 && raw[sep + 2] === '<';
-}
-
 function buildMd(link: LinkRef, newTarget: string): string {
   const withAnchor = attachAnchor(newTarget, link);
-  const wrap = mdUsedAngleBrackets(link.raw) || /\s/.test(withAnchor);
+  // `angle`: the original wrapped its target in `<...>`; a target with whitespace needs it anyway.
+  const wrap = link.angle === true || /\s/.test(withAnchor);
   const wrapped = wrap ? `<${withAnchor}>` : withAnchor;
   return `${link.embed ? '!' : ''}[${link.alias ?? ''}](${wrapped})`;
 }

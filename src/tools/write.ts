@@ -15,9 +15,15 @@ import {
   sliceSection,
 } from '../vault/sections.ts';
 import { APPEND_ONLY, OVERWRITE } from './annotations.ts';
-import { ExpectedHashArg, PathArg } from './args.ts';
+import { ExpectedHashArg, FrontmatterSetArg, PathArg } from './args.ts';
 import { applyNote, locked, type ToolContext } from './register.ts';
-import { guarded, okJson } from './results.ts';
+import {
+  boundedFrontmatter,
+  FRONTMATTER_TOO_LARGE_HINT,
+  guarded,
+  joinHints,
+  okJson,
+} from './results.ts';
 
 const UniqueArg = z
   .union([z.boolean(), z.literal('line')])
@@ -262,13 +268,15 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
         'Set or remove YAML frontmatter keys on a single markdown file without touching its body.',
       inputSchema: z.strictObject({
         path: PathArg,
-        set: z.record(z.string(), z.unknown()).optional(),
+        set: FrontmatterSetArg.optional(),
         unset: z.array(z.string()).optional(),
         expectedHash: ExpectedHashArg,
       }),
       outputSchema: z.looseObject({
         path: z.string(),
         frontmatter: z.record(z.string(), z.unknown()),
+        frontmatterOmitted: z.boolean().optional(),
+        hint: z.string().optional(),
         hash: z.string(),
       }),
       annotations: OVERWRITE,
@@ -298,7 +306,15 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           }
           applyNote(tc, written);
           return okJson(
-            { path: written.path, frontmatter: written.frontmatter, hash: written.hash },
+            (() => {
+              const fm = boundedFrontmatter(written.frontmatter);
+              return {
+                path: written.path,
+                ...fm,
+                ...joinHints(fm.frontmatterOmitted && FRONTMATTER_TOO_LARGE_HINT),
+                hash: written.hash,
+              };
+            })(),
             `Updated frontmatter on ${written.path}.`,
           );
         });
@@ -315,7 +331,7 @@ export function registerWriteTools(server: McpServer, tc: ToolContext): void {
           .array(
             z.strictObject({
               path: PathArg,
-              set: z.record(z.string(), z.unknown()).optional(),
+              set: FrontmatterSetArg.optional(),
               unset: z.array(z.string()).optional(),
               expectedHash: ExpectedHashArg,
             }),

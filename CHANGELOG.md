@@ -118,6 +118,47 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Fixed
 
+- The index no longer keeps the text of the whole vault in memory. Every string it stored (a
+  link target, a heading, a frontmatter value) was a piece cut out of the note it came from, and
+  in V8 such a piece keeps the whole note alive. Measured on a 37,000-note vault: heap after
+  indexing 940 MB → 254 MB, process memory 1.29 GB → 0.61 GB, build time unchanged. Index entries
+  are now detached copies, and a link no longer stores its own source text (`raw`), only its
+  position. A test builds an index over 90 MB of notes in a child process and fails if more than
+  20 MiB stays held.
+- The index size budget was never connected to anything: no log line, and a vault already over
+  it at boot could not have been reported even if it were. It now warns once at boot or on the
+  change that crosses it, `./brainstem status` prints a warning (`/health` carries only the
+  yes/no, `vault.indexOverBudget`, because it is public), `brainstem_ping` shows `index.bytes`, `index.budgetBytes` and
+  `index.overBudget`, and the budget is the measured one (256 MiB of serialized entries, about
+  75,000 long notes; the earlier 64 MiB assumed 1–2 KB per note, real notes need 3.5 KB). It is
+  a warning line, not a limit: nothing is evicted. The size is counted in bytes (it was UTF-16
+  units, which halved it for a vault not written in Latin script), and a budget that is not a
+  finite number is refused.
+- A note whose frontmatter refers to itself (a YAML alias cycle, `a: &x {b: *x}`) stopped the
+  server from starting. Such frontmatter is now refused where frontmatter is parsed, like any
+  other invalid block: the note reads as body-only with the reason in `frontmatterError`.
+- A query on a field name every object inherits (`constructor`, `toString`) matched every note.
+  Only what the frontmatter itself holds is a field, in `vault_query`, `vault_search`'s `where`,
+  `vault_search_frontmatter` and the required-frontmatter check. A `__proto__` key in
+  frontmatter is kept as an ordinary key, `vault_query` `select` returns it as a column, and
+  setting it through `vault_frontmatter_update`, the batch form or a transaction is refused
+  instead of reporting success while dropping it.
+- YAML aliases could make a 1 MB note cost 116 MB of memory (one anchor used 99 times, written
+  out in full by every copy and every result); 45 such notes stopped the server from starting.
+  Frontmatter whose written-out size passes what a file may hold (1 MiB) is refused where it is
+  parsed; the note reads as body-only with the reason.
+- `vault_read`, `vault_daily_note_read` and `vault_frontmatter_update` returned a note's
+  frontmatter whatever its size (630,000 characters measured). A block over 24,000 characters
+  is left out and flagged (`frontmatterOmitted`, with a `hint` naming the narrower call).
+- A YAML `!!set` or `!!omap` value read as `{}` everywhere, and a set that contained itself got
+  past the cycle check. A set reads as a list, an ordered map as a mapping; a frontmatter update
+  writes them back as such. A tagged timestamp reads as its ISO text and tagged binary as base64.
+- `vault_outline` listed a note's frontmatter key names, tags and block ids without a bound (a
+  million characters for a note with 9,000 keys). Each list has a budget; `frontmatterKeyCount`
+  says how many keys there are, `truncated` and `hint` say what was left out. Headings stay
+  whole: they are what an outline is for.
+- `vault_read` and `vault_batch_read` say why a frontmatter block could not be used
+  (`frontmatterError`: invalid YAML, a cycle, too large) instead of only showing `{}`.
 - Tool results may grow without breaking anyone. Output schemas were closed
   (`additionalProperties: false`), and clients cache the tool list: the first result that
   carried a field added after the client's copy was rejected whole with "data must NOT have
