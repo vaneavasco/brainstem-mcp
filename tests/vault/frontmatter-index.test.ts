@@ -71,6 +71,25 @@ describe('query', () => {
         .map((h) => h.path),
     ).toEqual(['a.md', 'sub/b.md']);
   });
+
+  it('equals is link-aware: a wikilink value matches its plain name and full target, scalar and list', async () => {
+    await vault.write('links/a.md', '---\nowner: "[[people/Alpha Person]]"\n---\nx');
+    await vault.write('links/b.md', '---\nowners:\n  - "[[Alpha Person|Alpha]]"\n---\nx');
+    await vault.write('links/c.md', '---\nowner: "[[Beta Person]]"\n---\nx');
+    const index = await FrontmatterIndex.build(vault);
+    expect(index.query({ field: 'owner', equals: 'Alpha Person' }).map((h) => h.path)).toEqual([
+      'links/a.md',
+    ]);
+    expect(
+      index.query({ field: 'owner', equals: 'people/Alpha Person' }).map((h) => h.path),
+    ).toEqual(['links/a.md']);
+    expect(index.query({ field: 'owners', equals: 'Alpha Person' }).map((h) => h.path)).toEqual([
+      'links/b.md',
+    ]);
+    expect(
+      index.query({ field: 'owner', equals: 'Alpha Person' }).map((h) => h.path),
+    ).not.toContain('links/c.md');
+  });
 });
 
 describe('mutation helpers', () => {

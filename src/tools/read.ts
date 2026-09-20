@@ -7,8 +7,9 @@ import {
   MAX_RESULT_CHARS,
   MAX_SECTION_NAME_CHARS,
 } from '../storage/limits.ts';
-import { VaultError } from '../storage/types.ts';
+import { type Note, VaultError } from '../storage/types.ts';
 import { prefixWithinSerialized } from '../vault/budget.ts';
+import { suggestPaths } from '../vault/path-suggest.ts';
 import type { SectionRange } from '../vault/sections.ts';
 import { describeUnknownHeading, findSection, sliceSection } from '../vault/sections.ts';
 import { READ_ONLY } from './annotations.ts';
@@ -108,6 +109,15 @@ const MARKER_PLACEHOLDER = 'x'.repeat(TRUNCATION_MARKER_CHARS - 2);
 const FRONTMATTER_OMITTED_HINT =
   'Frontmatter was left out of some notes ("frontmatterOmitted") to keep the result within what clients accept: read the fields you need with vault_query select, or one note with vault_read.';
 
+/** ` Did you mean: "a", "b"?` for up to 3 near-miss suggestions; '' when there are none. Each
+ *  suggestion is an index path, already within MAX_PATH_ARG_CHARS (the path policy's own limit),
+ *  so the result stays bounded without a further cap here. */
+function didYouMeanSuffix(paths: string[]): string {
+  return paths.length === 0
+    ? ''
+    : ` Did you mean: ${paths.map((p) => JSON.stringify(p)).join(', ')}?`;
+}
+
 /** Indices to leave out, largest first, until the sizes that remain fit `budget`. */
 export function omitLargest(sizes: number[], budget: number): Set<number> {
   const out = new Set<number>();
@@ -141,7 +151,29 @@ export function shareBudget(lengths: number[], budget: number, cap?: number): nu
 }
 
 export function registerReadTools(server: McpServer, tc: ToolContext): void {
-  const { adapter } = tc.runtime;
+  const { adapter, index } = tc.runtime;
+
+  /** `adapter.read`, with near-miss suggestions folded into a NOT_FOUND's message — a reader who
+   *  typed a straight apostrophe where the file name has a typographic one gets a way out instead
+   *  of "does not exist" and nothing else. */
+  async function readOrSuggest(path: string): Promise<Note> {
+    try {
+      return await adapter.read(path);
+    } catch (error) {
+      if (error instanceof VaultError && error.code === 'NOT_FOUND') {
+        const suggestions = suggestPaths(
+          index.all().map((e) => e.path),
+          path,
+        );
+        throw new VaultError(
+          error.code,
+          `${error.message}${didYouMeanSuffix(suggestions)}`,
+          error.details,
+        );
+      }
+      throw error;
+    }
+  }
 
   server.registerTool(
     'vault_read',
@@ -192,7 +224,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         if (section !== undefined && sections !== undefined) {
           throw new VaultError('INVALID_INPUT', 'pass either "section" or "sections", not both');
         }
-        const note = await adapter.read(path);
+        const note = await readOrSuggest(path);
         let textOut = note.content;
         let sectionRange: { startLine: number; endLine: number } | undefined;
         let sectionRanges: { heading: string; startLine: number; endLine: number }[] | undefined;
@@ -250,7 +282,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
     'vault_batch_read',
     {
       title: 'Read several notes',
-      description: `Read up to ${MAX_BATCH} files in one call; the notes share ${CLIENT_SAFE_RESULT_CHARS.toLocaleString('en-US')} characters, frontmatter included (a short note leaves its share to the long ones; oversized frontmatter is left out and flagged). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) to get only those sections of every note — a note lacking one still answers and lists it in "missingSections" — and/or "maxChars" to cut each note. Missing files are listed in "missing", unreadable ones in "failed"; the call never fails because of one bad path.`,
+      description: `Read up to ${MAX_BATCH} files in one call; the notes share ${CLIENT_SAFE_RESULT_CHARS.toLocaleString('en-US')} characters, frontmatter included (a short note leaves its share to the long ones; oversized frontmatter is left out and flagged, or pass frontmatter:false to leave it out and give bodies the room). Whole long notes rarely fit: pass "sections" (heading paths, as in vault_read) for just those sections, and/or "maxChars" to cut each note. Missing files are listed in "missing" (with "suggestions" for a near-miss by name), unreadable ones in "failed"; the call never fails because of one bad path.`,
       inputSchema: z.strictObject({
         paths: z.array(DetailedPathArg).min(1).max(MAX_BATCH),
         sections: z
@@ -268,6 +300,13 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           .max(MAX_RESULT_CHARS)
           .optional()
           .describe('Cut the body of each note after this many characters.'),
+        frontmatter: z
+          .boolean()
+          .optional()
+          .describe(
+            "Whether to include each note's frontmatter; default true. false leaves it out " +
+              '("frontmatterOmitted": true) and gives that room to the bodies instead.',
+          ),
       }),
       outputSchema: z.looseObject({
         notes: z.array(
@@ -280,19 +319,31 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         ),
         missing: z.array(z.string()),
         failed: z.array(z.looseObject({ path: z.string(), error: z.string() })),
+        suggestions: z
+          .array(z.looseObject({ path: z.string(), didYouMean: z.array(z.string()) }))
+          .optional(),
         hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
-    ({ paths, sections, maxChars }) =>
+    ({ paths, sections, maxChars, frontmatter }) =>
       guarded(tc.log, async () => {
         const result = await adapter.batchRead(paths);
+        const wantFrontmatter = frontmatter ?? true;
         // Pick the sections first, then share the budget over what is actually wanted: a short
         // note leaves its unused share to the long ones instead of wasting it.
         const wanted = result.notes.map((note) =>
           sections ? pickSections(note.content, sections) : undefined,
         );
         const texts = result.notes.map((note, i) => wanted[i]?.text ?? note.body);
+
+        // A near-miss for each missing path, computed once over every index path (cheap: it only
+        // runs on a miss). Real values, not a placeholder: they are part of what is weighed below,
+        // same as "missing" itself.
+        const indexPaths = result.missing.length === 0 ? [] : index.all().map((e) => e.path);
+        const suggestions = result.missing
+          .map((p) => ({ path: p, didYouMean: suggestPaths(indexPaths, p) }))
+          .filter((s) => s.didYouMean.length > 0);
 
         // The budget covers what the client receives, and everything is measured: a path can be
         // a thousand characters, a body can open with characters JSON escapes sixfold. First the
@@ -322,6 +373,7 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
             notes: result.notes.map((_, i) => skeleton(i, !omit.has(i))),
             missing: result.missing,
             failed: result.failed,
+            ...(suggestions.length > 0 ? { suggestions } : {}),
             hint: `${TRUNCATED_HINT} ${FRONTMATTER_OMITTED_HINT}`,
           }).length;
 
@@ -334,7 +386,9 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
           );
         }
         const fmSizes = result.notes.map((note) => JSON.stringify(note.frontmatter).length);
-        const omitted = omitLargest(fmSizes, Math.floor((CLIENT_SAFE_RESULT_CHARS - bare) / 2));
+        const omitted = wantFrontmatter
+          ? omitLargest(fmSizes, Math.floor((CLIENT_SAFE_RESULT_CHARS - bare) / 2))
+          : everything;
         const bodiesRoom = CLIENT_SAFE_RESULT_CHARS - weigh(omitted);
 
         // A body's cost is its JSON string without the two quotes the skeleton already paid for;
@@ -356,12 +410,15 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
         });
         const hints = [
           ...(notes.some((n) => n.truncated) ? [TRUNCATED_HINT] : []),
-          ...(omitted.size > 0 ? [FRONTMATTER_OMITTED_HINT] : []),
+          // Only when frontmatter was left out to fit the budget, not when the caller asked for
+          // it to be left out with frontmatter:false — that omission is not a cut.
+          ...(wantFrontmatter && omitted.size > 0 ? [FRONTMATTER_OMITTED_HINT] : []),
         ];
         return okJson({
           notes,
           missing: result.missing,
           failed: result.failed,
+          ...(suggestions.length > 0 ? { suggestions } : {}),
           ...(hints.length > 0 ? { hint: hints.join(' ') } : {}),
         });
       }),

@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { CLIENT_SAFE_RESULT_CHARS, MAX_GLOB_CHARS, MAX_LIST_ENTRIES } from '../storage/limits.ts';
-import { isMarkdownPath, normalizeVaultPath } from '../storage/path-policy.ts';
+import { isMarkdownPath, normalizeVaultPath, parentDir } from '../storage/path-policy.ts';
 import { fitWithinBudget, roomBeside } from '../vault/budget.ts';
 import { MOVE_OR_DELETE, READ_ONLY } from './annotations.ts';
 import { ExpectedHashArg } from './args.ts';
@@ -60,6 +60,10 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
             modifiedAt: z.string().optional(),
           }),
         ),
+        /** Only present when the result was truncated: files directly inside each subfolder of
+         *  the listing, vault-relative paths, sorted by path — counted from the full (untruncated)
+         *  listing, so it stays true even when "entries" itself had to lose some deep ones. */
+        folders: z.array(z.looseObject({ path: z.string(), files: z.number() })).optional(),
         truncated: z.boolean(),
         hint: z.string().optional(),
       }),
@@ -74,19 +78,74 @@ export function registerManageTools(server: McpServer, tc: ToolContext): void {
           ...(includeFiles !== undefined ? { includeFiles } : {}),
           ...(includeDirs !== undefined ? { includeDirs } : {}),
         });
-        const hintFor = (shown: number) =>
+
+        // First, today's behaviour exactly: DFS order, no "folders". Only when even this cannot
+        // fit does the truncated branch below reorder and add "folders" — an untruncated result
+        // must stay byte-for-byte what it always was.
+        const plainHintFor = (shown: number) =>
           `${shown} of ${entries.length} entries shown: narrow with path, glob or depth; to count or size a folder use vault_query { pathPrefix, countOnly: true }.`;
-        const room = roomBeside(
-          { path: base, entries: [], truncated: true, hint: hintFor(entries.length) },
+        const plainRoom = roomBeside(
+          { path: base, entries: [], truncated: true, hint: plainHintFor(entries.length) },
           CLIENT_SAFE_RESULT_CHARS,
         );
-        const { kept, cut } = fitWithinBudget(entries.slice(0, MAX_LIST_ENTRIES), room);
-        const truncated = cut || entries.length > MAX_LIST_ENTRIES;
+        const capped =
+          entries.length > MAX_LIST_ENTRIES ? entries.slice(0, MAX_LIST_ENTRIES) : entries;
+        const plainFit = fitWithinBudget(capped, plainRoom);
+        const wouldTruncate = plainFit.cut || entries.length > MAX_LIST_ENTRIES;
+
+        if (!wouldTruncate) {
+          return okJson({ path: base, entries: plainFit.kept, truncated: false });
+        }
+
+        // Truncated: shallowest first (depth, then path) so every top-level entry survives before
+        // any deep one, plus a per-folder file count so the reader learns the shape of what did
+        // not fit, instead of just the contents of the first big folder in DFS order.
+        const depthOf = (p: string): number => {
+          const rel = base === '' ? p : p.slice(base.length + 1);
+          return rel.split('/').length - 1;
+        };
+        const ordered = [...entries].sort((a, b) => {
+          const d = depthOf(a.path) - depthOf(b.path);
+          return d !== 0 ? d : a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+        });
+        const orderedCapped =
+          ordered.length > MAX_LIST_ENTRIES ? ordered.slice(0, MAX_LIST_ENTRIES) : ordered;
+
+        const filesByParent = new Map<string, number>();
+        for (const e of entries) {
+          if (e.kind !== 'file') continue;
+          const parent = parentDir(e.path);
+          filesByParent.set(parent, (filesByParent.get(parent) ?? 0) + 1);
+        }
+        const allFolders = entries
+          .filter((e) => e.kind === 'dir')
+          .map((e) => ({ path: e.path, files: filesByParent.get(e.path) ?? 0 }))
+          .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+        const hintFor = (shown: number, foldersCut: boolean) =>
+          `${shown} of ${entries.length} entries shown, shallowest first; "folders" counts files ` +
+          `directly inside each subfolder${foldersCut ? ' (itself truncated too)' : ''}: list one ` +
+          'folder, narrow with glob, or count with vault_query { pathPrefix, countOnly: true }.';
+        // Weighed with the LONGEST hint (the "itself truncated too" variant) so the room reserved
+        // for entries/folders never overshoots what the final, possibly-shorter hint leaves.
+        const longestHint = hintFor(entries.length, true);
+        const baseRoom = roomBeside(
+          { path: base, entries: [], folders: [], truncated: true, hint: longestHint },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const foldersFit = fitWithinBudget(allFolders, Math.floor(baseRoom / 4));
+        const entriesRoom = roomBeside(
+          { path: base, entries: [], folders: foldersFit.kept, truncated: true, hint: longestHint },
+          CLIENT_SAFE_RESULT_CHARS,
+        );
+        const entriesFit = fitWithinBudget(orderedCapped, entriesRoom);
+
         return okJson({
           path: base,
-          entries: kept,
-          truncated,
-          ...(truncated ? { hint: hintFor(kept.length) } : {}),
+          entries: entriesFit.kept,
+          folders: foldersFit.kept,
+          truncated: true,
+          hint: hintFor(entriesFit.kept.length, foldersFit.cut),
         });
       }),
   );

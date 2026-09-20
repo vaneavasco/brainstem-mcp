@@ -96,7 +96,7 @@ export function frontmatterTags(frontmatter: Record<string, unknown>): string[] 
     .filter((t) => t !== '' && /[^\d/]/.test(t));
 }
 
-function splitWikiInner(
+export function splitWikiInner(
   inner: string,
 ): Omit<LinkRef, 'embed' | 'kind' | 'angle' | 'line' | 'start' | 'end'> {
   const pipe = inner.indexOf('|');
@@ -217,4 +217,45 @@ export function parseNote(
 
   const wordCount = body.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
   return { links, tags, headings, blockIds, wordCount };
+}
+
+/** Matches a string that is, in its entirety, one wikilink — "[[target]]", optionally with
+ *  "|alias", "#heading" or "^block" — the same inner grammar `WIKI` uses for note bodies, but
+ *  anchored to the whole (trimmed) value: "text [[x]] more" has brackets only in the middle and
+ *  is never mistaken for a link. */
+const WHOLE_WIKILINK = /^\[\[((?:[^\]\n]|\](?!\]))+?)\]\]$/;
+
+/** `s`, parsed as a whole wikilink; `null` when `s` (trimmed) is not exactly one. */
+export function parseWholeWikilink(
+  s: string,
+): Omit<LinkRef, 'embed' | 'kind' | 'angle' | 'line' | 'start' | 'end'> | null {
+  const m = WHOLE_WIKILINK.exec(s.trim());
+  if (!m) return null;
+  const parts = splitWikiInner(m[1] ?? '');
+  return parts.target === '' ? null : parts;
+}
+
+/**
+ * Compare-forms for a frontmatter scalar that might be a wikilink: the link target, and (when
+ * the target has a folder) its last path segment — so a value of `[[people/Alpha Person]]` is
+ * found equal by both "Alpha Person" (the plain name) and "people/Alpha Person" (the full
+ * target). A value that is not one whole wikilink yields itself, unchanged: "contains" and
+ * "startsWith" never call this (they stay substring/prefix ops on the raw text), and `eq`/`in`
+ * try the exact string first, so `[[Alpha Person]]` still equals `[[Alpha Person]]` as before.
+ */
+export function linkAwareForms(value: string): string[] {
+  const link = parseWholeWikilink(value);
+  if (!link) return [value];
+  const base = link.target.slice(link.target.lastIndexOf('/') + 1);
+  return base === link.target ? [link.target] : [link.target, base];
+}
+
+/** True when `a` and `b` name the same wikilink target under `linkAwareForms`, case-insensitively
+ *  (a plain name, a full target, or a wikilink string, any combination). Non-string values never
+ *  match here — numeric/date/boolean equality is `typedCompare`'s job, not this one's. */
+export function linkAwareEquals(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const af = linkAwareForms(a).map((f) => f.toLowerCase());
+  const bf = linkAwareForms(b).map((f) => f.toLowerCase());
+  return af.some((x) => bf.includes(x));
 }

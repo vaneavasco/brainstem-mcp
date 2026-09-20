@@ -1,7 +1,13 @@
 import { MAX_BATCH, MAX_INDEX_BYTES } from '../storage/limits.ts';
 import { isMarkdownPath, isReservedPath } from '../storage/path-policy.ts';
 import { type Note, type StorageAdapter, type Unsubscribe, VaultError } from '../storage/types.ts';
-import { type BlockId, type Heading, type LinkRef, parseNote } from './note-parse.ts';
+import {
+  type BlockId,
+  type Heading,
+  type LinkRef,
+  linkAwareEquals,
+  parseNote,
+} from './note-parse.ts';
 
 export interface IndexEntry {
   path: string;
@@ -57,7 +63,7 @@ export function getPath(obj: Record<string, unknown>, dotted: string): unknown {
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
-  if (typeof a !== 'object' || a === null) return a === b;
+  if (typeof a !== 'object' || a === null) return a === b || linkAwareEquals(a, b);
   return JSON.stringify(a) === JSON.stringify(b);
 }
 

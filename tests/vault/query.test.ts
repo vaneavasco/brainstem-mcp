@@ -608,6 +608,121 @@ describe('evaluateQuery — contains/startsWith on what is not there', () => {
   });
 });
 
+describe('evaluateQuery — the row-truncation hint (B1)', () => {
+  it('warns that a sum/count over "rows" is incomplete and names sum/countOnly+groupBy', () => {
+    const filler = 'x'.repeat(400);
+    for (let i = 0; i < 400; i += 1) {
+      index.upsert(
+        entry(`hintwide/n${String(i).padStart(4, '0')}.md`, `---\nblurb: "${filler}"\n---\nbody`),
+      );
+    }
+    const r = run({ pathPrefix: 'hintwide', select: ['blurb'], limit: 400 });
+    expect(r.truncated).toBe(true);
+    // The existing "N of the M rows asked for" / budget-size wording is preserved...
+    expect(r.hint).toMatch(new RegExp(`of the 400 rows asked for.*${MAX_QUERY_RESULT_CHARS}`));
+    // ...and now also explains that adding up "rows" is incomplete, naming the way out.
+    expect(r.hint).toMatch(/incomplete/);
+    expect(r.hint).toContain('countOnly');
+    expect(r.hint).toContain('groupBy');
+    expect(r.hint).toContain('sum');
+  });
+});
+
+describe('evaluateQuery — sum (B2)', () => {
+  it('totals are exact over every match, not only the rows that fit the budget', () => {
+    const filler = 'x'.repeat(400);
+    let expected = 0;
+    for (let i = 0; i < 300; i += 1) {
+      expected += i;
+      index.upsert(
+        entry(
+          `sumwide/n${String(i).padStart(4, '0')}.md`,
+          `---\nblurb: "${filler}"\namount: ${i}\n---\nbody`,
+        ),
+      );
+    }
+    const r = run({ pathPrefix: 'sumwide', select: ['blurb'], limit: 300, sum: ['amount'] });
+    expect(r.rows.length).toBeLessThan(300);
+    expect(r.truncated).toBe(true);
+    expect(r.sums?.amount).toBe(expected);
+    expect(r.sumCounted?.amount).toBe(300);
+  });
+
+  it('a numeric string is not summed; a field that is never numeric yields 0', () => {
+    index.upsert(entry('sumstr/a.md', '---\namount: "12"\n---\nx'));
+    index.upsert(entry('sumstr/b.md', '---\namount: 5\n---\nx'));
+    const r = run({ pathPrefix: 'sumstr', sum: ['amount', 'nope'] });
+    expect(r.sums?.amount).toBe(5);
+    expect(r.sumCounted?.amount).toBe(1);
+    expect(r.sums?.nope).toBe(0);
+    expect(r.sumCounted?.nope).toBe(0);
+  });
+
+  it('a boolean does not count as a number', () => {
+    index.upsert(entry('sumbool/a.md', '---\nflag: true\n---\nx'));
+    const r = run({ pathPrefix: 'sumbool', sum: ['flag'] });
+    expect(r.sums?.flag).toBe(0);
+    expect(r.sumCounted?.flag).toBe(0);
+  });
+
+  it('works with countOnly: sums are still exact even though no rows are built', () => {
+    index.upsert(entry('sumco/a.md', '---\namount: 4\n---\nx'));
+    index.upsert(entry('sumco/b.md', '---\namount: 6\n---\nx'));
+    const r = run({ pathPrefix: 'sumco', sum: ['amount'], countOnly: true });
+    expect(r.rows).toEqual([]);
+    expect(r.sums?.amount).toBe(10);
+    expect(r.sumCounted?.amount).toBe(2);
+  });
+
+  it('with groupBy, every group also carries its own sums, over only its own matches', () => {
+    index.upsert(entry('sumgrp/a.md', '---\ncat: x\namount: 3\n---\n'));
+    index.upsert(entry('sumgrp/b.md', '---\ncat: x\namount: 7\n---\n'));
+    index.upsert(entry('sumgrp/c.md', '---\ncat: y\namount: 100\n---\n'));
+    const r = run({ pathPrefix: 'sumgrp', groupBy: 'cat', sum: ['amount'] });
+    const byKey = new Map((r.groups ?? []).map((g) => [g.key, g]));
+    expect(byKey.get('x')?.sums?.amount).toBe(10);
+    expect(byKey.get('x')?.sumCounted?.amount).toBe(2);
+    expect(byKey.get('y')?.sums?.amount).toBe(100);
+    expect(byKey.get('y')?.sumCounted?.amount).toBe(1);
+    expect(r.sums?.amount).toBe(110); // the top-level total is over ALL matches
+  });
+
+  it('stays within budget with 10 sum fields and groupBy over 2,000 keys', () => {
+    for (let i = 0; i < 2_000; i += 1) {
+      index.upsert(entry(`sumbig/n${i}.md`, `---\nbucket: b${i}\namount: ${i}\n---\nx`));
+    }
+    const sumFields = Array.from({ length: 10 }, (_, i) => `field${i}`);
+    const r = run({ pathPrefix: 'sumbig', groupBy: 'bucket', sum: sumFields });
+    expect(JSON.stringify(r).length).toBeLessThanOrEqual(MAX_QUERY_RESULT_CHARS);
+    expect(r.sums).toBeDefined();
+  });
+});
+
+describe('evaluateQuery — groupPrefix (B3)', () => {
+  beforeEach(() => {
+    index.upsert(entry('gp/a.md', '---\ncat: topic/a\n---\nx'));
+    index.upsert(entry('gp/b.md', '---\ncat: topic/b\n---\nx'));
+    index.upsert(entry('gp/c.md', '---\ncat: other\n---\nx'));
+  });
+
+  it('keeps only group keys that start with it; total is unaffected', () => {
+    const r = run({ pathPrefix: 'gp', groupBy: 'cat', groupPrefix: 'topic/' });
+    expect((r.groups ?? []).map((g) => g.key).sort()).toEqual(['topic/a', 'topic/b']);
+    expect(r.total).toBe(3);
+  });
+
+  it('is refused without groupBy, with INVALID_INPUT', () => {
+    expect(() => run({ pathPrefix: 'gp', groupPrefix: 'topic/' })).toThrow(VaultError);
+    try {
+      run({ pathPrefix: 'gp', groupPrefix: 'topic/' });
+      expect.unreachable('expected evaluateQuery to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(VaultError);
+      expect((error as VaultError).code).toBe('INVALID_INPUT');
+    }
+  });
+});
+
 describe('evaluateQuery — groups budget', () => {
   it('bounds the groups themselves: thousands of keys keep the largest groups and say so', () => {
     for (let i = 0; i < 4000; i += 1) {
@@ -748,5 +863,89 @@ describe('a field name that every object inherits', () => {
     }
     expect(index.query({ field: 'constructor', exists: true })).toEqual([]);
     expect(index.query({ field: 'status', exists: true }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('evaluateQuery — link-aware equality (a wikilink value matches its plain name and full target)', () => {
+  beforeEach(() => {
+    index.upsert(entry('links/plain-bracket.md', '---\nowner: "[[Alpha Person]]"\n---\nx'));
+    index.upsert(entry('links/full-target.md', '---\nowner: "[[people/Alpha Person]]"\n---\nx'));
+    index.upsert(entry('links/alias.md', '---\nowner: "[[Alpha Person|Alpha]]"\n---\nx'));
+    index.upsert(entry('links/heading.md', '---\nowner: "[[Alpha Person#Bio]]"\n---\nx'));
+    index.upsert(entry('links/other.md', '---\nowner: "[[Beta Person]]"\n---\nx'));
+    index.upsert(
+      entry('links/mid-brackets.md', '---\nowner: "notes [[Alpha Person]] here"\n---\nx'),
+    );
+    index.upsert(
+      entry('links/list.md', '---\nowners:\n  - "[[Alpha Person]]"\n  - "[[Beta Person]]"\n---\nx'),
+    );
+  });
+
+  it('eq: the plain name matches every wikilink form pointing at it', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'Alpha Person' }],
+    });
+    expect(paths(r)).toEqual([
+      'links/alias.md',
+      'links/full-target.md',
+      'links/heading.md',
+      'links/plain-bracket.md',
+    ]);
+  });
+
+  it('eq: the full target (folder + name) matches too', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'people/Alpha Person' }],
+    });
+    expect(paths(r)).toEqual(['links/full-target.md']);
+  });
+
+  it('eq: the exact bracketed string still matches as before', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: '[[Alpha Person]]' }],
+    });
+    expect(paths(r)).toContain('links/plain-bracket.md');
+  });
+
+  it('eq: a different name does not match', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'Beta Person' }],
+    });
+    expect(paths(r)).toEqual(['links/other.md']);
+  });
+
+  it('eq: brackets only in the middle of a value are not a link', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'eq', value: 'Alpha Person' }],
+    });
+    expect(paths(r)).not.toContain('links/mid-brackets.md');
+  });
+
+  it('in: matches a plain name against any wikilink form in a list of candidates', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owner', op: 'in', value: ['Alpha Person'] }],
+    });
+    expect(paths(r)).toEqual(
+      expect.arrayContaining([
+        'links/alias.md',
+        'links/full-target.md',
+        'links/heading.md',
+        'links/plain-bracket.md',
+      ]),
+    );
+  });
+
+  it('list fields: a wikilink element matches the plain name', () => {
+    const r = run({
+      pathPrefix: 'links',
+      where: [{ field: 'owners', op: 'eq', value: 'Beta Person' }],
+    });
+    expect(paths(r)).toEqual(['links/list.md']);
   });
 });

@@ -269,6 +269,48 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   `llms.txt` gains the user guide, the vault-graph spec and ADR 0006. No
   behaviour change.
 
+### Added
+
+- `vault_query` takes `sum` (1–10 field names): exact totals over *every* match, not only the
+  rows a result can carry, in a new `sums` (and `sumCounted`, so a reader can tell "0" from "no
+  data" — only finite numbers count, not a numeric string or a boolean). With `groupBy`, each
+  group also gets its own `sums`/`sumCounted`, over just its own matches. Sixteen fresh models
+  answering real multi-step questions kept adding up a partial `rows` array by hand and getting
+  it wrong; the truncation hint now names `sum` (and `countOnly` + `groupBy` for counts) as the
+  way to get an exact number instead.
+- `vault_query` takes `groupPrefix`: with `groupBy`, keep only group keys that start with it
+  (e.g. `groupBy: "tags", groupPrefix: "topic/"`). Refused without `groupBy`.
+- `vault_query` adds a `hint` when a `pathPrefix` matches nothing because no note exists under it
+  at all (as against notes existing there but none matching `where`/`tags`), so a reader is not
+  left to double-check with a separate listing.
+- `vault_list` gains `folders` (`{ path, files }`, files counted directly inside each subfolder)
+  and orders `entries` shallowest first — but only when the listing would otherwise be truncated.
+  A deep listing used to return the first ~2,000 paths in on-disk order, i.e. the contents of
+  whichever big folder came first alphabetically, and the reader learned nothing about the shape
+  of the rest; eight of sixteen fresh models paid 25,000–48,000 characters for exactly that. An
+  untruncated listing is unchanged: no `folders`, same order as before.
+- `vault_batch_read` takes `frontmatter: false`: every note's `frontmatter` comes back `{}`
+  (`frontmatterOmitted: true`) and the room it would have used goes to bodies instead — readers
+  who only needed note text were losing several bodies per batch to long frontmatter blocks
+  (a list of ids, most often).
+- `vault_read`'s `NOT_FOUND` gains up to 3 `Did you mean: "…"?` suggestions, and
+  `vault_batch_read` gains a `suggestions` entry per missing path that has one, when a requested
+  path's folded form (Unicode NFKC; typographic quotes/apostrophes, en/em dashes and the
+  non-breaking hyphen to their ASCII equivalents; repeated/non-breaking spaces to one; lower-
+  cased) matches an indexed path exactly, or shares a folder and a folded basename. Cheap and
+  predictable — no fuzzy distance matching — because it runs on every miss. A reader who typed a
+  straight apostrophe where the file name has a typographic one used to be told only "does not
+  exist".
+
+### Fixed
+
+- `vault_query`'s `eq`/`in` (and `vault_search_frontmatter`'s `equals`) are now link-aware: a
+  frontmatter value written as a wikilink (`"[[Alpha Person]]"`, `"[[people/Alpha Person]]"`,
+  with an alias or a heading) is found by the plain name (`"Alpha Person"`) and by the full
+  target (`"people/Alpha Person"`), for a scalar field and for a list element. A reader who asked
+  for `owner in ["Alpha Person"]` used to get zero rows and no explanation because the field held
+  `"[[Alpha Person]]"`. `contains`/`startsWith` are unchanged (still plain substring/prefix).
+
 ## [0.3.1] — 2026-08-31
 
 ### Added
