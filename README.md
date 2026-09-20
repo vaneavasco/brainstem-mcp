@@ -119,7 +119,7 @@ Without a tunnel token, `setup` configures a quick tunnel: a random `*.trycloudf
 
 ## Teach Claude your vault's conventions
 
-On first start the server seeds `<vault>/_brainstem/instructions.md`. Open it in Obsidian and write, in plain markdown, how Claude should work in *your* vault — where things live, which frontmatter keys you use, what it must never touch. The text is sent to Claude on every new connection (as the MCP server's `instructions`), on top of the built-in guidance; frontmatter and `<!-- HTML comments -->` in that note are not sent. Edits apply to the next connection, no restart needed; it is capped at 8,000 characters.
+On first start the server seeds `<vault>/_brainstem/instructions.md`. Open it in Obsidian and write, in plain markdown, how Claude should work in *your* vault — where things live, which frontmatter keys you use, what it must never touch. The text is sent to Claude on every new connection (as the MCP server's `instructions`), on top of the built-in guidance; frontmatter and `<!-- HTML comments -->` in that note are not sent. Edits apply to the next connection, no restart needed; it is capped at 12,000 characters.
 
 ## What Claude can do
 
