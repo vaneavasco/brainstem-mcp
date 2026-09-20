@@ -164,6 +164,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Changed
 
+- The owner's `_brainstem/instructions.md` may be up to 12,000 characters (was 8,000) before it is cut with a marker: a guide for a large, structured vault (folders, queryable fields, reading recipes) did not fit, and it is read once per conversation through `brainstem_guide`.
+
 - `vault_batch_read` shares 60,000 characters between the note bodies (was 120,000). Frontmatter
   and metadata of twenty notes ride on top of the bodies, and clients refuse a tool result near
   100,000 characters outright: a full batch returned nothing at all. The cut is reported per note

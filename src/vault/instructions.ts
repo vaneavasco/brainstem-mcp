@@ -32,7 +32,7 @@ export const INSTRUCTIONS_FILE = 'instructions.md';
  * longer than this is documentation, not instructions, and would crowd the
  * model's context on every connection.
  */
-export const MAX_OWNER_INSTRUCTIONS_CHARS = 8_000;
+export const MAX_OWNER_INSTRUCTIONS_CHARS = 12_000;
 
 const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
