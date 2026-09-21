@@ -6,6 +6,24 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `./brainstem stdio [--vault <path>]`: a second, local way in built from the same tool factory as
+  the HTTP server, so both expose the same tools by construction. No Docker, no Cloudflare
+  tunnel, no OAuth — the process runs as the OS user who owns the vault's files, protected by the
+  same path policy, size limits and optimistic concurrency as every other client. `claude mcp add
+  brainstem -- /path/to/brainstem stdio` connects it from Claude Code. The launchers (`brainstem`,
+  `brainstem.cmd`) no longer require Docker for `stdio`, `--help`/`-h`/`help` or `--version`/`-V`.
+- The stdio entrypoint builds its index in the background instead of blocking `initialize`: a
+  vault runtime can now be created with `deferIndex: true` (`createLocalRuntime`), returning at
+  once with `indexState()`/`indexReady` while the fill runs, followed by one reconcile pass to
+  catch whatever changed on disk during it. Every vault tool but `vault_read`,
+  `vault_daily_note_read`, `vault_daily_note_path` and `vault_canvas_read` — which never read the
+  index — waits for it (up to `INDEX_WAIT_MS`, 45 s, under the 60 s a client waits by default) before running, and answers a clear "still
+  building" error, naming how far it's gotten, if it isn't ready in time.
+- `brainstem_ping`'s `index` gains `building`, `indexed` and `total`, reflecting that background
+  fill (always `building: false` off the deferred path).
+
 ## [0.4.1] — 2026-09-21
 
 ### Added

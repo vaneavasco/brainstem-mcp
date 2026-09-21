@@ -17,6 +17,8 @@ Binding documents, in order of authority:
 ```
 src/app.ts            Express app: /mcp (bearer-gated), /health, auth mount
 src/main.ts           boot order: tunnel URL → config → vault runtime → token store → server → notes
+src/stdio-main.ts     local (stdio) entrypoint: loadVaultConfig → deferred-index runtime → serveStdio,
+                      the same createVaultServer factory main.ts uses; no auth, no HTTP, no tunnel
 src/auth/as/          authorization server: metadata, cimd (+net SSRF guard), authorize/consent, token
 src/auth/rs/          resource server: bearer token verifier
 src/auth/store/       FileTokenStore (JSON, atomic writes, mtime reload)
@@ -41,6 +43,7 @@ npm run test:scale          # 40,000-note run: memory, build time, bounded resul
 npm run typecheck           # tsc --noEmit
 npm run lint                # biome check .   (npm run lint:fix to apply)
 npm run dev                 # server without Docker, reads .env
+npm run stdio -- --vault <path>  # local stdio server without Docker, a tunnel or OAuth
 npm run docker:smoke        # end-to-end against the Docker image (needs Docker)
 npm run mcp:call -- --list  # authenticate headlessly and call tools on a running instance
 ```

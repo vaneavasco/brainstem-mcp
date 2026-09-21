@@ -66,6 +66,16 @@ The owner secret lives in `.env`. Show it any time with:
 ./brainstem secret show
 ```
 
+## Use it locally, without Docker or a tunnel
+
+On your own machine, Claude Code and Claude Desktop can start the server themselves and talk to it over stdin/stdout — no Docker, no Cloudflare tunnel, no OAuth. The process runs as your own OS user, so it can do nothing to the vault that you couldn't already do yourself with a text editor; the same path policy, size limits and optimistic-concurrency checks protect it from the model either way.
+
+```bash
+claude mcp add brainstem -- /path/to/brainstem stdio
+```
+
+`--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
+
 ## Commands
 
 `./brainstem help <command>` prints the full options for any command below.
@@ -80,6 +90,7 @@ The owner secret lives in `.env`. Show it any time with:
 | `./brainstem status` | Show configuration, health and container status | `./brainstem status` |
 | `./brainstem url` | Print the connector/public URL and check it is reachable | `./brainstem url` |
 | `./brainstem logs` | Follow container logs | `./brainstem logs` |
+| `./brainstem stdio` | Serve one vault over stdio — no Docker, no tunnel, no OAuth | `./brainstem stdio --vault ~/Documents/Vault` |
 
 ### Configuration
 
@@ -158,7 +169,7 @@ The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the 
 - **Obsidian Sync:** enable *Sync all other types* in the sync settings — plain JSON files are not synced by default, and `_brainstem/state.json` needs to travel.
 - **Syncthing / git / Dropbox:** nothing to configure; they sync everything already.
 - Run brainstem-mcp on **one machine at a time**. Two instances writing to the same synced vault concurrently is unsupported (the app logs a warning if it detects another live instance, but doesn't prevent it).
-- The in-memory index self-heals: a background sweep (`VAULT_RECONCILE_MS` in `.env`, default 5 minutes; `0` disables it, otherwise at least 10 seconds) re-reads any note whose size or modified time drifted from what the index has, and also runs whenever the filesystem watcher itself reports an error (never dropped: at most one pass per 30 seconds, with a trailing pass for a burst) — recovering from watcher events an OS-level queue silently dropped (e.g. thousands of files rewritten in one minute by another tool). A note is dropped from the index only after its absence is confirmed on disk, so a note written while the sweep runs is never lost. `./brainstem status`, `/health` (`vault.reconciledAt`) and `brainstem_ping` (`index.reconciledAt`) show when the index was last checked. `brainstem_ping` also shows the index's size beside its budget (`index.bytes`, `index.budgetBytes`, `index.overBudget`): the budget is a warning line (one log line when crossed, a warning in `./brainstem status`, `vault.indexOverBudget` in `/health`; nothing is evicted), and the process holds roughly twice `index.bytes` of heap for it — about 3.5 KB of index per long note.
+- The in-memory index self-heals: a background sweep (`VAULT_RECONCILE_MS` in `.env`, default 5 minutes; `0` disables it, otherwise at least 10 seconds) re-reads any note whose size or modified time drifted from what the index has, and also runs whenever the filesystem watcher itself reports an error (never dropped: at most one pass per 30 seconds, with a trailing pass for a burst) — recovering from watcher events an OS-level queue silently dropped (e.g. thousands of files rewritten in one minute by another tool). A note is dropped from the index only after its absence is confirmed on disk, so a note written while the sweep runs is never lost. `./brainstem status`, `/health` (`vault.reconciledAt`) and `brainstem_ping` (`index.reconciledAt`) show when the index was last checked. `brainstem_ping` also shows the index's size beside its budget (`index.bytes`, `index.budgetBytes`, `index.overBudget`): the budget is a warning line (one log line when crossed, a warning in `./brainstem status`, `vault.indexOverBudget` in `/health`; nothing is evicted), and the process holds roughly twice `index.bytes` of heap for it — about 3.5 KB of index per long note. On stdio (see above), where the index builds in the background instead of blocking the connection, `brainstem_ping`'s `index.building`/`index.indexed`/`index.total` show how far that build has gotten.
 
 ## Security model
 

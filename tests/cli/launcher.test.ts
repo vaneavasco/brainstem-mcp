@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -103,6 +104,80 @@ describe.skipIf(process.platform === 'win32')('./brainstem launcher (bash)', () 
     expect(stderr).toContain('Node.js 24 is required');
   });
 });
+
+describe.skipIf(process.platform === 'win32')(
+  'commands that need only Node skip the Docker check',
+  () => {
+    /** A PATH containing symlinks to `node` and the handful of coreutils the launcher's own
+     *  prelude needs (`dirname`, for `SCRIPT_DIR`) but nothing else — in particular no `docker` —
+     *  without touching the real PATH or requiring Docker to actually be absent on this machine. */
+    function nodeOnlyPath(): string {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'brainstem-node-only-'));
+      for (const bin of ['node', 'dirname']) {
+        const real = execFileSync('which', [bin]).toString().trim();
+        symlinkSync(real, path.join(dir, bin));
+      }
+      return dir;
+    }
+
+    it('--version never reaches the Docker check', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        const { code, stdout, stderr } = await run(resolveBash(), ['./brainstem', '--version'], {
+          env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' },
+        });
+        expect(code, stderr).toBe(0);
+        expect(stdout.trim().length).toBeGreaterThan(0);
+        expect(stderr).not.toContain('Docker');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('help, -h and no-args never reach the Docker check', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        for (const args of [['help'], ['-h'], []]) {
+          const { code, stdout, stderr } = await run(resolveBash(), ['./brainstem', ...args], {
+            env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' },
+          });
+          expect(code, `${args.join(' ')} — ${stderr}`).toBe(0);
+          expect(stdout).toContain('Recommended flow');
+          expect(stderr).not.toContain('Docker');
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('stdio never reaches the Docker check: it fails on the vault config instead', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        const { code, stderr } = await run(resolveBash(), ['./brainstem', 'stdio'], {
+          env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1', VAULT_PATH: '' },
+        });
+        expect(code).toBe(1);
+        expect(stderr).not.toContain('Docker is required');
+        expect(stderr).toContain('VAULT_PATH');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('every other command still requires Docker', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        const { code, stderr } = await run(resolveBash(), ['./brainstem', 'status'], {
+          env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' },
+        });
+        expect(code).toBe(1);
+        expect(stderr).toContain('Docker is required');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+  },
+);
 
 describe('brainstem.cmd launcher (batch)', () => {
   it('is saved with CRLF endings and points at the TS entrypoint', async () => {

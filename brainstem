@@ -21,10 +21,19 @@ if [ "$major" -lt 24 ]; then
   echo "Node.js $major found; version 24 or newer is required." >&2
   exit 1
 fi
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is required. Install Docker Desktop (https://docs.docker.com/desktop/) or Docker Engine + Compose v2." >&2
-  exit 1
-fi
+# stdio (Claude Code/Desktop start the server themselves), --help/-h/help and --version/-V need
+# only Node — no Docker, no tunnel, no OAuth. Every other command still requires Docker.
+first_arg="${1:-}"
+case "$first_arg" in
+  stdio|--help|-h|help|--version|-V|"")
+    ;;
+  *)
+    if ! command -v docker >/dev/null 2>&1; then
+      echo "Docker is required. Install Docker Desktop (https://docs.docker.com/desktop/) or Docker Engine + Compose v2." >&2
+      exit 1
+    fi
+    ;;
+esac
 # Fresh iff node_modules/.package-lock.json exists and is not older than package-lock.json
 # (a missing marker/dir makes statSync throw, caught as -1, so this also covers a fresh
 # checkout with no node_modules at all). The check is a byte-identical `node -e` one-liner
@@ -35,10 +44,13 @@ if [ "${BRAINSTEM_SKIP_INSTALL:-}" != "1" ]; then
     # node_modules/.bin/vitest present ⇒ this is a developer checkout with
     # devDependencies installed; `npm ci --omit=dev` would delete every one of
     # them. Install the full tree there and the runtime-only tree everywhere else.
+    # `>&2`: on the stdio path, stdout carries the MCP protocol and nothing else — npm's own
+    # (non-error) output must never reach it, so it is redirected to stderr like every other
+    # line this launcher prints itself.
     if [ -e node_modules/.bin/vitest ]; then
-      npm ci --no-audit --no-fund --loglevel=error
+      npm ci --no-audit --no-fund --loglevel=error >&2
     else
-      npm ci --omit=dev --no-audit --no-fund --loglevel=error
+      npm ci --omit=dev --no-audit --no-fund --loglevel=error >&2
     fi
   fi
 fi
