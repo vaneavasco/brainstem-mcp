@@ -65,7 +65,11 @@ Each phase is shippable on its own and ends with `lint`, `typecheck`, `npm test`
 - The HTTP server keeps its blocking boot in this phase (its health check means "ready to answer anything"); moving it over is a separate, small decision once stdio has shown the gate works.
 - Tests, with an adapter whose reads are slowed by injection: `initialize` and `tools/list` answer in under a second; `ping` says building and counts; `vault_read` works; `vault_query` waits and then answers the full count; with a tiny wait the error names the progress; a write is not applied before the index is ready; after the fill a change made during it is visible.
 
-### Phase 3 — two processes on one vault, stated honestly; a read-only mode
+### Phase 3 — two processes on one vault, stated honestly; a read-only mode; setup without Docker
+
+- **Giving the vault path, in each way in.** Desktop: the install form's folder picker. Claude Code: `./brainstem stdio --vault <path>` or `VAULT_PATH` in `.env`. HTTP: `./brainstem setup`, as today. `setup` gains a **local mode** (asked first: "How will Claude reach this vault? locally on this machine / from claude.ai through a tunnel"): it asks only for the vault folder, writes `.env` without a secret or tunnel settings, needs no Docker, and prints the ready-to-paste `claude mcp add brainstem -- <abs path>/brainstem stdio` line.
+- **The path is validated at start**, with the validation `setup` and `status` already share (exists, is a folder, is writable, is not a system location): an unusable folder is one clear line on stderr and exit 1, never a server that half works. In Desktop that line lands in the extension's log.
+- **One vault per server, stated.** A Desktop install is one vault; two vaults in Claude Code are two entries with two names (`claude mcp add brainstem-work -- … --vault …`). Serving several vaults from one process is another project.
 
 - **`--read-only` (env `VAULT_READ_ONLY=true`)**: the server registers only the tools whose annotations say `readOnlyHint: true` (17 of 32 today), decided from the annotations so it cannot drift from the tool list; a test asserts that no registered tool in this mode can change a file. It is the right default for someone who only wants to ask questions, and the safety net for a vault that is synced between people. It applies to both ways in.
 
@@ -95,6 +99,7 @@ What installing it looks like, which is the point of the phase: download `brains
 ### Phase 6 — three operating systems
 
 - CI matrix `ubuntu | macos | windows` for unit tests (Docker smoke stays on Linux). Expected trouble, to be found by tests rather than by users: backslashes reaching the path policy, case-insensitive file systems (two notes that differ only by case; near-miss suggestions), atomic rename over an open file on Windows, watcher behaviour (FSEvents, ReadDirectoryChangesW), `\r\n` in notes, long paths.
+- Paths as people really have them: spaces and non-ASCII letters (`C:\\Users\\Ana Maria\\Documents\\Vault`), a vault inside a synced folder (iCloud Drive, OneDrive, Dropbox) whose files may be placeholders fetched on first read, which makes the first index build slow or partial: tested where CI can, documented where it cannot.
 - Nothing in the security invariants may weaken to make a platform pass; a platform that cannot hold one is listed as unsupported.
 
 ### Phase 7 — proof with readers
