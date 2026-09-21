@@ -14,7 +14,16 @@ export interface UpDeps {
    * `src/cli/image-tag.ts`.
    */
   imageTag(): Promise<string | null>;
+  /**
+   * The hostname the quick tunnel itself reports (its URL file, which it removes before every
+   * start), or `null` while it has none. Optional: without it `up` falls back to two agreeing
+   * health polls, which a still-healthy app on the previous hostname can satisfy.
+   */
+  tunnelUrl?(): Promise<string | null>;
 }
+
+/** `https://host/` and `https://host` are the same place. */
+const sameUrl = (a: string, b: string): boolean => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
 
 /** Tag compose uses for a locally built image (`compose.yaml` default). */
 export const LOCAL_IMAGE_TAG = 'dev';
@@ -137,7 +146,13 @@ export async function runUp(args: UpArgs, deps: UpDeps): Promise<number> {
         await deps.compose.run(['logs', '--tail', '20', 'tunnel', 'app']);
         return 1;
       }
-      const settled = again.publicUrl === health.publicUrl;
+      // Two polls agreeing is not enough: when this `up` recreated the tunnel, the app stays
+      // healthy on the PREVIOUS hostname for the seconds the new tunnel needs to get one. What
+      // the app serves must also be what the tunnel itself says it has.
+      const current = deps.tunnelUrl ? await deps.tunnelUrl() : undefined;
+      const matchesTunnel =
+        current === undefined || (current !== null && sameUrl(current, again.publicUrl));
+      const settled = again.publicUrl === health.publicUrl && matchesTunnel;
       health = again;
       if (settled) break;
     }

@@ -24,6 +24,7 @@ import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
 import { resolveImageTag } from './image-tag.ts';
 import { createSystemProbe } from './system.ts';
+import { tunnelUrlReader } from './tunnel-url.ts';
 import type { VaultPathContext } from './vault-path.ts';
 
 const NON_INTERACTIVE_MESSAGE =
@@ -246,6 +247,7 @@ export function buildProgram(
                   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
                   localPort: localPortOf(env),
                   imageTag: () => resolveImageTag(createSystemProbe().exec, repoDir),
+                  tunnelUrl: tunnelUrlReader(env),
                 },
               );
             },
@@ -316,6 +318,7 @@ export function buildProgram(
             sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
             localPort: localPortOf(env),
             imageTag: () => resolveImageTag(createSystemProbe().exec, repoDir),
+            tunnelUrl: tunnelUrlReader(env),
           },
         );
       });
@@ -482,6 +485,7 @@ export function buildProgram(
                   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
                   localPort: localPortOf(env),
                   imageTag: () => resolveImageTag(createSystemProbe().exec, repoDir),
+                  tunnelUrl: tunnelUrlReader(env),
                 },
               );
             },

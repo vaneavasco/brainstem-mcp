@@ -129,6 +129,43 @@ describe('runUp', () => {
     expect(sleeps).toContain(3_000);
   });
 
+  it('does not settle on a URL the tunnel itself no longer has', async () => {
+    // Seen for real: the tunnel was recreated by this very `up`, the app was still healthy on
+    // the PREVIOUS hostname, two polls three seconds apart agreed on it, and the owner was handed
+    // a dead connector URL. The tunnel writes its hostname to a file; health must match it.
+    const compose = new FakeCompose();
+    const lines: string[] = [];
+    let call = 0;
+    const fetchImpl: typeof fetch = (async () => {
+      call++;
+      const url = call <= 3 ? 'https://old.trycloudflare.com' : 'https://new.trycloudflare.com';
+      return new Response(
+        JSON.stringify({
+          status: 'ok',
+          publicUrl: url,
+          mcpUrl: `${url}/mcp`,
+          tunnelMode: 'quick',
+          vault: { notes: 0 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    let reads = 0;
+    const code = await runUp(
+      {},
+      upDeps(compose, {
+        print: (l) => lines.push(l),
+        fetchImpl,
+        sleep: async () => {},
+        // the file is removed before the new tunnel starts, then holds the new hostname
+        tunnelUrl: async () => (++reads === 1 ? null : 'https://new.trycloudflare.com'),
+      }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('https://new.trycloudflare.com/mcp');
+    expect(lines.join('\n')).not.toContain('https://old.trycloudflare.com');
+  });
+
   it('without a tunnel skips the profile and does not warn about rotation', async () => {
     const compose = new FakeCompose();
     const lines: string[] = [];
