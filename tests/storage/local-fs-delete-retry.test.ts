@@ -27,7 +27,11 @@ let root: string;
 let vault: LocalFSAdapter;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-vault-retry-'));
+  // Realpath'd up front so `root` (used below to build the mocked rename's expected `from`
+  // argument) matches `LocalFSAdapter`'s own internal `this.root` (which is `await
+  // fs.realpath(rootDir)`, not `rootDir` itself) exactly — on Windows CI, `os.tmpdir()` can hand
+  // back a short (8.3) name that realpath resolves to a differently-spelled long form.
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-vault-retry-')));
   vault = await LocalFSAdapter.create(root, { ripgrepPath: null });
 });
 

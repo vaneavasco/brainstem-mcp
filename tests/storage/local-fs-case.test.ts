@@ -92,7 +92,13 @@ let root: string;
 let vault: LocalFSAdapter;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-vault-case-'));
+  // `LocalFSAdapter.create` stores `await fs.realpath(rootDir)`, not `rootDir` itself — on
+  // Windows CI, `os.tmpdir()` can hand back a short (8.3) name (`RUNNER~1`) that `fs.realpath`
+  // resolves to the long form, a DIFFERENT string for the same directory. The fake below computes
+  // `path.relative(root, …)` against whatever `root` this closure captured, so it must match the
+  // adapter's own `this.root` exactly, or every probe looks like it walked outside the vault and
+  // the fake's harmless fallback (return the path unchanged) silently defeats the whole test.
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-vault-case-')));
   vault = await LocalFSAdapter.create(root, {
     ripgrepPath: null,
     caseInsensitive: true,
@@ -237,13 +243,19 @@ describe('LocalFSAdapter on a filesystem faked as case-insensitive', () => {
 });
 
 describe('LocalFSAdapter.create case detection', () => {
-  it('a real (case-sensitive) tmp directory on this machine is detected as case-sensitive', async () => {
-    const sensitiveRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-vault-detect-'));
+  it("a fresh tmp directory on this machine is detected honestly — this platform's real default, not a hardcoded guess", async () => {
+    const detectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-vault-detect-'));
     try {
-      const detected = await LocalFSAdapter.create(sensitiveRoot, { ripgrepPath: null });
-      expect(detected.caseInsensitive).toBe(false);
+      const detected = await LocalFSAdapter.create(detectRoot, { ripgrepPath: null });
+      // The whole point of detection is not needing this per platform — but there is no other
+      // way, on CI, to check the checker: this is what every runner has reliably proven so far
+      // (Windows/NTFS and macOS/APFS fold case by default; Linux/ext4 and tmpfs do not), and it
+      // is the same fallback `detectCaseInsensitive` itself uses when the stat-based probe can't
+      // decide, so a runner where this ever disagrees is exactly the case worth seeing fail.
+      const platformDefault = process.platform === 'win32' || process.platform === 'darwin';
+      expect(detected.caseInsensitive).toBe(platformDefault);
     } finally {
-      await fs.rm(sensitiveRoot, { recursive: true, force: true });
+      await fs.rm(detectRoot, { recursive: true, force: true });
     }
   });
 });
