@@ -342,12 +342,12 @@ describe('vault_move / vault_delete', () => {
     expect(h.runtime.graph.resolve('att/img.png', 'uses.md').status).toBe('resolved');
 
     const one = await h.call('vault_delete', { path: 'att/img.png', confirm: true });
-    expect(one.isError).toBeFalsy();
+    expect(one.isError, text(one)).toBeFalsy();
     expect([...h.runtime.index.assets()]).not.toContain('att/img.png');
     expect(h.runtime.graph.resolve('att/img.png', 'uses.md').status).toBe('unresolved');
 
     const folder = await h.call('vault_delete', { path: 'more', confirm: true });
-    expect(folder.isError).toBeFalsy();
+    expect(folder.isError, text(folder)).toBeFalsy();
     expect([...h.runtime.index.assets()]).not.toContain('more/deep/img2.png');
   });
 

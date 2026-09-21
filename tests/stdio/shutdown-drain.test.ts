@@ -156,24 +156,34 @@ describe('stdio shutdown waits for the calls already running', () => {
     expect(answer).toContain('SHUTTING_DOWN');
   }, 30_000);
 
-  it('SIGTERM right after a burst of writes leaves no note half-written', async () => {
-    const s = await start();
-    burst(s.child);
-    // the calls are in the pipe, not necessarily read yet: whatever was started must finish
-    await until(() => s.stdout().includes('"id":100'));
-    s.child.kill('SIGTERM');
-    expect(await s.exited).toEqual({ code: 0, signal: null });
-    const dir = path.join(s.root, 'notes');
-    for (const name of await fs.readdir(dir)) {
-      expect(name).toMatch(/^n\d+\.md$/); // no temp file left behind
-      expect(await fs.readFile(path.join(dir, name), 'utf8')).toMatch(/^# n\d+\n$/);
-    }
-  }, 30_000);
+  // Signals don't exist on Windows the way this test needs them to: SIGTERM terminates the
+  // process at once there instead of asking it to stop gracefully, so this would be testing
+  // Node's own default signal handling, not ours — the graceful stop on Windows is the client
+  // closing stdin, covered by "stdin ending right after a burst of writes…" above.
+  it.skipIf(process.platform === 'win32')(
+    'SIGTERM right after a burst of writes leaves no note half-written',
+    async () => {
+      const s = await start();
+      burst(s.child);
+      // the calls are in the pipe, not necessarily read yet: whatever was started must finish
+      await until(() => s.stdout().includes('"id":100'));
+      s.child.kill('SIGTERM');
+      expect(await s.exited).toEqual({ code: 0, signal: null });
+      const dir = path.join(s.root, 'notes');
+      for (const name of await fs.readdir(dir)) {
+        expect(name).toMatch(/^n\d+\.md$/); // no temp file left behind
+        expect(await fs.readFile(path.join(dir, name), 'utf8')).toMatch(/^# n\d+\n$/);
+      }
+    },
+    30_000,
+  );
 
   it('a broken stderr pipe does not turn a clean stop into a crash', async () => {
     const s = await start();
     s.child.stderr?.destroy();
-    s.child.kill('SIGTERM');
+    // Stdin ending (not SIGTERM) so this runs on every platform: the point is the broken stderr
+    // pipe, not which signal asks the server to stop.
+    s.child.stdin?.end();
     expect(await s.exited).toEqual({ code: 0, signal: null });
   }, 30_000);
 });

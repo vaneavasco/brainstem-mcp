@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { type Dirent, promises as fs, type Stats } from 'node:fs';
+import { type Dirent, promises as fs, realpath as realpathCallback, type Stats } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
@@ -60,12 +60,23 @@ import { assertExpectedHash } from './write-gate.ts';
 
 const execFileAsync = promisify(execFile);
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
+/** `fs.realpath.native` (not the JS-implemented `fs.promises.realpath`): on Windows and macOS it
+ *  asks the OS for the true on-disk spelling of a path instead of relying on a cached lookup, so
+ *  it is the one that can tell a caller-supplied case from the real one. */
+const defaultRealpathNative = promisify(realpathCallback.native);
 
 export interface LocalFSOptions {
   ripgrepPath?: string | null;
   watchPollMs?: number | null;
   /** Cap for `writeBinary`. Defaults to `MAX_BINARY_BYTES`; text writes are unaffected. */
   maxBinaryBytes?: number;
+  /** Forces whether the vault's filesystem folds letter case, instead of the one-time detection
+   *  `LocalFSAdapter.create` does by default. For tests only: it lets the case-mismatch check be
+   *  exercised on a case-sensitive CI runner (together with `realpathNative`). */
+  caseInsensitive?: boolean;
+  /** Replaces the `fs.realpath.native` call the case-mismatch check makes to learn a path's true
+   *  on-disk spelling. For tests only, together with `caseInsensitive: true`. */
+  realpathNative?: (absPath: string) => Promise<string>;
 }
 
 async function detectRipgrep(): Promise<string | null> {
@@ -75,6 +86,70 @@ async function detectRipgrep(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Flips every letter's case; `null` when `name` has no letter to flip (nothing to compare). */
+function flipCase(name: string): string | null {
+  if (!/[a-zA-Z]/.test(name)) return null;
+  const flipped = [...name]
+    .map((ch) => (ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase()))
+    .join('');
+  return flipped === name ? null : flipped;
+}
+
+/**
+ * Detects, once, and without writing anything (a read-only vault must stay read-only), whether
+ * the filesystem holding the vault folds letter case. Stats a case-flipped spelling of a name
+ * already known to exist and compares dev+ino with the original: the same file both times means
+ * the OS folded the case. Tries the vault root's own last segment first, then — a root name with
+ * no letter to flip, e.g. a hash or a number — the first directory entry that has one. Undecidable
+ * (no letter anywhere, or the stat failed for an unrelated reason) assumes case-insensitive on
+ * win32/darwin and case-sensitive elsewhere, the same default the real end-to-end proof (the
+ * macOS/Windows CI legs) then either confirms or corrects.
+ */
+async function detectCaseInsensitive(root: string): Promise<boolean> {
+  const probe = async (dir: string, name: string): Promise<boolean | null> => {
+    const flipped = flipCase(name);
+    if (flipped === null) return null;
+    try {
+      const [original, candidate] = await Promise.all([
+        fs.stat(path.join(dir, name)),
+        fs.stat(path.join(dir, flipped)),
+      ]);
+      return original.dev === candidate.dev && original.ino === candidate.ino;
+    } catch {
+      return null; // the flipped spelling doesn't exist (or another race) — not decidable this way
+    }
+  };
+  const rootResult = await probe(path.dirname(root), path.basename(root));
+  if (rootResult !== null) return rootResult;
+  try {
+    for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+      const result = await probe(root, entry.name);
+      if (result !== null) return result;
+    }
+  } catch {
+    // unreadable root — fall through to the platform default below
+  }
+  return process.platform === 'win32' || process.platform === 'darwin';
+}
+
+export type CaseComparison = 'exact' | 'case-only' | 'other';
+
+/**
+ * Compares a requested path spelling against what `fs.realpath.native` says is really on disk,
+ * after folding both through Unicode NFC — so a precomposed and a combining form of the very same
+ * name are never reported as a difference (macOS commonly stores the combining form, "e" +
+ * U+0301 rather than "é", regardless of which one the caller typed or the filesystem returns).
+ * What remains is either the exact same spelling ('exact'), a difference that disappears once
+ * both sides are lower-cased ('case-only'), or something else entirely ('other') — most likely a
+ * symlink resolving elsewhere, which the case check leaves alone, exactly as it does today.
+ */
+export function compareCaseSpelling(want: string, real: string): CaseComparison {
+  const wantNFC = want.normalize('NFC');
+  const realNFC = real.normalize('NFC');
+  if (wantNFC === realNFC) return 'exact';
+  return wantNFC.toLowerCase() === realNFC.toLowerCase() ? 'case-only' : 'other';
 }
 
 function requireFilePath(input: unknown): string {
@@ -88,6 +163,82 @@ function isEnoent(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && (error as { code?: string }).code === 'ENOENT'
   );
+}
+
+/** Windows can report any of these for a rename into (or over) a directory another process — the
+ *  file watcher, most often — still holds a handle inside: none of them mean the rename is wrong,
+ *  only that it needs a moment. Named platform-neutrally because nothing here is Windows-specific,
+ *  even though only Windows is expected to ever actually hit it. */
+function isRetryableRenameError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null ? (error as { code?: string }).code : undefined;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
+const RENAME_RETRY_ATTEMPTS = 5;
+const RENAME_RETRY_DELAY_MS = 40;
+
+/** `fs.rename`, retried with a short backoff on `isRetryableRenameError` — the same rename, tried
+ *  again instead of failing the caller's whole request over what is usually a held handle letting
+ *  go within milliseconds. Any other error, or the last attempt, is thrown as-is. */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= RENAME_RETRY_ATTEMPTS || !isRetryableRenameError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS * attempt));
+    }
+  }
+}
+
+/** Every regular file under `dir`, keyed by its path relative to `dir`, valued by its size — cheap
+ *  enough to call twice (source and copy) and specific enough to catch a copy that silently
+ *  dropped or truncated a file, without hashing every byte of a folder that may hold attachments. */
+async function collectFileSizes(dir: string, base = dir): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      for (const [rel, size] of await collectFileSizes(abs, base)) out.set(rel, size);
+    } else if (entry.isFile()) {
+      out.set(path.relative(base, abs), (await fs.stat(abs)).size);
+    }
+  }
+  return out;
+}
+
+/** True when every file under `fromDir` has a same-named, same-sized file under `toDir` — the
+ *  "verify" of "copy everything, verify, then remove": cheap, and enough to catch a copy that
+ *  didn't actually finish, without trusting `fs.cp` blindly. */
+async function verifyRecursiveCopy(fromDir: string, toDir: string): Promise<boolean> {
+  const [source, copy] = await Promise.all([collectFileSizes(fromDir), collectFileSizes(toDir)]);
+  if (source.size !== copy.size) return false;
+  for (const [rel, size] of source) {
+    if (copy.get(rel) !== size) return false;
+  }
+  return true;
+}
+
+/**
+ * Fallback for a folder rename that `renameWithRetry` still could not complete (a handle held
+ * open longer than the whole retry window): copies the tree instead of moving it, verifies the
+ * copy, and only then removes the original — never the other order, so a copy that turns out
+ * incomplete never costs the original data. Thrown errors leave the original untouched; a partial
+ * copy at `toAbs` is cleaned up before throwing.
+ */
+async function copyThenRemoveDir(fromAbs: string, toAbs: string): Promise<void> {
+  try {
+    await fs.cp(fromAbs, toAbs, { recursive: true, errorOnExist: true });
+    if (!(await verifyRecursiveCopy(fromAbs, toAbs))) {
+      throw new Error('copy could not be verified against the original');
+    }
+  } catch (error) {
+    await fs.rm(toAbs, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+  await fs.rm(fromAbs, { recursive: true, force: true });
 }
 
 /** True when any path segment starts with '.' — mirrors the dot-entry skip in list()'s walk, so
@@ -125,31 +276,43 @@ export class LocalFSAdapter implements StorageAdapter {
   ]);
 
   readonly root: string;
+  /** True when the filesystem holding the vault folds letter case (detected once at `create`, or
+   *  forced by `LocalFSOptions.caseInsensitive` for tests) — a vault path is exact on every
+   *  platform, so this gates the extra check that enforces it; zero cost when false. */
+  readonly caseInsensitive: boolean;
   private readonly rg: string | null;
   private readonly watchPollMs: number | null;
   private readonly maxBinaryBytes: number;
+  private readonly realpathNative: (absPath: string) => Promise<string>;
 
   private constructor(
     root: string,
     rg: string | null,
     watchPollMs: number | null,
     maxBinaryBytes: number,
+    caseInsensitive: boolean,
+    realpathNative: (absPath: string) => Promise<string>,
   ) {
     this.root = root;
     this.rg = rg;
     this.watchPollMs = watchPollMs;
     this.maxBinaryBytes = maxBinaryBytes;
+    this.caseInsensitive = caseInsensitive;
+    this.realpathNative = realpathNative;
   }
 
   static async create(rootDir: string, opts: LocalFSOptions = {}): Promise<LocalFSAdapter> {
     await fs.mkdir(rootDir, { recursive: true });
     const root = await fs.realpath(rootDir);
     const rg = opts.ripgrepPath === undefined ? await detectRipgrep() : opts.ripgrepPath;
+    const caseInsensitive = opts.caseInsensitive ?? (await detectCaseInsensitive(root));
     return new LocalFSAdapter(
       root,
       rg,
       opts.watchPollMs ?? null,
       opts.maxBinaryBytes ?? MAX_BINARY_BYTES,
+      caseInsensitive,
+      opts.realpathNative ?? defaultRealpathNative,
     );
   }
 
@@ -205,6 +368,66 @@ export class LocalFSAdapter implements StorageAdapter {
     }
   }
 
+  /**
+   * On a case-insensitive filesystem, resolves the true on-disk spelling of the deepest existing
+   * ancestor of `vaultPath` (which may be the full path itself) by asking `realpath.native` for
+   * it, trying shorter prefixes on ENOENT exactly as `assertInsideRoot` already does for
+   * containment — so `write`ing `Notes/x.md` when only `notes/` exists is caught here too, not
+   * just an outright collision, and the whole walk is driven by that one injectable call (what
+   * `tests/storage/local-fs-case.test.ts` fakes to exercise this on a case-sensitive CI runner).
+   * When the resolved spelling differs from what was asked only by letter case, returns the
+   * corrected vault-relative path: the real spelling for the matched prefix, the caller's own
+   * spelling for whatever tail does not exist yet. `null` covers every case this check leaves
+   * alone: a case-sensitive filesystem, an exact match, a path that doesn't exist at all yet
+   * (nothing to compare), or a difference that isn't case (a symlink, most likely, or any other
+   * failure to resolve) — accepted exactly as today.
+   */
+  private async findCaseMismatch(vaultPath: string): Promise<string | null> {
+    if (!this.caseInsensitive || vaultPath === '') return null;
+    const segments = vaultPath.split('/');
+    let probeLen = segments.length;
+    let real: string | null = null;
+    let probeAbs = '';
+    for (; probeLen > 0; probeLen -= 1) {
+      probeAbs = path.join(this.root, ...segments.slice(0, probeLen));
+      try {
+        real = await this.realpathNative(probeAbs);
+        break;
+      } catch (error) {
+        if (!isEnoent(error)) return null; // not this check's job — the real operation will say why
+      }
+    }
+    if (real === null) return null; // no ancestor of vaultPath exists at all — nothing to compare
+    if (compareCaseSpelling(probeAbs, real) !== 'case-only') return null;
+    const tail = segments.slice(probeLen);
+    const realRel = this.rel(real);
+    return tail.length === 0 ? realRel : `${realRel}/${tail.join('/')}`;
+  }
+
+  /** `NOT_FOUND`, worded exactly like a plain missing file — for an operation that only reads or
+   *  identifies an existing path (near-miss suggestions then apply the same as for any other
+   *  NOT_FOUND). Callers only invoke this once they already know something answers to `vaultPath`
+   *  under case-insensitive resolution (a prior stat succeeded), so a mismatch here is always the
+   *  whole path, never just an ancestor. */
+  private async assertNoCaseNearMiss(vaultPath: string, notFoundMessage: string): Promise<void> {
+    if ((await this.findCaseMismatch(vaultPath)) !== null) {
+      throw new VaultError('NOT_FOUND', notFoundMessage);
+    }
+  }
+
+  /** `CONFLICT` for an operation about to create or overwrite `vaultPath` — refuses a write that
+   *  would land on an existing file, or inside an existing folder, spelled with different case
+   *  than the index already knows it by. */
+  private async assertNoCaseConflict(vaultPath: string): Promise<void> {
+    const mismatch = await this.findCaseMismatch(vaultPath);
+    if (mismatch !== null) {
+      throw new VaultError(
+        'CONFLICT',
+        `${vaultPath} differs only by letter case from the existing "${mismatch}": use that path.`,
+      );
+    }
+  }
+
   // ---- read ---------------------------------------------------------------
 
   async read(inputPath: string): Promise<Note> {
@@ -213,6 +436,7 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(abs);
     const stat = await this.statOrNull(abs);
     if (!stat) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+    await this.assertNoCaseNearMiss(p, `${p} does not exist.`);
     if (stat.isDirectory()) throw new VaultError('INVALID_INPUT', `${p} is a folder, not a file.`);
     // A FIFO, a socket or a device has no end to read up to: readFile would hold a thread of
     // the pool for ever (measured: two such reads starved every other file read in the process).
@@ -297,10 +521,13 @@ export class LocalFSAdapter implements StorageAdapter {
 
   /** True when a file (not a folder) is at the path: a stat, no read. */
   async exists(inputPath: string): Promise<boolean> {
-    const abs = this.abs(requireFilePath(inputPath));
+    const p = requireFilePath(inputPath);
+    const abs = this.abs(p);
     await this.assertInsideRoot(abs); // the same containment check every other path goes through
     const stat = await this.statOrNull(abs);
-    return stat?.isFile() === true;
+    if (stat?.isFile() !== true) return false;
+    if ((await this.findCaseMismatch(p)) !== null) return false; // case-only near-miss: not this file
+    return true;
   }
 
   /**
@@ -316,6 +543,7 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(abs);
     const stat = await this.statOrNull(abs);
     if (!stat?.isFile()) return null; // a folder, or a FIFO/socket/device that would never end
+    if ((await this.findCaseMismatch(p)) !== null) return null; // case-only near-miss: not this file
     const bytes = await fs.readFile(abs);
     return this.hashForBytes(p, bytes);
   }
@@ -348,6 +576,7 @@ export class LocalFSAdapter implements StorageAdapter {
 
   async write(inputPath: string, content: string, opts: WriteOpts = {}): Promise<Note> {
     const p = requireFilePath(inputPath);
+    await this.assertNoCaseConflict(p);
     assertWithinSize(Buffer.byteLength(content, 'utf8'), 'Content');
     if (opts.expectedHash !== undefined) {
       assertExpectedHash(p, await this.hashOf(p), opts.expectedHash);
@@ -380,6 +609,7 @@ export class LocalFSAdapter implements StorageAdapter {
     opts: MutateOpts = {},
   ): Promise<string> {
     const p = requireFilePath(inputPath);
+    await this.assertNoCaseConflict(p);
     if (!BINARY_MIME_ALLOWLIST.has(mime.toLowerCase())) {
       throw new VaultError(
         'INVALID_INPUT',
@@ -426,6 +656,9 @@ export class LocalFSAdapter implements StorageAdapter {
 
   async append(inputPath: string, content: string, opts: MutateOpts = {}): Promise<Note> {
     const p = requireFilePath(inputPath);
+    // Must run before the read below: read() throwing NOT_FOUND for a case-only near-miss would
+    // otherwise be swallowed right here as "no existing content" and silently create a second file.
+    await this.assertNoCaseConflict(p);
     let existing = '';
     let currentHash: string | null = null;
     try {
@@ -493,6 +726,7 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(baseAbs);
     const baseStat = await this.statOrNull(baseAbs);
     if (!baseStat) throw new VaultError('NOT_FOUND', `${base || '/'} does not exist.`);
+    await this.assertNoCaseNearMiss(base, `${base || '/'} does not exist.`);
     if (!baseStat.isDirectory())
       throw new VaultError('INVALID_INPUT', `${base} is a file, not a folder.`);
 
@@ -543,6 +777,8 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(toAbs);
     const fromStat = await this.statOrNull(fromAbs);
     if (!fromStat) throw new VaultError('NOT_FOUND', `${from} does not exist.`);
+    await this.assertNoCaseNearMiss(from, `${from} does not exist.`);
+    await this.assertNoCaseConflict(to);
     if (await this.statOrNull(toAbs))
       throw new VaultError('ALREADY_EXISTS', `${to} already exists.`);
     if (opts.expectedHash !== undefined) {
@@ -556,7 +792,7 @@ export class LocalFSAdapter implements StorageAdapter {
     }
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     try {
-      await fs.rename(fromAbs, toAbs);
+      await renameWithRetry(fromAbs, toAbs);
     } catch {
       throw new VaultError('IO', `Failed to move ${from} to ${to}.`);
     }
@@ -574,6 +810,7 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(fromAbs);
     const fromStat = await this.statOrNull(fromAbs);
     if (!fromStat) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+    await this.assertNoCaseNearMiss(p, `${p} does not exist.`);
     if (opts.expectedHash !== undefined) {
       if (fromStat.isDirectory()) {
         throw new VaultError(
@@ -600,9 +837,20 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(toAbs);
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     try {
-      await fs.rename(fromAbs, toAbs);
-    } catch {
-      throw new VaultError('IO', `Failed to move ${p} to trash.`);
+      await renameWithRetry(fromAbs, toAbs);
+    } catch (error) {
+      // A folder rename can still lose to a handle held open past the whole retry window (the
+      // file watcher, most often, on Windows): fall back to copying the tree instead of moving
+      // it, rather than failing the delete outright. A file has no such fallback — and needs
+      // none, a single rename is not expected to be held open this long.
+      if (!fromStat.isDirectory() || !isRetryableRenameError(error)) {
+        throw new VaultError('IO', `Failed to move ${p} to trash.`);
+      }
+      try {
+        await copyThenRemoveDir(fromAbs, toAbs);
+      } catch {
+        throw new VaultError('IO', `Failed to move ${p} to trash.`);
+      }
     }
   }
 
@@ -674,6 +922,7 @@ export class LocalFSAdapter implements StorageAdapter {
     await this.assertInsideRoot(prefixAbs);
     const st = await this.statOrNull(prefixAbs);
     if (!st) throw new VaultError('NOT_FOUND', `${prefix || '/'} does not exist.`);
+    await this.assertNoCaseNearMiss(prefix, `${prefix || '/'} does not exist.`);
     if (!st.isDirectory())
       throw new VaultError('INVALID_INPUT', `${prefix} is a file, not a folder.`);
 
