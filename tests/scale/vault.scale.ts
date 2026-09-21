@@ -34,10 +34,11 @@ const BODY_CHARS = 3_000;
 
 /** Warm-boot ceiling for the machine-local index cache (src/storage/local-cache.ts): a client
  *  that starts the stdio server per session must be ready in a few seconds even on this vault.
- *  Measured on the machine this was developed on: cold ~19.7 s (including a ~0.4 s cache save),
- *  warm ~3.5 s (about 5.6x faster) — CI runners run several times slower than a workstation, so
- *  5 s here is generous rather than tight. */
-const WARM_BOOT_MAX_MS = 5_000;
+ *  Measured where this was developed: cold ~20 s (including a ~0.4 s cache save), warm ~3.7 s.
+ *  A shared CI runner measured 5.6 s warm, so an absolute figure says more about the runner
+ *  than about the cache: this ceiling only catches a warm boot that is grossly slow. The ratio
+ *  below is the assertion that carries the meaning. */
+const WARM_BOOT_MAX_MS = 15_000;
 /** Warm must be meaningfully faster than cold, not merely "not slower" — a third of cold (the
  *  measured ratio was 5.6x) is loose enough to survive a slow CI runner while still catching a
  *  cache that silently stopped helping. */
