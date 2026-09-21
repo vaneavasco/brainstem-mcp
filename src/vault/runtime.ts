@@ -3,6 +3,7 @@ import type { McpRequestContext } from '@modelcontextprotocol/server';
 import {
   DEFAULT_RECONCILE_MIN_GAP_MS,
   DEFAULT_RECONCILE_MS,
+  INDEX_WAIT_MS,
   MAX_BINARY_BYTES,
   MAX_INDEX_BYTES,
 } from '../storage/limits.ts';
@@ -29,6 +30,16 @@ export const DEFAULT_VAULT_SETTINGS: VaultSettings = {
   requiredFrontmatter: [],
 };
 
+/** Progress of a (possibly still in-flight) index build. `done`/`total` count markdown notes.
+ *  `error: true` means the background fill threw; the index is not, and will not become, ready —
+ *  a fresh runtime is the only way out. Omitted (not `false`) when nothing has failed. */
+export interface IndexState {
+  ready: boolean;
+  done: number;
+  total: number;
+  error?: boolean;
+}
+
 export interface VaultRuntime {
   adapter: StorageAdapter;
   index: FrontmatterIndex;
@@ -47,6 +58,19 @@ export interface VaultRuntime {
    * the adapter deliberately refuses to touch.
    */
   paths: { vaultRoot: string; stateDir: string };
+  /** Current index-build progress. Without `deferIndex` this is always `{ ready: true, done,
+   *  total }` (the index was built before `createLocalRuntime` returned). */
+  indexState(): IndexState;
+  /**
+   * Settles once the background fill (and its one settling reconcile — see `deferIndex`) has
+   * finished, successfully or not; check `indexState().error` to tell which. Never rejects, so it
+   * is safe to leave un-awaited without risking an unhandled rejection. Already resolved when
+   * `deferIndex` was not requested.
+   */
+  indexReady: Promise<void>;
+  /** How long a gated tool call (see `registerVaultTools`) waits for `indexReady` before giving
+   *  up and answering the "still building" error. Defaults to `INDEX_WAIT_MS`. */
+  indexWaitMs: number;
   close(): Promise<void>;
 }
 
@@ -85,6 +109,24 @@ export interface LocalRuntimeOptions {
   /** Minimum distance between reconciles triggered by watcher errors; defaults to
    *  DEFAULT_RECONCILE_MIN_GAP_MS. Tests shorten it. */
   reconcileMinGapMs?: number;
+  /**
+   * Return at once with an empty index that fills in the background (`indexState()`/
+   * `indexReady`), instead of blocking until the whole vault is read. For a client that starts
+   * the server per session (the stdio entrypoint) and cannot wait the tens of seconds a large
+   * vault's index build takes for `initialize`. The watcher and the background reconcile timer
+   * start only once the fill has finished (an event handled mid-fill could be overwritten by the
+   * fill's own, older read), followed by one reconcile pass to catch whatever changed on disk
+   * while the fill was running.
+   */
+  deferIndex?: boolean;
+  /** Called if a deferred fill throws (`indexState().error` becomes `true`). Gets the raw error
+   *  (unlike `onReconcileError`, nothing here is on a path that logs an absolute file path by
+   *  default) — callers decide whether and how to log it. Never left unhandled either way:
+   *  `indexReady` itself never rejects. */
+  onIndexError?: (error: unknown) => void;
+  /** Overrides `INDEX_WAIT_MS` for this runtime (see `VaultRuntime.indexWaitMs`); tests shorten it
+   *  to see the "still building" error without a real 45 s wait. */
+  indexWaitMs?: number;
 }
 
 export function mergeSettings(overrides: LocalRuntimeOptions['settings']): VaultSettings {
@@ -100,8 +142,16 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     opts.vaultPath,
     { ripgrepPath: opts.ripgrepPath, watchPollMs: opts.watchPollMs ?? null, maxBinaryBytes },
   );
-  const index = await FrontmatterIndex.build(adapter);
-  index.watchBudget(opts.indexBudgetBytes ?? MAX_INDEX_BYTES, opts.onIndexOverBudget);
+
+  const deferIndex = opts.deferIndex ?? false;
+  const index = deferIndex ? FrontmatterIndex.empty() : await FrontmatterIndex.build(adapter);
+
+  // Only meaningful while deferIndex is filling; indexState() ignores them once built (it reports
+  // index.size() live instead, so it stays right even as the watcher adds notes afterward).
+  let fillDone = 0;
+  let fillTotal = 0;
+  let built = !deferIndex;
+  let buildFailed = false;
 
   // One reconcile at a time. The timer simply skips a tick while a pass runs (the next tick is
   // soon enough). A watcher error is different: it means events were lost, so it is never
@@ -115,9 +165,11 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   let trailing: ReturnType<typeof setTimeout> | null = null;
   const minGapMs = opts.reconcileMinGapMs ?? DEFAULT_RECONCILE_MIN_GAP_MS;
 
-  const startPass = (): void => {
+  /** Returns the pass's own promise (not just fire-and-forget) so a caller — the post-fill
+   *  settling pass below — can await exactly this one pass finishing. */
+  const startPass = (): Promise<void> => {
     lastPass = Date.now();
-    inFlight = index
+    const pass = index
       .reconcile(adapter)
       .then(
         (result) => {
@@ -144,6 +196,8 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
           requestPass();
         }
       });
+    inFlight = pass;
+    return pass;
   };
 
   /** A trigger that must not be lost, answered as soon as the gap allows. */
@@ -169,11 +223,45 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     if (!closed && !inFlight) startPass();
   };
 
-  const detach: Unsubscribe = index.attach(adapter, requestPass);
-
   const reconcileMs = opts.reconcileMs ?? DEFAULT_RECONCILE_MS;
-  const reconcileTimer = reconcileMs > 0 ? setInterval(onTick, reconcileMs) : null;
-  reconcileTimer?.unref();
+  let detach: Unsubscribe = () => {};
+  let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Starts watching for changes and the reconcile timer. Called once, either right away (the
+   *  usual, non-deferred boot) or — with `deferIndex` — only after the fill has finished, so an
+   *  event handled mid-fill can never be overwritten by the fill's own, older read of that file. */
+  const startWatching = (): void => {
+    index.watchBudget(opts.indexBudgetBytes ?? MAX_INDEX_BYTES, opts.onIndexOverBudget);
+    detach = index.attach(adapter, requestPass);
+    reconcileTimer = reconcileMs > 0 ? setInterval(onTick, reconcileMs) : null;
+    reconcileTimer?.unref();
+  };
+
+  let fillPromise: Promise<void>;
+  if (deferIndex) {
+    fillPromise = (async () => {
+      try {
+        await index.fill(adapter, (progress) => {
+          fillDone = progress.done;
+          fillTotal = progress.total;
+        });
+        if (closed) return; // close() ran mid-fill: never start a watcher behind its back
+        startWatching();
+        await startPass(); // the one settling pass: catches whatever changed on disk during the fill
+        built = true;
+      } catch (error) {
+        buildFailed = true;
+        try {
+          opts.onIndexError?.(error);
+        } catch {
+          /* a reporting callback must not turn this into an unhandled rejection */
+        }
+      }
+    })();
+  } else {
+    startWatching();
+    fillPromise = Promise.resolve();
+  }
 
   // adapter.root is the realpath'd vault root, so pre-image copies and the adapter always agree
   // on where a vault-relative path actually lives.
@@ -188,12 +276,25 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     gate: new WriteGate(),
     maxBinaryBytes,
     paths: { vaultRoot: adapter.root, stateDir },
+    indexState(): IndexState {
+      if (built) return { ready: true, done: index.size(), total: index.size() };
+      return {
+        ready: false,
+        done: fillDone,
+        total: fillTotal,
+        ...(buildFailed ? { error: true } : {}),
+      };
+    },
+    indexReady: fillPromise,
+    indexWaitMs: opts.indexWaitMs ?? INDEX_WAIT_MS,
     async close() {
       closed = true;
+      await fillPromise; // a fill in flight finishes (and, per its own check above, never starts
+      // the watcher afterwards) before tearing anything down
       if (reconcileTimer) clearInterval(reconcileTimer);
       if (trailing) clearTimeout(trailing);
       detach();
-      await inFlight; // a pass in flight finishes before the caller tears the vault down
+      await inFlight; // a reconcile pass in flight finishes before the caller tears the vault down
     },
   };
 }

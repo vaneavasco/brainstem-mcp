@@ -208,19 +208,45 @@ export class FrontmatterIndex {
     });
   }
 
-  static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
-    const index = new FrontmatterIndex();
+  /** An index with nothing in it yet — the starting point for a background `fill()` (see
+   *  `createLocalRuntime({ deferIndex: true })`), so a boot can answer at once and populate the
+   *  index while the first tool calls are already waiting on `indexReady`. */
+  static empty(): FrontmatterIndex {
+    return new FrontmatterIndex();
+  }
+
+  /**
+   * Lists the vault and reads every markdown note into this index, batching reads like `build()`.
+   * `onProgress` is called once before the first batch (`{ done: 0, total }`) and once after each
+   * batch, so a caller can report "N of M notes indexed" while a large vault is still filling.
+   * Safe to call on an index that already has entries (a reconcile does the equivalent lighter
+   * sweep instead); `build()` is exactly `empty()` followed by `fill()`.
+   */
+  async fill(
+    adapter: StorageAdapter,
+    onProgress?: (progress: { done: number; total: number }) => void,
+  ): Promise<void> {
     const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
     const mdPaths: string[] = [];
     for (const file of files) {
       if (isMarkdownPath(file.path)) mdPaths.push(file.path);
-      else index.addAsset(file.path);
+      else this.addAsset(file.path);
     }
+    const total = mdPaths.length;
+    let done = 0;
+    onProgress?.({ done, total });
     for (let i = 0; i < mdPaths.length; i += MAX_BATCH) {
       const chunk = mdPaths.slice(i, i + MAX_BATCH);
       const { notes } = await adapter.batchRead(chunk);
-      for (const note of notes) index.upsert(FrontmatterIndex.fromNote(note));
+      for (const note of notes) this.upsert(FrontmatterIndex.fromNote(note));
+      done += chunk.length;
+      onProgress?.({ done, total });
     }
+  }
+
+  static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
+    const index = FrontmatterIndex.empty();
+    await index.fill(adapter);
     return index;
   }
 

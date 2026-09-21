@@ -30,6 +30,9 @@ export async function startHarness(
   ripgrepPath: string | null = null,
   /** A vault seeded beforehand (the scale run); `close()` removes it like a fresh one. */
   existingRoot?: string,
+  /** Extra `createLocalRuntime` options (e.g. `deferIndex`, `createAdapter`, `indexWaitMs`) —
+   *  spread in after the harness's own defaults, so a test can override any of them too. */
+  runtimeOptions?: Partial<LocalRuntimeOptions>,
 ): Promise<Harness> {
   const root = existingRoot ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-tools-')));
   const runtime = await createLocalRuntime({
@@ -37,6 +40,7 @@ export async function startHarness(
     ripgrepPath,
     settings: overrides,
     stateDir: path.join(root, '_brainstem'),
+    ...runtimeOptions,
   });
   const config = loadConfig(baseEnv());
   const t = await createTestAuth(config, root);

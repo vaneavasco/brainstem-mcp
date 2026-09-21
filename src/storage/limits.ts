@@ -58,6 +58,13 @@ export const MAX_PATH_ARG_CHARS = 1_024;
 export const MAX_QUERY_FIELD_CHARS = 200;
 /** Background index reconcile interval (VAULT_RECONCILE_MS); 0 disables it. */
 export const DEFAULT_RECONCILE_MS = 300_000;
+/** How long a gated vault tool waits for a deferred index build (`createLocalRuntime({
+ *  deferIndex: true })`, used by the stdio entrypoint) before answering with a "still building"
+ *  error instead of running. 45 s: measured on a 37,700-note vault the build takes about 32 s, and
+ *  with 20 s a query that needed 11 more seconds was answered with an error; the MCP client SDK's
+ *  default request timeout is 60 s, so the wait must stay under that or the client gives up first
+ *  and learns nothing. Overridable per runtime (`LocalRuntimeOptions.indexWaitMs`) for tests. */
+export const INDEX_WAIT_MS = 45_000;
 /** Shortest allowed reconcile interval: each pass lists the whole vault. */
 export const MIN_RECONCILE_MS = 10_000;
 /** Minimum distance between reconciles triggered by watcher errors. */
