@@ -64,7 +64,7 @@ export const COMMANDS: readonly CommandInfo[] = [
   {
     name: 'setup',
     group: 'Configuration',
-    summary: 'Create or update .env (owner secret, vault path, tunnel mode)',
+    summary: 'Create or update .env: local (stdio) or Docker + tunnel with an owner secret',
     example: './brainstem setup --vault ~/Documents/Vault',
   },
   {

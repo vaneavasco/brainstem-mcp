@@ -9,9 +9,12 @@ where node >nul 2>nul || (echo Node.js 24 is required. Install: winget install O
 for /f "delims=" %%v in ('node -p "process.versions.node.split('.')[0]"') do set MAJOR=%%v
 if %MAJOR% LSS 24 (echo Node.js %MAJOR% found; version 24 or newer is required. 1>&2 & exit /b 1)
 rem stdio (Claude Code/Desktop start the server themselves), --help/-h/help and
-rem --version/-V need only Node -- no Docker, no tunnel, no OAuth. Every other
-rem command still requires Docker.
+rem --version/-V need only Node -- no Docker, no tunnel, no OAuth. setup also skips this
+rem check (it asks first how Claude will reach the vault; local mode needs no Docker either --
+rem the tunnel branch of setup itself checks, same message, src\cli\commands\setup.ts).
+rem Every other command still requires Docker.
 if /I "%~1"=="stdio" goto :after_docker_check
+if /I "%~1"=="setup" goto :after_docker_check
 if /I "%~1"=="--help" goto :after_docker_check
 if /I "%~1"=="-h" goto :after_docker_check
 if /I "%~1"=="help" goto :after_docker_check

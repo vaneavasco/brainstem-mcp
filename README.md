@@ -70,11 +70,13 @@ The owner secret lives in `.env`. Show it any time with:
 
 On your own machine, Claude Code and Claude Desktop can start the server themselves and talk to it over stdin/stdout — no Docker, no Cloudflare tunnel, no OAuth. The process runs as your own OS user, so it can do nothing to the vault that you couldn't already do yourself with a text editor; the same path policy, size limits and optimistic-concurrency checks protect it from the model either way.
 
+`./brainstem setup --mode local` asks only for your vault folder (no owner secret, no Docker, no tunnel question) and prints the exact line to run:
+
 ```bash
 claude mcp add brainstem -- /path/to/brainstem stdio
 ```
 
-`--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
+A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. Claude Desktop will use an installable bundle for this instead — coming soon. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
 
 ### Read-only mode
 
@@ -100,7 +102,7 @@ claude mcp add brainstem -- /path/to/brainstem stdio
 
 | Command | What it does | Example |
 |---|---|---|
-| `./brainstem setup` | Create or update `.env` (owner secret, vault path, tunnel mode) | `./brainstem setup --vault ~/Documents/Vault` |
+| `./brainstem setup` | Create or update `.env`: local (stdio) or Docker + tunnel with an owner secret | `./brainstem setup --vault ~/Documents/Vault` |
 | `./brainstem secret` | Show or rotate the owner secret | `./brainstem secret show` |
 | `./brainstem vault` | Show or switch the vault this instance works on | `./brainstem vault set ~/Documents/Work` |
 

@@ -22,10 +22,13 @@ if [ "$major" -lt 24 ]; then
   exit 1
 fi
 # stdio (Claude Code/Desktop start the server themselves), --help/-h/help and --version/-V need
-# only Node — no Docker, no tunnel, no OAuth. Every other command still requires Docker.
+# only Node — no Docker, no tunnel, no OAuth. `setup` also skips this check: it asks first how
+# Claude will reach the vault, and local mode needs no Docker either; the tunnel branch of
+# `setup` itself checks for Docker (same message, src/cli/commands/setup.ts). Every other
+# command still requires Docker.
 first_arg="${1:-}"
 case "$first_arg" in
-  stdio|--help|-h|help|--version|-V|"")
+  stdio|setup|--help|-h|help|--version|-V|"")
     ;;
   *)
     if ! command -v docker >/dev/null 2>&1; then

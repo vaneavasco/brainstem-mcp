@@ -11,7 +11,11 @@ export interface SetupIO {
     opts: { default?: string; validate?: (v: string) => Promise<string | true> },
   ): Promise<string>;
   confirm(q: string, def: boolean): Promise<boolean>;
-  select<T extends string>(q: string, choices: Array<{ value: T; name: string }>): Promise<T>;
+  select<T extends string>(
+    q: string,
+    choices: Array<{ value: T; name: string }>,
+    opts?: { default?: T },
+  ): Promise<T>;
   print(line: string): void;
 }
 
@@ -27,9 +31,22 @@ export interface SetupDeps {
   vaultCtx: VaultPathContext;
   randomSecret(): string;
   timezone(): string;
+  /**
+   * Probed only for tunnel mode (Docker + Cloudflare tunnel + OAuth): local
+   * (stdio) mode needs no Docker at all, so it never calls this.
+   */
+  dockerAvailable(): Promise<boolean>;
 }
 
+/**
+ * How Claude will reach this vault: `local` (stdio, this machine only — Claude
+ * Code / Claude Desktop start the server themselves, no Docker, no secret, no
+ * tunnel) or `tunnel` (today's Docker + Cloudflare tunnel + OAuth flow).
+ */
+export type SetupMode = 'local' | 'tunnel';
+
 export interface SetupArgs {
+  mode?: SetupMode;
   vault?: string;
   tunnelToken?: string;
   publicUrl?: string;
@@ -38,7 +55,8 @@ export interface SetupArgs {
   /**
    * Print the closing `Next: ./brainstem up` line (default `true`). `start`
    * passes `false`: it runs `up` itself the moment setup returns, so telling
-   * the user to run it is wrong there.
+   * the user to run it is wrong there. Local mode never prints it — there is
+   * no Docker step to run next.
    */
   printNext?: boolean;
 }
@@ -47,6 +65,39 @@ type TunnelMode = 'cloudflare' | 'quick' | 'none';
 
 const OWNER_SECRET_KEY = 'OWNER_SECRET';
 const TUNNEL_TOKEN_KEY = 'TUNNEL_TOKEN';
+const VAULT_PATH_KEY = 'VAULT_PATH';
+
+/**
+ * Same wording the launchers (`brainstem`, `brainstem.cmd`) print when Docker
+ * is missing. They used to gate every command, `setup` included, on Docker
+ * before delegating to this CLI at all; they no longer do for `setup` (local
+ * mode needs none), so the tunnel branch here checks first instead — the
+ * same fail-fast a Docker-less user saw before, with the same message.
+ */
+function dockerRequiredMessage(platform: NodeJS.Platform): string {
+  return platform === 'win32'
+    ? 'Docker Desktop is required: https://docs.docker.com/desktop/'
+    : 'Docker is required. Install Docker Desktop (https://docs.docker.com/desktop/) or ' +
+        'Docker Engine + Compose v2.';
+}
+
+/** Asks first, always: how will Claude reach this vault? */
+async function resolveMode(args: SetupArgs, deps: SetupDeps): Promise<SetupMode> {
+  if (args.mode !== undefined) return args.mode;
+  return deps.io.select<SetupMode>(
+    'How will Claude reach this vault?',
+    [
+      {
+        value: 'local',
+        name: 'Locally on this machine (Claude Code / Claude Desktop, over stdio)',
+      },
+      { value: 'tunnel', name: 'From claude.ai, through a tunnel' },
+    ],
+    // Non-interactive with no --mode: today's only mode, so existing scripts
+    // and callers that predate --mode see no change in behaviour.
+    { default: 'tunnel' },
+  );
+}
 
 /** `https://` only, no path/query/fragment (bare origin). */
 function isBarePublicUrl(value: string): boolean {
@@ -158,16 +209,72 @@ async function resolveTunnel(
   };
 }
 
+/** Absolute path to the launcher script for this platform, next to `.env`. */
+function launcherPathOf(deps: SetupDeps): string {
+  const mod = deps.platform === 'win32' ? pathWin32 : pathPosix;
+  const name = deps.platform === 'win32' ? 'brainstem.cmd' : 'brainstem';
+  return mod.join(deps.cwd, name);
+}
+
+/**
+ * Local (stdio) mode: Claude Code / Claude Desktop start the server
+ * themselves on this machine, over stdin/stdout — no Docker, no owner
+ * secret, no tunnel. Asks only for the vault folder and writes `VAULT_PATH`
+ * into `.env`; every other key an install may already carry (from a prior
+ * tunnel-mode setup, since one install can be used both ways) is left
+ * exactly as it was.
+ */
+async function runLocalSetup(args: SetupArgs, deps: SetupDeps, envPath: string): Promise<void> {
+  const vaultPath = await resolveVaultPath(args, deps);
+
+  const existingText = (await deps.readFile(envPath)) ?? '';
+  const existingKeys = [...parseEnv(existingText).keys()].filter((k) => k !== VAULT_PATH_KEY);
+
+  const { text } = upsertEnv(existingText, { [VAULT_PATH_KEY]: vaultPath }, { onlyIfEmpty: false });
+  await deps.writeFile(envPath, text);
+
+  deps.io.print(`set ${VAULT_PATH_KEY}=${vaultPath}`);
+  for (const key of existingKeys) deps.io.print(`kept ${key}`);
+
+  deps.io.print(`Vault: ${vaultPath}`);
+  deps.io.print(
+    'Mode: local — Claude Code / Claude Desktop start the server themselves; ' +
+      'no Docker, no owner secret, no tunnel.',
+  );
+
+  const launcherPath = launcherPathOf(deps);
+  deps.io.print(`Claude Code: claude mcp add brainstem -- ${launcherPath} stdio`);
+  deps.io.print(
+    'A second vault is a second entry with its own name, e.g. ' +
+      `claude mcp add brainstem-work -- ${launcherPath} stdio --vault <path>.`,
+  );
+  deps.io.print('Claude Desktop will use an installable bundle for this vault (coming soon).');
+}
+
 /**
  * Creates or updates `.env` from `.env.example` (or a pre-existing `.env`):
  * fills `OWNER_SECRET` and `VAULT_PATH` when empty, walks the tunnel-mode
  * questions (spec §5), and sets host-specific defaults. Every key except the
  * tunnel-mode set is left alone if already non-empty, unless `--force`.
+ *
+ * Asks first, always, how Claude will reach this vault; local mode is a
+ * short, separate flow (`runLocalSetup`) that never touches Docker, the
+ * owner secret or the tunnel questions below.
  */
 export async function runSetup(args: SetupArgs, deps: SetupDeps): Promise<void> {
+  const mode = await resolveMode(args, deps);
   const envPath = path.join(deps.cwd, '.env');
-  const examplePath = path.join(deps.cwd, '.env.example');
 
+  if (mode === 'local') {
+    await runLocalSetup(args, deps, envPath);
+    return;
+  }
+
+  if (!(await deps.dockerAvailable())) {
+    throw new Error(dockerRequiredMessage(deps.platform));
+  }
+
+  const examplePath = path.join(deps.cwd, '.env.example');
   const existing = await deps.readFile(envPath);
   const templateText = existing ?? (await deps.readFile(examplePath));
   if (templateText === null) {

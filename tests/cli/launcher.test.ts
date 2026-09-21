@@ -169,6 +169,25 @@ describe.skipIf(process.platform === 'win32')(
       }
     }, 30_000);
 
+    it("setup never reaches the launcher's Docker check: it fails on the vault it was given instead", async () => {
+      const dir = nodeOnlyPath();
+      try {
+        // A relative --vault fails vault validation before setup.ts ever gets to its own,
+        // tunnel-mode-only Docker check — so this proves the *launcher* stopped gating
+        // `setup` on Docker, not that setup.ts's own check happened to also pass.
+        const { code, stderr } = await run(
+          resolveBash(),
+          ['./brainstem', 'setup', '--mode', 'local', '--vault', 'relative/path'],
+          { env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' } },
+        );
+        expect(code).toBe(1);
+        expect(stderr).not.toContain('Docker is required');
+        expect(stderr).toContain('absolute');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
     it('every other command still requires Docker', async () => {
       const dir = nodeOnlyPath();
       try {

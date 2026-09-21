@@ -6,6 +6,20 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added (stdio)
+
+- `./brainstem setup` asks first how Claude will reach the vault: locally on this machine
+  (`--mode local`) or from claude.ai through a tunnel (`--mode tunnel`, today's flow — the
+  default when the flag is absent and the run is non-interactive, so no existing script needs
+  to change). Local mode asks only for the vault folder, writes `VAULT_PATH` into `.env` and
+  leaves every other key untouched (an install can be switched between modes, or used as both:
+  the HTTP settings survive), needs no Docker and generates no owner secret. It prints the
+  ready-to-paste `claude mcp add brainstem -- <abs path>/brainstem stdio` line, with the
+  absolute path of the launcher for this platform (`brainstem.cmd` on Windows).
+- The launchers (`brainstem`, `brainstem.cmd`) no longer require Docker for `setup` either — it
+  asks first, and local mode needs none. The tunnel branch of `setup` itself now checks for
+  Docker, with the same message the launcher used to print.
+
 ### Added (both)
 
 - Read-only mode: `VAULT_READ_ONLY=true` in `.env`, or `./brainstem stdio --read-only` (the flag
@@ -17,6 +31,7 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   so. A read-only boot also writes nothing into the vault on its own — no seeded
   `_brainstem/instructions.md`, no `connection.md`, no instance heartbeat file — the OAuth token
   store is the one exception, since it is server state, not vault content.
+  The stdio server then also serves a folder it has no write permission on.
 
 ## [0.5.0] — 2026-09-21
 
