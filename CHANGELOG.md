@@ -22,7 +22,17 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   index — waits for it (up to `INDEX_WAIT_MS`, 45 s, under the 60 s a client waits by default) before running, and answers a clear "still
   building" error, naming how far it's gotten, if it isn't ready in time.
 - `brainstem_ping`'s `index` gains `building`, `indexed` and `total`, reflecting that background
-  fill (always `building: false` off the deferred path).
+  fill (always `building: false` off the deferred path), and `unreadable`: how many notes the fill
+  could not read, so a partial index is never reported as a whole one.
+- The background index is called ready only after a reconcile pass against the disk succeeded.
+  A failed pass is retried (1, 2, 4, 8, 16 s); if none succeeds the index is reported as failed
+  and the gated tools answer `INDEX_ERROR` instead of answering from a stale fill.
+- The stdio server exits when its client is gone, however it went: stdin closing, stdout failing
+  (`EPIPE`), or a transport error. A client killed in the middle of a call used to leave the
+  server running with nobody attached. Stopping during the index build no longer waits for the
+  build: the fill stops between batches and the process exits 0.
+- `brainstem.cmd` writes its messages to stderr (stdout belongs to the protocol under `stdio`) and
+  compares its first argument unquoted.
 
 ## [0.4.1] — 2026-09-21
 

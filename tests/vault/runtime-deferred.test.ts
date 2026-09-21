@@ -158,3 +158,112 @@ describe('createLocalRuntime({ deferIndex: true })', () => {
     }
   });
 });
+
+/** A real adapter whose directory listing fails the first `failures` times it is asked AFTER the
+ *  fill's own listing: that is the settling reconcile failing transiently. */
+function flakySettleAdapter(failures: number, delayMs = 0): typeof LocalFSAdapter.create {
+  return async (...args) => {
+    const adapter = await LocalFSAdapter.create(...args);
+    const list = adapter.list.bind(adapter);
+    const batchRead = adapter.batchRead.bind(adapter);
+    let lists = 0;
+    adapter.list = async (...a) => {
+      lists += 1;
+      if (lists > 1 && lists <= 1 + failures) throw new Error('listing failed (injected)');
+      return list(...a);
+    };
+    adapter.batchRead = async (...a) => {
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      return batchRead(...a);
+    };
+    return adapter;
+  };
+}
+
+describe('the index is ready only after a pass over the disk has SUCCEEDED', () => {
+  it('a settling pass that fails is retried; ready comes with a successful one, never before', async () => {
+    for (let i = 0; i < 30; i += 1) await fs.writeFile(path.join(root, `n${i}.md`), `# n${i}\n`);
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      deferIndex: true,
+      settleRetryMs: [20, 20, 20],
+      createAdapter: flakySettleAdapter(2, 5),
+    });
+    try {
+      // created while the fill runs: only a successful pass can know about it
+      await fs.writeFile(path.join(root, 'during.md'), '# during\n');
+      await runtime.indexReady;
+      const state = runtime.indexState();
+      expect(state).toMatchObject({ ready: true });
+      expect(state.error).toBeUndefined();
+      expect(runtime.index.reconciledAt).not.toBeNull(); // the invariant: ready ⇒ a pass succeeded
+      expect(runtime.index.get('during.md')).toBeDefined();
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('when every attempt fails the index is in error, not ready', async () => {
+    await fs.writeFile(path.join(root, 'a.md'), '# a\n');
+    const errors: unknown[] = [];
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      deferIndex: true,
+      settleRetryMs: [10, 10],
+      onIndexError: (e) => errors.push(e),
+      createAdapter: flakySettleAdapter(99),
+    });
+    try {
+      await runtime.indexReady;
+      expect(runtime.indexState()).toMatchObject({ ready: false, error: true });
+      expect(runtime.index.reconciledAt).toBeNull();
+      expect(errors).toHaveLength(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('a note the fill could not read is counted as unreadable, not as done', async () => {
+    await fs.writeFile(path.join(root, 'good.md'), '# good\n');
+    await fs.writeFile(path.join(root, 'bad.md'), Buffer.from([0xff, 0xfe, 0xfd])); // not UTF-8
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      deferIndex: true,
+    });
+    try {
+      await runtime.indexReady;
+      expect(runtime.indexState()).toMatchObject({ ready: true, unreadable: 1 });
+      expect(runtime.index.get('good.md')).toBeDefined();
+      expect(runtime.index.get('bad.md')).toBeUndefined();
+    } finally {
+      await runtime.close();
+    }
+  });
+});
+
+describe('closing during the fill', () => {
+  it('stops the fill between batches and resolves promptly, without starting a watcher', async () => {
+    for (let i = 0; i < 400; i += 1) await fs.writeFile(path.join(root, `n${i}.md`), `# n${i}\n`);
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      deferIndex: true,
+      createAdapter: slowAdapter(300), // 20 batches x 300 ms = 6 s if it ran to the end
+    });
+    await waitFor(() => runtime.indexState().total > 0);
+    const started = Date.now();
+    await runtime.close();
+    expect(Date.now() - started).toBeLessThan(1500);
+    const state = runtime.indexState();
+    expect(state.ready).toBe(false);
+    expect(state.error).toBeUndefined(); // stopping is not failing
+    expect(state.done).toBeLessThan(400);
+  });
+});

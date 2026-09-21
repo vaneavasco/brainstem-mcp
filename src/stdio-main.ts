@@ -152,12 +152,16 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   }
   const instructions = createInstructionsProvider(stateDir);
 
-  const handle = serveStdio((ctx) =>
-    createVaultServer(ctx, {
-      resolveRuntime: async () => runtime,
-      logger,
-      instructions: () => instructions.get(),
-    }),
+  // Declared before the server so the transport's own error report can end the process too.
+  let onTransportError: (error: Error) => void = () => {};
+  const handle = serveStdio(
+    (ctx) =>
+      createVaultServer(ctx, {
+        resolveRuntime: async () => runtime,
+        logger,
+        instructions: () => instructions.get(),
+      }),
+    { onerror: (error) => onTransportError(error) },
   );
 
   let shuttingDown = false;
@@ -165,7 +169,11 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ signal }, 'shutting down');
-    const timer = setTimeout(() => exit(1), SHUTDOWN_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      // Said before leaving: an exit code 1 with no line is the hardest failure to explain.
+      logger.error({ signal, afterMs: SHUTDOWN_TIMEOUT_MS }, 'shutdown did not finish in time');
+      exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
     handle
       .close()
       .then(() => runtime.close())
@@ -182,6 +190,24 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.stdin.on('end', () => shutdown('stdin-end'));
+  // A client that dies without closing its end (SIGKILL, a crash) does not always produce an
+  // 'end': when a response is then written, stdout fails with EPIPE, the SDK's transport closes
+  // itself and PAUSES stdin, and 'end' never comes. Measured: the server stayed alive, holding
+  // the vault's watcher, until someone killed it. So every sign that the other side is gone ends
+  // this process: stdin closing, and stdout failing. `shutdown` is idempotent.
+  onTransportError = (error) => {
+    const code = (error as NodeJS.ErrnoException).code;
+    logger.warn({ code, message: error.message }, 'stdio transport error');
+    // a broken pipe is the client going away; anything else is reported and survived
+    if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED' || code === 'ECONNRESET') {
+      shutdown('transport-error');
+    }
+  };
+  process.stdin.on('close', () => shutdown('stdin-close'));
+  process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+    logger.warn({ code: error.code }, 'stdout failed: the client is gone');
+    shutdown('stdout-error');
+  });
 
   logger.info(
     { vaultPath: vaultConfig.vaultPath, stateDir },

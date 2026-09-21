@@ -65,6 +65,9 @@ export const DEFAULT_RECONCILE_MS = 300_000;
  *  default request timeout is 60 s, so the wait must stay under that or the client gives up first
  *  and learns nothing. Overridable per runtime (`LocalRuntimeOptions.indexWaitMs`) for tests. */
 export const INDEX_WAIT_MS = 45_000;
+/** Pauses between attempts of the pass that must succeed before a deferred index is ready: a
+ *  transient failure (a folder unreadable for a moment) is retried for about half a minute. */
+export const DEFAULT_SETTLE_RETRY_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
 /** Shortest allowed reconcile interval: each pass lists the whole vault. */
 export const MIN_RECONCILE_MS = 10_000;
 /** Minimum distance between reconciles triggered by watcher errors. */

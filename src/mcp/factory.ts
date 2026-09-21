@@ -40,6 +40,9 @@ const PingOutput = z.looseObject({
     indexed: z.number(),
     /** Notes the current fill found to index; 0 until the initial listing finishes. */
     total: z.number(),
+    /** Notes the background build could not read (gone, not UTF-8, too large). They are in
+     *  neither `indexed` nor `notes`; the reconcile pass picks up the ones that become readable. */
+    unreadable: z.number().optional(),
   }),
 });
 
@@ -95,6 +98,7 @@ export async function createVaultServer(
           building: !indexState.ready,
           indexed: indexState.done,
           total: indexState.total,
+          ...(indexState.unreadable ? { unreadable: indexState.unreadable } : {}),
         },
       };
       return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };

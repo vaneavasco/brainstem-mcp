@@ -190,6 +190,44 @@ describe('brainstem.cmd launcher (batch)', () => {
     expect(raw).toContain('\r\n');
     expect(raw).toContain('src\\cli\\brainstem.ts');
   });
+
+  /**
+   * stdout carries the MCP protocol on the `stdio` path (ADR 0008): every line this launcher can
+   * print with `echo` before `node src\cli\brainstem.ts` ever runs — including the ones on
+   * branches `stdio` itself does not take (docker missing, say) — must go to stderr, exactly like
+   * the bash launcher (`brainstem`) already does for every one of its own `echo` lines. A bare
+   * `echo` here would otherwise land on stdout ahead of the first JSON-RPC byte a real client
+   * reads, on any machine where the check it guards happens to trip.
+   */
+  it('every echo before the CLI is delegated to writes to stderr, not stdout', async () => {
+    const raw = await fs.readFile(path.join(repoRoot, 'brainstem.cmd'), 'utf8');
+    const lines = raw.split(/\r\n/).filter((l) => l.length > 0);
+    const delegateLine = lines.findIndex((l) => l.includes('node src\\cli\\brainstem.ts'));
+    expect(delegateLine).toBeGreaterThan(0);
+    const beforeDelegate = lines.slice(0, delegateLine);
+    const echoLines = beforeDelegate.filter(
+      (l) => /\becho\b/i.test(l) && !/^@echo off/i.test(l.trim()),
+    );
+    expect(echoLines.length).toBeGreaterThan(0); // the assertion below must not vacuously pass
+    for (const line of echoLines) {
+      expect(line, line).toMatch(/(1>&2|>&2)/);
+    }
+  });
+
+  /** `%1` keeps any quotes the caller passed (`brainstem.cmd "stdio"` would compare against the
+   *  literal text `"stdio"`, never matching `stdio`); `%~1` strips them, like the bash launcher's
+   *  plain `$1` does implicitly through `case`. */
+  it('compares the first argument with %~1 (quote-stripped), never bare %1, for the command dispatch', async () => {
+    const raw = await fs.readFile(path.join(repoRoot, 'brainstem.cmd'), 'utf8');
+    const lines = raw.split(/\r\n/).filter((l) => l.length > 0);
+    const dispatchLines = lines.filter((l) => /^if\s+(\/I\s+)?"%~?1"==/i.test(l.trim()));
+    // stdio, --help, -h, help, --version, -V and the no-args case: 7 comparisons.
+    expect(dispatchLines.length).toBeGreaterThanOrEqual(7);
+    for (const line of dispatchLines) {
+      expect(line, line).toContain('%~1');
+      expect(line, line).not.toMatch(/"%1"==/);
+    }
+  });
 });
 
 /**

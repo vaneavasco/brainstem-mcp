@@ -3,6 +3,7 @@ import type { McpRequestContext } from '@modelcontextprotocol/server';
 import {
   DEFAULT_RECONCILE_MIN_GAP_MS,
   DEFAULT_RECONCILE_MS,
+  DEFAULT_SETTLE_RETRY_MS,
   INDEX_WAIT_MS,
   MAX_BINARY_BYTES,
   MAX_INDEX_BYTES,
@@ -38,6 +39,8 @@ export interface IndexState {
   done: number;
   total: number;
   error?: boolean;
+  /** Notes the fill could not read (gone, not UTF-8, too large): not counted in `done`. */
+  unreadable?: number;
 }
 
 export interface VaultRuntime {
@@ -119,6 +122,9 @@ export interface LocalRuntimeOptions {
    * while the fill was running.
    */
   deferIndex?: boolean;
+  /** Pauses between attempts of the settling pass that follows a deferred fill; when they run
+   *  out the index is in error. Defaults to DEFAULT_SETTLE_RETRY_MS. Tests shorten it. */
+  settleRetryMs?: number[];
   /** Called if a deferred fill throws (`indexState().error` becomes `true`). Gets the raw error
    *  (unlike `onReconcileError`, nothing here is on a path that logs an absolute file path by
    *  default) — callers decide whether and how to log it. Never left unhandled either way:
@@ -152,6 +158,8 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   let fillTotal = 0;
   let built = !deferIndex;
   let buildFailed = false;
+  let fillUnreadable = 0;
+  let lastPassOk = false;
 
   // One reconcile at a time. The timer simply skips a tick while a pass runs (the next tick is
   // soon enough). A watcher error is different: it means events were lost, so it is never
@@ -173,6 +181,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
       .reconcile(adapter)
       .then(
         (result) => {
+          lastPassOk = true;
           try {
             opts.onReconcile?.(result);
           } catch {
@@ -180,6 +189,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
           }
         },
         () => {
+          lastPassOk = false;
           // Never the error itself: it can carry an absolute path.
           try {
             opts.onReconcileError?.();
@@ -239,15 +249,47 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
 
   let fillPromise: Promise<void>;
   if (deferIndex) {
+    const retryMs = opts.settleRetryMs ?? DEFAULT_SETTLE_RETRY_MS;
+    /** Interruptible: `close()` must not wait out a backoff. */
+    const pause = (ms: number): Promise<void> =>
+      new Promise((resolve) => {
+        const step = Math.min(ms, 50);
+        const started = Date.now();
+        const tick = (): void => {
+          if (closed || Date.now() - started >= ms) resolve();
+          else setTimeout(tick, step);
+        };
+        tick();
+      });
     fillPromise = (async () => {
       try {
-        await index.fill(adapter, (progress) => {
-          fillDone = progress.done;
-          fillTotal = progress.total;
-        });
-        if (closed) return; // close() ran mid-fill: never start a watcher behind its back
+        const filled = await index.fill(
+          adapter,
+          (progress) => {
+            fillDone = progress.done;
+            fillTotal = progress.total;
+          },
+          () => closed,
+        );
+        fillUnreadable = filled.unreadable;
+        // close() ran mid-fill: the fill stopped between batches; stopping is not failing, and a
+        // watcher is never started behind a closed runtime's back.
+        if (closed || filled.stopped) return;
         startWatching();
-        await startPass(); // the one settling pass: catches whatever changed on disk during the fill
+        // The index is READY only once a pass over the disk has SUCCEEDED: that pass is what
+        // catches a note created, changed or removed while the fill ran. A pass that failed
+        // (proved: a folder unreadable for a moment) used to flip `ready` all the same, and a
+        // count stayed wrong until the next timer pass, five minutes later.
+        for (let attempt = 0; ; attempt += 1) {
+          await startPass();
+          if (lastPassOk) break;
+          const wait = retryMs[attempt];
+          if (closed) return;
+          if (wait === undefined)
+            throw new Error('the index could not be checked against the disk');
+          await pause(wait);
+          if (closed) return;
+        }
         built = true;
       } catch (error) {
         buildFailed = true;
@@ -277,12 +319,20 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     maxBinaryBytes,
     paths: { vaultRoot: adapter.root, stateDir },
     indexState(): IndexState {
-      if (built) return { ready: true, done: index.size(), total: index.size() };
+      if (built) {
+        return {
+          ready: true,
+          done: index.size(),
+          total: index.size(),
+          ...(fillUnreadable > 0 ? { unreadable: fillUnreadable } : {}),
+        };
+      }
       return {
         ready: false,
         done: fillDone,
         total: fillTotal,
         ...(buildFailed ? { error: true } : {}),
+        ...(fillUnreadable > 0 ? { unreadable: fillUnreadable } : {}),
       };
     },
     indexReady: fillPromise,

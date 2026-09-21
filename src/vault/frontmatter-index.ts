@@ -225,7 +225,9 @@ export class FrontmatterIndex {
   async fill(
     adapter: StorageAdapter,
     onProgress?: (progress: { done: number; total: number }) => void,
-  ): Promise<void> {
+    /** Asked between batches: a fill that is no longer wanted (the runtime is closing) stops. */
+    shouldStop: () => boolean = () => false,
+  ): Promise<{ unreadable: number; stopped: boolean }> {
     const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
     const mdPaths: string[] = [];
     for (const file of files) {
@@ -234,14 +236,20 @@ export class FrontmatterIndex {
     }
     const total = mdPaths.length;
     let done = 0;
+    let unreadable = 0;
     onProgress?.({ done, total });
     for (let i = 0; i < mdPaths.length; i += MAX_BATCH) {
+      if (shouldStop()) return { unreadable, stopped: true };
       const chunk = mdPaths.slice(i, i + MAX_BATCH);
       const { notes } = await adapter.batchRead(chunk);
       for (const note of notes) this.upsert(FrontmatterIndex.fromNote(note));
-      done += chunk.length;
+      // A note that vanished or could not be read is not "done": it is counted apart, and the
+      // reconcile pass that follows the fill is what picks it up once it can be read.
+      done += notes.length;
+      unreadable += chunk.length - notes.length;
       onProgress?.({ done, total });
     }
+    return { unreadable, stopped: false };
   }
 
   static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
