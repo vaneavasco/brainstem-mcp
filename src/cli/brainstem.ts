@@ -6,7 +6,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { confirm, input, select } from '@inquirer/prompts';
 import { Command } from 'commander';
+import { runStdioServer } from '../stdio-main.ts';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
+import { SERVER_INFO } from '../version.ts';
 import { COMMANDS, renderHelpText } from './catalog.ts';
 import { runDoctor } from './commands/doctor.ts';
 import { runDown } from './commands/down.ts';
@@ -23,6 +25,7 @@ import { runVaultSet, runVaultShow } from './commands/vault.ts';
 import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
 import { resolveImageTag } from './image-tag.ts';
+import { stdioEnv } from './stdio-env.ts';
 import { createSystemProbe } from './system.ts';
 import { tunnelUrlReader } from './tunnel-url.ts';
 import type { VaultPathContext } from './vault-path.ts';
@@ -187,6 +190,9 @@ export function buildProgram(
 ): Command {
   const program = new Command();
   program.name('brainstem').description('brainstem-mcp CLI: setup, run and manage your instance');
+  // Needs only Node (no Docker): the launcher (`brainstem`/`brainstem.cmd`) skips its Docker
+  // check for --version, same as --help/-h/help and stdio.
+  program.version(SERVER_INFO.version);
   program.addHelpText('after', `\n${renderHelpText()}\n`);
   program.showHelpAfterError();
 
@@ -370,6 +376,22 @@ export function buildProgram(
     .argument('[service]', 'service to follow (app or tunnel); omit for all')
     .action(async (service?: string) => {
       await runAction(() => runLogs({ service }, { compose: createComposeRunner(repoDir) }));
+    });
+
+  program
+    .command('stdio')
+    .description(summaryOf('stdio'))
+    .option('--vault <path>', 'absolute path to your Obsidian vault (overrides VAULT_PATH)')
+    .action(async (opts: { vault?: string }) => {
+      // No Docker, no tunnel, no OAuth: runStdioServer manages its own exit code (0 on a clean
+      // shutdown, 1 on a config/vault error or a failed one) — unlike every other command here,
+      // it never returns a number for runAction to translate into process.exitCode.
+      // The install's .env carries the vault settings the owner already chose (time zone, daily
+      // notes); without it a daily note lands at the vault root instead of its folder.
+      await runStdioServer({
+        vaultOverride: opts.vault,
+        env: stdioEnv(await loadEnvMapOrNull(repoDir), process.env),
+      });
     });
 
   program

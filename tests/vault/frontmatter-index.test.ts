@@ -40,6 +40,39 @@ describe('FrontmatterIndex.build', () => {
   });
 });
 
+describe('FrontmatterIndex.empty + fill', () => {
+  it('empty() starts with nothing; fill() populates it the same way build() does', async () => {
+    const index = FrontmatterIndex.empty();
+    expect(index.size()).toBe(0);
+    expect(index.get('a.md')).toBeUndefined();
+    await index.fill(vault);
+    expect(index.size()).toBe(28);
+    expect(index.get('d.canvas')).toBeUndefined();
+    expect(index.assets()).toContain('d.canvas');
+    expect(index.get('sub/c.md')).toMatchObject({ hasFrontmatter: false, frontmatter: {} });
+    expect(index.get('a.md')?.frontmatter).toMatchObject({ type: 'project' });
+  });
+
+  it('build() is empty() + fill()', async () => {
+    const built = await FrontmatterIndex.build(vault);
+    const filled = FrontmatterIndex.empty();
+    await filled.fill(vault);
+    expect(filled.size()).toBe(built.size());
+    expect(filled.all().map((e) => e.path)).toEqual(built.all().map((e) => e.path));
+  });
+
+  it('reports { done, total } progress as it goes, ending at done === total === note count', async () => {
+    const index = FrontmatterIndex.empty();
+    const snapshots: { done: number; total: number }[] = [];
+    await index.fill(vault, (p) => snapshots.push({ ...p }));
+    expect(snapshots.length).toBeGreaterThan(1); // at least a start snapshot and a batch snapshot
+    expect(snapshots[0]).toEqual({ done: 0, total: 28 });
+    for (const s of snapshots) expect(s.total).toBe(28);
+    const last = snapshots.at(-1);
+    expect(last).toEqual({ done: 28, total: 28 });
+  });
+});
+
 describe('query', () => {
   it('supports equals, contains, exists, array membership and dot paths', async () => {
     const index = await FrontmatterIndex.build(vault);

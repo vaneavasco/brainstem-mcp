@@ -60,7 +60,10 @@ export class ConfigError extends Error {
 }
 
 const EnvSchema = z.object({
-  PUBLIC_URL: z.url(),
+  // Optional at the schema level: loadConfig enforces its requiredness separately (see
+  // REQUIRED below), and loadVaultConfig — which parses this same schema for a subset of keys —
+  // never reads or requires it at all.
+  PUBLIC_URL: z.url().optional(),
   ALLOW_INSECURE_PUBLIC_URL: z.enum(['true', 'false']).default('false'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -96,6 +99,65 @@ const EnvSchema = z.object({
 
 const REQUIRED = ['PUBLIC_URL', 'OWNER_SECRET'] as const;
 
+/** The parsed-env fields `buildVaultSettings` needs — a subset of `z.infer<typeof EnvSchema>`
+ *  that both `loadConfig` and `loadVaultConfig` satisfy, since both parse the same `EnvSchema`. */
+interface VaultSettingsFields {
+  DAILY_NOTES_FOLDER: string;
+  DAILY_NOTES_FORMAT: string;
+  DAILY_NOTES_TEMPLATE?: string;
+  VAULT_TIMEZONE: string;
+  REQUIRED_FRONTMATTER: string;
+}
+
+/**
+ * Validates and builds the daily-notes / timezone / required-frontmatter settings shared by
+ * `loadConfig` and `loadVaultConfig` — the one place either of them checks a timezone with
+ * `Intl.DateTimeFormat`, a folder with `normalizeVaultPath`, or a date format with
+ * `resolveDailyNotePath`, so the two validate a vault's settings identically and cannot drift
+ * apart on that logic.
+ */
+function buildVaultSettings(d: VaultSettingsFields): VaultSettingsConfig {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: d.VAULT_TIMEZONE });
+  } catch {
+    throw new ConfigError(
+      [],
+      ['VAULT_TIMEZONE'],
+      'VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Chisinau)',
+    );
+  }
+  const vaultSettings: VaultSettingsConfig = {
+    dailyNotes: {
+      folder: d.DAILY_NOTES_FOLDER,
+      format: d.DAILY_NOTES_FORMAT,
+      template: d.DAILY_NOTES_TEMPLATE ?? null,
+      timezone: d.VAULT_TIMEZONE,
+    },
+    requiredFrontmatter: d.REQUIRED_FRONTMATTER.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  };
+  try {
+    normalizeVaultPath(vaultSettings.dailyNotes.folder);
+  } catch {
+    throw new ConfigError(
+      [],
+      ['DAILY_NOTES_FOLDER'],
+      'DAILY_NOTES_FOLDER must be a vault-relative folder (no .., no hidden folders)',
+    );
+  }
+  try {
+    resolveDailyNotePath(vaultSettings.dailyNotes, new Date());
+  } catch {
+    throw new ConfigError(
+      [],
+      ['DAILY_NOTES_FORMAT'],
+      'DAILY_NOTES_FORMAT is not a valid date-fns/strftime pattern',
+    );
+  }
+  return vaultSettings;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   // .env templates ship empty keys (FOO=); treat an empty value as unset everywhere.
   const cleaned = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== ''));
@@ -116,7 +178,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new ConfigError(missing, [], 'run `./brainstem setup` to generate .env');
   }
 
-  const publicUrl = new URL(parsed.data.PUBLIC_URL);
+  // Guaranteed defined here: the `missing` check above already required it.
+  const publicUrl = new URL(parsed.data.PUBLIC_URL as string);
   publicUrl.hash = '';
   publicUrl.search = '';
   // A path prefix (https://host/brain) only ever half-worked: the metadata
@@ -168,49 +231,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       'VAULT_PATH is required when STORAGE_BACKEND=localfs',
     );
   }
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: d.VAULT_TIMEZONE });
-  } catch {
-    throw new ConfigError(
-      [],
-      ['VAULT_TIMEZONE'],
-      'VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Chisinau)',
-    );
-  }
   const storage: StorageConfig =
     d.STORAGE_BACKEND === 'localfs'
       ? { backend: 'localfs', vaultPath: d.VAULT_PATH as string }
       : { backend: 'drive' };
-  const vaultSettings: VaultSettingsConfig = {
-    dailyNotes: {
-      folder: d.DAILY_NOTES_FOLDER,
-      format: d.DAILY_NOTES_FORMAT,
-      template: d.DAILY_NOTES_TEMPLATE ?? null,
-      timezone: d.VAULT_TIMEZONE,
-    },
-    requiredFrontmatter: d.REQUIRED_FRONTMATTER.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-  };
-
-  try {
-    normalizeVaultPath(vaultSettings.dailyNotes.folder);
-  } catch {
-    throw new ConfigError(
-      [],
-      ['DAILY_NOTES_FOLDER'],
-      'DAILY_NOTES_FOLDER must be a vault-relative folder (no .., no hidden folders)',
-    );
-  }
-  try {
-    resolveDailyNotePath(vaultSettings.dailyNotes, new Date());
-  } catch {
-    throw new ConfigError(
-      [],
-      ['DAILY_NOTES_FORMAT'],
-      'DAILY_NOTES_FORMAT is not a valid date-fns/strftime pattern',
-    );
-  }
+  const vaultSettings = buildVaultSettings(d);
 
   return {
     publicUrl,
@@ -230,5 +255,73 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     storage,
     vaultSettings,
     maxBinaryBytes: d.MAX_BINARY_BYTES ?? MAX_BINARY_BYTES,
+  };
+}
+
+/** What a vault runtime needs — nothing about HTTP, OAuth or the tunnel. */
+export interface VaultConfig {
+  vaultPath: string;
+  vaultSettings: VaultSettingsConfig;
+  watchPollMs: number | null;
+  maxBinaryBytes: number;
+  /** How often FrontmatterIndex.reconcile() runs in the background (ms); 0 disables it. */
+  reconcileMs: number;
+  logLevel: LogLevel;
+  stateDir: string | null;
+}
+
+/** The env keys `loadVaultConfig` reads. Everything else (`PUBLIC_URL`, `OWNER_SECRET`, tunnel
+ *  settings, …) is left out of the object handed to `EnvSchema.safeParse` below, so a value that
+ *  happens to be malformed there (a leftover `.env` sourced into the same shell, say) can never
+ *  make vault loading fail over a field it does not use. */
+const VAULT_ENV_KEYS: ReadonlySet<string> = new Set([
+  'VAULT_PATH',
+  'DAILY_NOTES_FOLDER',
+  'DAILY_NOTES_FORMAT',
+  'DAILY_NOTES_TEMPLATE',
+  'VAULT_TIMEZONE',
+  'REQUIRED_FRONTMATTER',
+  'VAULT_WATCH_POLL_MS',
+  'VAULT_RECONCILE_MS',
+  'MAX_BINARY_BYTES',
+  'LOG_LEVEL',
+  'STATE_DIR',
+]);
+
+/**
+ * The subset of configuration a vault runtime needs (see `VaultConfig`) — carved out of
+ * `loadConfig` for the stdio entrypoint, which is neither an HTTP server, an OAuth authorization
+ * server nor a tunnel client: `PUBLIC_URL`, `OWNER_SECRET` and every tunnel setting are neither
+ * read nor required here, and `STORAGE_BACKEND` does not apply (a stdio session always opens a
+ * local vault directory, given by `VAULT_PATH` or `--vault`).
+ *
+ * Parses the very same `EnvSchema` `loadConfig` does (so a knob like `VAULT_RECONCILE_MS`'s
+ * bounds is validated identically for both) and shares `buildVaultSettings` for the daily-notes /
+ * timezone logic, so the two paths cannot drift apart on what a valid vault configuration is.
+ */
+export function loadVaultConfig(
+  env: Record<string, string | undefined> = process.env,
+): VaultConfig {
+  const cleaned = Object.fromEntries(
+    Object.entries(env).filter(([key, v]) => v !== '' && VAULT_ENV_KEYS.has(key)),
+  );
+  const parsed = EnvSchema.safeParse(cleaned);
+  if (!parsed.success) {
+    const invalid = [...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))];
+    throw new ConfigError([], invalid);
+  }
+  const d = parsed.data;
+  if (!d.VAULT_PATH) {
+    throw new ConfigError(['VAULT_PATH'], [], 'pass --vault <path>, or set VAULT_PATH');
+  }
+  const vaultSettings = buildVaultSettings(d);
+  return {
+    vaultPath: d.VAULT_PATH,
+    vaultSettings,
+    watchPollMs: d.VAULT_WATCH_POLL_MS ?? null,
+    maxBinaryBytes: d.MAX_BINARY_BYTES ?? MAX_BINARY_BYTES,
+    reconcileMs: d.VAULT_RECONCILE_MS,
+    logLevel: d.LOG_LEVEL,
+    stateDir: d.STATE_DIR ?? null,
   };
 }

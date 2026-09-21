@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -104,11 +105,128 @@ describe.skipIf(process.platform === 'win32')('./brainstem launcher (bash)', () 
   });
 });
 
+describe.skipIf(process.platform === 'win32')(
+  'commands that need only Node skip the Docker check',
+  () => {
+    /** A PATH containing symlinks to `node` and the handful of coreutils the launcher's own
+     *  prelude needs (`dirname`, for `SCRIPT_DIR`) but nothing else — in particular no `docker` —
+     *  without touching the real PATH or requiring Docker to actually be absent on this machine. */
+    function nodeOnlyPath(): string {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'brainstem-node-only-'));
+      for (const bin of ['node', 'dirname']) {
+        const real = execFileSync('which', [bin]).toString().trim();
+        symlinkSync(real, path.join(dir, bin));
+      }
+      return dir;
+    }
+
+    it('--version never reaches the Docker check', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        const { code, stdout, stderr } = await run(resolveBash(), ['./brainstem', '--version'], {
+          env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' },
+        });
+        expect(code, stderr).toBe(0);
+        expect(stdout.trim().length).toBeGreaterThan(0);
+        expect(stderr).not.toContain('Docker');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('help, -h and no-args never reach the Docker check', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        for (const args of [['help'], ['-h'], []]) {
+          const { code, stdout, stderr } = await run(resolveBash(), ['./brainstem', ...args], {
+            env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' },
+          });
+          expect(code, `${args.join(' ')} — ${stderr}`).toBe(0);
+          expect(stdout).toContain('Recommended flow');
+          expect(stderr).not.toContain('Docker');
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('stdio never reaches the Docker check: it fails on the vault it was given instead', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        // `--vault` wins over any `.env` next to the launcher, so this never starts a server on
+        // the developer's own vault (the command reads the install's `.env` for vault settings).
+        const missing = path.join(dir, 'no-such-vault');
+        const { code, stderr } = await run(
+          resolveBash(),
+          ['./brainstem', 'stdio', '--vault', missing],
+          { env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' } },
+        );
+        expect(code).toBe(1);
+        expect(stderr).not.toContain('Docker is required');
+        expect(stderr).toContain('no-such-vault');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('every other command still requires Docker', async () => {
+      const dir = nodeOnlyPath();
+      try {
+        const { code, stderr } = await run(resolveBash(), ['./brainstem', 'status'], {
+          env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' },
+        });
+        expect(code).toBe(1);
+        expect(stderr).toContain('Docker is required');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+  },
+);
+
 describe('brainstem.cmd launcher (batch)', () => {
   it('is saved with CRLF endings and points at the TS entrypoint', async () => {
     const raw = await fs.readFile(path.join(repoRoot, 'brainstem.cmd'), 'utf8');
     expect(raw).toContain('\r\n');
     expect(raw).toContain('src\\cli\\brainstem.ts');
+  });
+
+  /**
+   * stdout carries the MCP protocol on the `stdio` path (ADR 0008): every line this launcher can
+   * print with `echo` before `node src\cli\brainstem.ts` ever runs — including the ones on
+   * branches `stdio` itself does not take (docker missing, say) — must go to stderr, exactly like
+   * the bash launcher (`brainstem`) already does for every one of its own `echo` lines. A bare
+   * `echo` here would otherwise land on stdout ahead of the first JSON-RPC byte a real client
+   * reads, on any machine where the check it guards happens to trip.
+   */
+  it('every echo before the CLI is delegated to writes to stderr, not stdout', async () => {
+    const raw = await fs.readFile(path.join(repoRoot, 'brainstem.cmd'), 'utf8');
+    const lines = raw.split(/\r\n/).filter((l) => l.length > 0);
+    const delegateLine = lines.findIndex((l) => l.includes('node src\\cli\\brainstem.ts'));
+    expect(delegateLine).toBeGreaterThan(0);
+    const beforeDelegate = lines.slice(0, delegateLine);
+    const echoLines = beforeDelegate.filter(
+      (l) => /\becho\b/i.test(l) && !/^@echo off/i.test(l.trim()),
+    );
+    expect(echoLines.length).toBeGreaterThan(0); // the assertion below must not vacuously pass
+    for (const line of echoLines) {
+      expect(line, line).toMatch(/(1>&2|>&2)/);
+    }
+  });
+
+  /** `%1` keeps any quotes the caller passed (`brainstem.cmd "stdio"` would compare against the
+   *  literal text `"stdio"`, never matching `stdio`); `%~1` strips them, like the bash launcher's
+   *  plain `$1` does implicitly through `case`. */
+  it('compares the first argument with %~1 (quote-stripped), never bare %1, for the command dispatch', async () => {
+    const raw = await fs.readFile(path.join(repoRoot, 'brainstem.cmd'), 'utf8');
+    const lines = raw.split(/\r\n/).filter((l) => l.length > 0);
+    const dispatchLines = lines.filter((l) => /^if\s+(\/I\s+)?"%~?1"==/i.test(l.trim()));
+    // stdio, --help, -h, help, --version, -V and the no-args case: 7 comparisons.
+    expect(dispatchLines.length).toBeGreaterThanOrEqual(7);
+    for (const line of dispatchLines) {
+      expect(line, line).toContain('%~1');
+      expect(line, line).not.toMatch(/"%1"==/);
+    }
   });
 });
 

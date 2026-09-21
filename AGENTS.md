@@ -8,7 +8,7 @@ A **single-user, self-hosted MCP server** that gives Claude read/write access to
 
 Binding documents, in order of authority:
 1. `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md` (core) and `docs/superpowers/specs/2026-08-30-phase-4-vault-graph-and-safety-design.md` (vault graph, safe concurrent writes) — the design specs.
-2. `docs/adr/` — decisions (0005 = single-user re-scope; 0006 = vault graph + optimistic concurrency; Heroku/Postgres/multi-tenant are **dropped**, not pending).
+2. `docs/adr/` — decisions (0005 = single-user re-scope; 0006 = vault graph + optimistic concurrency; 0007 = tool contract + index reconcile; 0008 = local stdio server + Claude Desktop bundle, in progress; Heroku/Postgres/multi-tenant are **dropped**, not pending).
 3. `docs/implementation-plan.md` + `docs/plans/` — phase plans; `docs/reviews/` — adversarial reviews with the open "fix-later" lists.
 4. `README.md` — user-facing behaviour; `SECURITY.md`, `CHANGELOG.md`.
 
@@ -17,6 +17,8 @@ Binding documents, in order of authority:
 ```
 src/app.ts            Express app: /mcp (bearer-gated), /health, auth mount
 src/main.ts           boot order: tunnel URL → config → vault runtime → token store → server → notes
+src/stdio-main.ts     local (stdio) entrypoint: loadVaultConfig → deferred-index runtime → serveStdio,
+                      the same createVaultServer factory main.ts uses; no auth, no HTTP, no tunnel
 src/auth/as/          authorization server: metadata, cimd (+net SSRF guard), authorize/consent, token
 src/auth/rs/          resource server: bearer token verifier
 src/auth/store/       FileTokenStore (JSON, atomic writes, mtime reload)
@@ -36,11 +38,12 @@ scripts/              docker-smoke.sh, mcp-call.ts (headless OAuth + tool calls)
 
 ```bash
 npm ci                      # dev install (the ./brainstem launcher installs runtime-only)
-npm test                    # vitest; 7 ripgrep tests skip when `rg` is not installed
+npm test                    # vitest; 15 ripgrep tests skip when `rg` is not installed
 npm run test:scale          # 40,000-note run: memory, build time, bounded results (about a minute)
 npm run typecheck           # tsc --noEmit
 npm run lint                # biome check .   (npm run lint:fix to apply)
 npm run dev                 # server without Docker, reads .env
+npm run stdio -- --vault <path>  # local stdio server without Docker, a tunnel or OAuth
 npm run docker:smoke        # end-to-end against the Docker image (needs Docker)
 npm run mcp:call -- --list  # authenticate headlessly and call tools on a running instance
 ```

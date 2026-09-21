@@ -1,6 +1,6 @@
 {
   "name": "brainstem-mcp",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Single-user, self-hosted MCP vault server for Claude (Obsidian vault, Docker, Cloudflare tunnel)",
   "directories": {
     "doc": "docs"
@@ -11,6 +11,7 @@
     "dev": "node --watch --env-file-if-exists=.env src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
+    "stdio": "node src/stdio-main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

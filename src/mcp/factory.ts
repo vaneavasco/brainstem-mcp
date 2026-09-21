@@ -1,7 +1,11 @@
-import { type McpRequestContext, McpServer } from '@modelcontextprotocol/server';
+import {
+  type CallToolResult,
+  type McpRequestContext,
+  McpServer,
+} from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Logger } from '../logger.ts';
-import { registerVaultTools } from '../tools/register.ts';
+import { registerVaultTools, tracked } from '../tools/register.ts';
 import { DEFAULT_INSTRUCTIONS } from '../vault/instructions.ts';
 import type { RuntimeResolver } from '../vault/runtime.ts';
 import { SERVER_INFO } from '../version.ts';
@@ -32,6 +36,17 @@ const PingOutput = z.looseObject({
     /** The warning line for `bytes`; nothing is evicted above it, the owner is told. */
     budgetBytes: z.number(),
     overBudget: z.boolean(),
+    /** True while a deferred index build (`createLocalRuntime({ deferIndex: true })`, the stdio
+     *  entrypoint) is still filling; every other vault tool but a handful of exempt reads waits
+     *  for it, up to INDEX_WAIT_MS, before answering. Always false without `deferIndex`. */
+    building: z.boolean(),
+    /** Notes indexed so far while building; equals `total` once `building` is false. */
+    indexed: z.number(),
+    /** Notes the current fill found to index; 0 until the initial listing finishes. */
+    total: z.number(),
+    /** Notes the background build could not read (no permission, a lock held by another program, not UTF-8). They are in
+     *  neither `indexed` nor `notes`; the reconcile pass picks up the ones that become readable. */
+    unreadable: z.number().optional(),
   }),
 });
 
@@ -70,23 +85,30 @@ export async function createVaultServer(
         openWorldHint: false,
       },
     },
-    async () => {
-      const out = {
-        server: SERVER_INFO.name,
-        version: SERVER_INFO.version,
-        era: ctx.era,
-        now: new Date().toISOString(),
-        index: {
-          notes: runtime.index.size(),
-          builtAt: runtime.index.builtAt.toISOString(),
-          reconciledAt: runtime.index.reconciledAt?.toISOString() ?? null,
-          bytes: runtime.index.byteSize(),
-          budgetBytes: runtime.index.budgetBytes,
-          overBudget: runtime.index.byteSize() > runtime.index.budgetBytes,
-        },
-      };
-      return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
-    },
+    // tracked like every vault tool: a stopping server answers SHUTTING_DOWN, or finishes it
+    () =>
+      tracked({ runtime }, async (): Promise<CallToolResult> => {
+        const indexState = runtime.indexState();
+        const out = {
+          server: SERVER_INFO.name,
+          version: SERVER_INFO.version,
+          era: ctx.era,
+          now: new Date().toISOString(),
+          index: {
+            notes: runtime.index.size(),
+            builtAt: runtime.index.builtAt.toISOString(),
+            reconciledAt: runtime.index.reconciledAt?.toISOString() ?? null,
+            bytes: runtime.index.byteSize(),
+            budgetBytes: runtime.index.budgetBytes,
+            overBudget: runtime.index.byteSize() > runtime.index.budgetBytes,
+            building: !indexState.ready,
+            indexed: indexState.done,
+            total: indexState.total,
+            ...(indexState.unreadable ? { unreadable: indexState.unreadable } : {}),
+          },
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
+      }),
   );
 
   // Not every client shows the model the initialize `instructions` (measured: the claude.ai
@@ -105,7 +127,11 @@ export async function createVaultServer(
         openWorldHint: false,
       },
     },
-    async () => ({ content: [{ type: 'text', text: instructions }] }),
+    () =>
+      tracked(
+        { runtime },
+        (): CallToolResult => ({ content: [{ type: 'text', text: instructions }] }),
+      ),
   );
 
   registerVaultTools(server, {

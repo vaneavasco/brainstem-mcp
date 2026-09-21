@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig } from '../src/config.ts';
+import { ConfigError, loadConfig, loadVaultConfig } from '../src/config.ts';
 import { baseEnv, TEST_OWNER_SECRET } from './helpers/env.ts';
 
 const base = baseEnv();
@@ -257,6 +257,112 @@ describe('storage and vault settings', () => {
       expect(ce.invalid).toEqual(['DAILY_NOTES_FOLDER']);
       expect(ce.missing).toEqual([]);
       expect(ce.message).toContain('DAILY_NOTES_FOLDER');
+    }
+  });
+});
+
+describe('loadVaultConfig', () => {
+  it('needs only VAULT_PATH — no PUBLIC_URL, no OWNER_SECRET, no tunnel settings', () => {
+    const cfg = loadVaultConfig({ VAULT_PATH: '/tmp/my-vault' });
+    expect(cfg.vaultPath).toBe('/tmp/my-vault');
+    expect(cfg.vaultSettings).toEqual({
+      dailyNotes: { folder: '', format: 'yyyy-MM-dd', template: null, timezone: 'UTC' },
+      requiredFrontmatter: [],
+    });
+    expect(cfg.watchPollMs).toBeNull();
+    expect(cfg.maxBinaryBytes).toBe(8 * 1024 * 1024);
+    expect(cfg.reconcileMs).toBe(300_000);
+    expect(cfg.logLevel).toBe('info');
+    expect(cfg.stateDir).toBeNull();
+    expect('storage' in cfg).toBe(false);
+    expect('ownerSecret' in cfg).toBe(false);
+    expect('publicUrl' in cfg).toBe(false);
+  });
+
+  it('is unaffected by an invalid or missing PUBLIC_URL/OWNER_SECRET in the environment', () => {
+    // A real process.env for a stdio session has neither set at all; a leftover, malformed
+    // PUBLIC_URL from an unrelated .env in the same shell must not break vault loading either.
+    const cfg = loadVaultConfig({
+      VAULT_PATH: '/tmp/my-vault',
+      PUBLIC_URL: 'not a url at all',
+      OWNER_SECRET: '',
+    });
+    expect(cfg.vaultPath).toBe('/tmp/my-vault');
+  });
+
+  it('requires VAULT_PATH (unconditionally — no STORAGE_BACKEND concept here)', () => {
+    let err: unknown;
+    try {
+      loadVaultConfig({});
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).missing).toEqual(['VAULT_PATH']);
+    expect((err as ConfigError).invalid).toEqual([]);
+  });
+
+  it('parses the same daily-notes / timezone / reconcile / binary knobs loadConfig does, with the same validation', () => {
+    const cfg = loadVaultConfig({
+      VAULT_PATH: '/tmp/vault',
+      DAILY_NOTES_FOLDER: 'journal',
+      DAILY_NOTES_FORMAT: '%Y-%m-%d',
+      DAILY_NOTES_TEMPLATE: '# {{title}}',
+      VAULT_TIMEZONE: 'Europe/Chisinau',
+      REQUIRED_FRONTMATTER: 'type, status',
+      VAULT_WATCH_POLL_MS: '2000',
+      VAULT_RECONCILE_MS: '60000',
+      MAX_BINARY_BYTES: '1048576',
+      LOG_LEVEL: 'debug',
+      STATE_DIR: '/tmp/state',
+    });
+    expect(cfg.vaultSettings).toEqual({
+      dailyNotes: {
+        folder: 'journal',
+        format: '%Y-%m-%d',
+        template: '# {{title}}',
+        timezone: 'Europe/Chisinau',
+      },
+      requiredFrontmatter: ['type', 'status'],
+    });
+    expect(cfg.watchPollMs).toBe(2000);
+    expect(cfg.reconcileMs).toBe(60_000);
+    expect(cfg.maxBinaryBytes).toBe(1_048_576);
+    expect(cfg.logLevel).toBe('debug');
+    expect(cfg.stateDir).toBe('/tmp/state');
+  });
+
+  it('rejects an unknown timezone the same way loadConfig does', () => {
+    let err: unknown;
+    try {
+      loadVaultConfig({ VAULT_PATH: '/tmp/vault', VAULT_TIMEZONE: 'Mars/Olympus' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).invalid).toEqual(['VAULT_TIMEZONE']);
+    expect((err as ConfigError).message).toContain('IANA');
+  });
+
+  it('rejects a DAILY_NOTES_FOLDER that would escape the vault, the same way loadConfig does', () => {
+    let err: unknown;
+    try {
+      loadVaultConfig({ VAULT_PATH: '/tmp/vault', DAILY_NOTES_FOLDER: '../x' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).invalid).toEqual(['DAILY_NOTES_FOLDER']);
+  });
+
+  it('defaults to process.env when called with no argument', () => {
+    const prevVaultPath = process.env.VAULT_PATH;
+    process.env.VAULT_PATH = '/tmp/env-default-vault';
+    try {
+      expect(loadVaultConfig().vaultPath).toBe('/tmp/env-default-vault');
+    } finally {
+      if (prevVaultPath === undefined) delete process.env.VAULT_PATH;
+      else process.env.VAULT_PATH = prevVaultPath;
     }
   });
 });

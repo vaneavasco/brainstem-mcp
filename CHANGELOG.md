@@ -6,6 +6,55 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-21
+
+A second way in: the same tools over stdin/stdout, for Claude Code (and, later, a Claude Desktop
+bundle) on the machine that holds the vault. The HTTP server, OAuth and the tunnel are unchanged,
+except where noted (**both**).
+
+### Added (stdio)
+
+- `./brainstem stdio [--vault <path>]`: a second, local way in, built from the same tool factory
+  as the HTTP server, so both expose the same tools by construction. No Docker, no Cloudflare
+  tunnel, no OAuth: the process runs as the OS user who owns the vault's files, and the path
+  policy, size limits and optimistic concurrency apply as for every other client.
+  `claude mcp add brainstem -- /path/to/brainstem stdio` connects it from Claude Code. The vault
+  comes from `--vault` or from the install's `.env` (`VAULT_PATH`); a folder that does not exist
+  is refused, never created. The launchers (`brainstem`, `brainstem.cmd`) no longer require
+  Docker for `stdio`, `--help` or `--version`, and write their own messages to stderr (stdout
+  belongs to the protocol).
+- The stdio server answers at once and builds its index in the background. `vault_read`,
+  `vault_daily_note_read`, `vault_daily_note_path` and `vault_canvas_read` never read the index
+  and work from the first second; every other tool waits for it (up to 45 s, under the 60 s a
+  client waits by default) and otherwise answers `INDEX_BUILDING: N of M notes indexed so far`.
+  No tool ever answers from a half-built index: it is ready only after a reconcile pass against
+  the disk has succeeded (retried after 1, 2, 4, 8 and 16 s; if none succeeds the tools answer
+  `INDEX_ERROR`).
+- The stdio server never outlives its client, and never drops work it accepted. It stops when
+  stdin ends or closes, when stdout or stderr fails (a client that was killed), on a transport
+  error, on SIGTERM and on SIGINT. Stopping is orderly: the calls already running finish and are
+  answered, calls read together with the disconnect are still run (the intake closes after
+  250 ms in which nothing new started, and one second after the stop began at the latest), a
+  call still waiting for the index gets two more seconds, and anything later is answered
+  `SHUTTING_DOWN` and not started. A stop during the index build does not wait for the build.
+
+### Added (both)
+
+- `brainstem_ping`'s `index` gains `building`, `indexed` and `total` (how far a background build
+  has gotten; `building: false` on the HTTP server, whose index is built before it listens) and
+  `unreadable`: the notes on disk that could not be read (no permission, a lock held by another
+  program, not UTF-8). The figure follows the disk: it falls when a note becomes readable or is
+  deleted, and rises when one stops being readable.
+
+### Fixed (both)
+
+- One file the operating system refuses to read no longer stops the whole index from being
+  built, nor the HTTP server from starting: the read fails for that note alone, it is counted in
+  `unreadable`, and the rest is indexed.
+- A FIFO, socket or device inside the vault is refused by every read (`INVALID_INPUT: … is not a
+  regular file`) instead of being opened: reading one never ends, and two such reads starved
+  every other file read in the process.
+
 ## [0.4.1] — 2026-09-21
 
 ### Added
@@ -501,6 +550,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.5.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.3.0...v0.3.1

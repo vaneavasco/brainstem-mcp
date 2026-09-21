@@ -155,16 +155,21 @@ export function registerReadTools(server: McpServer, tc: ToolContext): void {
 
   /** `adapter.read`, with near-miss suggestions folded into a NOT_FOUND's message — a reader who
    *  typed a straight apostrophe where the file name has a typographic one gets a way out instead
-   *  of "does not exist" and nothing else. */
+   *  of "does not exist" and nothing else. `vault_read` is exempt from the index-readiness gate
+   *  (it answers from the first second, before a deferred index is built), so this never waits
+   *  for or throws over the index: while it is still building, a NOT_FOUND simply carries no
+   *  suggestion instead of one drawn from a partial (and possibly misleading) path list. */
   async function readOrSuggest(path: string): Promise<Note> {
     try {
       return await adapter.read(path);
     } catch (error) {
       if (error instanceof VaultError && error.code === 'NOT_FOUND') {
-        const suggestions = suggestPaths(
-          index.all().map((e) => e.path),
-          path,
-        );
+        const suggestions = tc.runtime.indexState().ready
+          ? suggestPaths(
+              index.all().map((e) => e.path),
+              path,
+            )
+          : [];
         throw new VaultError(
           error.code,
           `${error.message}${didYouMeanSuffix(suggestions)}`,

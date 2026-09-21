@@ -135,6 +135,8 @@ export class FrontmatterIndex {
   private _reconciledAt: Date | null = null;
   /** Markdown paths a reconcile could not index, with the size:mtime they had then. */
   private readonly unindexable = new Map<string, string>();
+  /** Notes whose last read failed; see `unreadableCount`. */
+  private readonly unreadablePaths = new Set<string>();
 
   private constructor() {
     this.builtAt = new Date();
@@ -208,19 +210,52 @@ export class FrontmatterIndex {
     });
   }
 
-  static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
-    const index = new FrontmatterIndex();
+  /** An index with nothing in it yet — the starting point for a background `fill()` (see
+   *  `createLocalRuntime({ deferIndex: true })`), so a boot can answer at once and populate the
+   *  index while the first tool calls are already waiting on `indexReady`. */
+  static empty(): FrontmatterIndex {
+    return new FrontmatterIndex();
+  }
+
+  /**
+   * Lists the vault and reads every markdown note into this index, batching reads like `build()`.
+   * `onProgress` is called once before the first batch (`{ done: 0, total }`) and once after each
+   * batch, so a caller can report "N of M notes indexed" while a large vault is still filling.
+   * Safe to call on an index that already has entries (a reconcile does the equivalent lighter
+   * sweep instead); `build()` is exactly `empty()` followed by `fill()`.
+   */
+  async fill(
+    adapter: StorageAdapter,
+    onProgress?: (progress: { done: number; total: number }) => void,
+    /** Asked between batches: a fill that is no longer wanted (the runtime is closing) stops. */
+    shouldStop: () => boolean = () => false,
+  ): Promise<{ unreadable: number; stopped: boolean }> {
     const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
     const mdPaths: string[] = [];
     for (const file of files) {
       if (isMarkdownPath(file.path)) mdPaths.push(file.path);
-      else index.addAsset(file.path);
+      else this.addAsset(file.path);
     }
+    const total = mdPaths.length;
+    let done = 0;
+    onProgress?.({ done, total });
     for (let i = 0; i < mdPaths.length; i += MAX_BATCH) {
+      if (shouldStop()) return { unreadable: this.unreadablePaths.size, stopped: true };
       const chunk = mdPaths.slice(i, i + MAX_BATCH);
-      const { notes } = await adapter.batchRead(chunk);
-      for (const note of notes) index.upsert(FrontmatterIndex.fromNote(note));
+      const { notes, failed } = await adapter.batchRead(chunk);
+      for (const note of notes) this.upsert(FrontmatterIndex.fromNote(note));
+      for (const { path } of failed) this.unreadablePaths.add(path);
+      // A note that vanished or could not be read is not "done": the unreadable ones are kept apart, and the
+      // reconcile pass that follows the fill is what picks it up once it can be read.
+      done += notes.length;
+      onProgress?.({ done, total });
     }
+    return { unreadable: this.unreadablePaths.size, stopped: false };
+  }
+
+  static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
+    const index = FrontmatterIndex.empty();
+    await index.fill(adapter);
     return index;
   }
 
@@ -235,12 +270,14 @@ export class FrontmatterIndex {
     const existing = this.entries.get(entry.path);
     if (existing) this.bytes -= this.entrySize(existing);
     this.entries.set(entry.path, entry);
+    this.unreadablePaths.delete(entry.path); // it was just read
     this.bytes += this.entrySize(entry);
     this.bumpVersion();
     this.checkByteBudget();
   }
 
   remove(path: string): void {
+    this.unreadablePaths.delete(path); // a note that is gone is not an unreadable note
     const existing = this.entries.get(path);
     if (!existing) return;
     this.bytes -= this.entrySize(existing);
@@ -250,6 +287,8 @@ export class FrontmatterIndex {
   }
 
   rename(from: string, to: string): void {
+    // an unreadable note moves like any other (a rename needs no read permission)
+    if (this.unreadablePaths.delete(from)) this.unreadablePaths.add(to);
     const existing = this.entries.get(from);
     if (!existing) return;
     this.bytes -= this.entrySize(existing);
@@ -275,6 +314,19 @@ export class FrontmatterIndex {
 
   size(): number {
     return this.entries.size;
+  }
+
+  /** Notes on disk whose last read failed (no permission, a lock held by another program, not UTF-8): kept current by
+   *  the fill, every reconcile pass and every successful read, so it falls when a note heals. */
+  unreadableCount(): number {
+    return this.unreadablePaths.size;
+  }
+
+  /** Notes the vault holds: the indexed ones, and the unreadable ones the index has no entry for. */
+  knownNoteCount(): number {
+    let missing = 0;
+    for (const path of this.unreadablePaths) if (!this.entries.has(path)) missing += 1;
+    return this.entries.size + missing;
   }
 
   byteSize(): number {
@@ -332,13 +384,21 @@ export class FrontmatterIndex {
     try {
       this.upsert(FrontmatterIndex.fromNote(await adapter.read(path)));
     } catch (error) {
+      // Gone, or not a file at all (a folder, a FIFO or socket named like a note: no listing
+      // ever shows those, only a watcher event can bring one here): not a note, so not counted.
       if (
         error instanceof VaultError &&
-        (error.code === 'NOT_FOUND' || error.code === 'ENCODING')
+        (error.code === 'NOT_FOUND' || error.code === 'INVALID_INPUT')
       ) {
         this.remove(path);
         return;
       }
+      if (error instanceof VaultError && error.code === 'ENCODING') {
+        this.remove(path);
+        this.unreadablePaths.add(path); // after remove(), which clears it
+        return;
+      }
+      this.unreadablePaths.add(path);
       throw error;
     }
   }
@@ -388,15 +448,21 @@ export class FrontmatterIndex {
       try {
         await this.refreshPath(adapter, file.path);
       } catch {
+        this.unreadablePaths.add(file.path);
         continue; // one unreadable file must never abort the whole reconcile pass
       }
       if (this.entries.has(file.path)) {
         this.unindexable.delete(file.path);
         if (existing) refreshed += 1;
         else added += 1;
-      } else {
+      } else if (this.unreadablePaths.has(file.path)) {
+        // refreshPath said so (not UTF-8). A path it dropped without marking was gone, or was
+        // no longer a regular file, by the time it was read: not a note, nothing to count.
         this.unindexable.set(file.path, stamp);
       }
+    }
+    for (const path of this.unreadablePaths) {
+      if (!seenNotes.has(path)) this.unreadablePaths.delete(path); // gone from the disk
     }
 
     // The listing is a snapshot. A note a tool wrote, or moved, after it was taken is in the index

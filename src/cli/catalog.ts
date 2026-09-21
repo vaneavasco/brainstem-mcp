@@ -56,6 +56,12 @@ export const COMMANDS: readonly CommandInfo[] = [
     example: './brainstem logs',
   },
   {
+    name: 'stdio',
+    group: 'Everyday',
+    summary: 'Serve one vault over stdio — no Docker, no tunnel, no OAuth',
+    example: './brainstem stdio --vault ~/Documents/Vault',
+  },
+  {
     name: 'setup',
     group: 'Configuration',
     summary: 'Create or update .env (owner secret, vault path, tunnel mode)',

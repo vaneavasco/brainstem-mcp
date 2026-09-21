@@ -1,0 +1,142 @@
+# Claude Desktop integration: a local (stdio) server and an installable bundle
+
+Date: 2026-09-21 · Status: in progress on `feat/desktop-integration` · Decision record: ADR 0008
+
+## Why
+
+The server reaches Claude in one way today: HTTP behind a Cloudflare tunnel, with its own OAuth. That is the right shape for a vault several people reach from claude.ai, and the wrong one for the owner on their own machine. In one day of use the quick tunnel died twice (the hostname lost its DNS record; every client had to be re-created with a new URL), and a connector kept serving a stale tool list for hours after a release. None of that exists for a process the client starts itself and talks to over stdin/stdout.
+
+So a **second way in**, not a replacement:
+
+| | HTTP + tunnel (today) | stdio (this project) |
+|---|---|---|
+| Who starts it | Docker, always on | the client, per session |
+| Reaches | claude.ai (web, mobile), any machine, several people | Claude Code and Claude Desktop on that machine |
+| Auth | OAuth 2.1, owner secret, consent page | none: the process runs as the OS user who owns the files |
+| Breaks when | the tunnel dies, the URL changes, a proxy caches the tool list | never for those reasons |
+
+The core (`src/tools`, `src/vault`, `src/storage`) does not know about HTTP. The SDK ships `serveStdio(factory)`, which takes the same server factory `createMcpHandler` does. What is missing is an entrypoint, a boot that does not make the client wait, a packaging step, and proof on three operating systems.
+
+## Facts established (2026-09-21)
+
+- MCP Bundles (`.mcpb`): a zip with `manifest.json` (`manifest_version` "0.3"), `server.type` one of `node | python | binary | uv`, `server.entry_point`, `server.mcp_config { command, args, env }` with `${__dirname}`, `${user_config.KEY}`, `${HOME}` substitution; `user_config` fields of type `string | number | boolean | directory | file` (`required`, `default`, `sensitive`, `multiple`); `compatibility { claude_desktop, platforms: darwin | win32 | linux, runtimes: { node } }`. A Node bundle carries its production `node_modules`. CLI: `mcpb init | validate | pack | sign`.
+- "Node.js ships with Claude for macOS and Windows"; **which version is not stated anywhere**. We build for ES2024 and run on Node 24 in Docker. Phase 0 measures it.
+- The developer documentation says Claude Desktop "runs on macOS (`darwin`) and Windows (`win32`)" and that installing is a double-click, a drag-and-drop or Settings → Extensions → Advanced settings → "Install Extension…", all three opening one screen where the user "reviews extension details and permissions, configures required settings, grants permissions"; installation is per user. The help centre page also lists Linux: to be settled in phase 6, and irrelevant for the known installers (Windows 11, macOS).
+- Claude Desktop's help centre lists macOS, Windows and Linux as supported and says the app "includes a built-in Node.js environment" (version still not stated). The stdio server is also usable directly from Claude Code (`claude mcp add brainstem -- ./brainstem stdio`), with only Node installed.
+- Installing a bundle that is not in the directory: Settings → Extensions → Advanced settings → Extension Developer → "Install Extension…" → pick the `.mcpb`. No signature is required by the documentation (reports show a log line "Installing unsigned extension" and the install proceeding). Such extensions do not update themselves: "users will need to install updated .mcpb files manually".
+- On Team and Enterprise plans an owner can upload a custom desktop extension for one-click install by the team, and can enable or disable desktop extensions for the organisation (`isDesktopExtensionEnabled`, `isDesktopExtensionDirectoryEnabled`): where they are disabled, nothing installs, signed or not.
+- Measured: the production dependency tree is 60 MB unpacked, about 10 MB zipped, 8,400 files, **no native addon** (`*.node`): one bundle serves every platform, and nothing has to be compiled on install. `@anthropic-ai/mcpb` 2.1.2 is the packing CLI. Node 18, 20, 22 and 24 are available locally through nvm for phase 0.
+- Reports (2026) of `.mcpb` installs failing silently on some Desktop builds while "Install Unpacked Extension" works: phase 5 tests the install on each system and ships the unpacked form as a fallback.
+- Index build on a 37,000-note vault: about 27 s and 250 MB of heap; on a 3,400-note vault a few seconds. A client that starts the server per session cannot wait 27 s for `initialize`.
+
+## Decisions already taken (with the owner, 2026-09-21; see ADR 0008)
+
+1. **Variant A: a standalone stdio server** that opens the vault itself. Not a stdio bridge to the running HTTP server: that would need a local trust path in `src/auth/`, which is a security change with its own plan and review.
+2. **No authentication on stdio.** Whoever can start a process as the owner can already read the files. The path policy, the reserved `_brainstem/` folder, size limits, optimistic concurrency and the write gate all still apply: they protect the vault from the model, not from the user.
+3. **The boot answers at once and builds the index in the background.** Tools that need the index wait for it, briefly, and otherwise say how far it is. No tool ever answers from a half-built index.
+4. **An index cache, when it comes, is machine-local, never in the vault** (a vault may be in git or synced across machines): `CACHE_DIR` → OS cache dir; NDJSON, one entry per line, validated per entry against the local listing (size + mtime); written on clean shutdown and at most hourly. SQLite stays out of the vault (ADR 0005); inside the cache dir it remains a candidate, not a plan.
+5. One server per vault is the design. Two processes on one vault (the Docker server and a stdio session) are tolerated for reads; for writes `expectedHash` catches collisions, and each process heals its index through the watcher and reconcile.
+
+## Phases
+
+Each phase is shippable on its own and ends with `lint`, `typecheck`, `npm test`, the scale run, an adversarial review repeated until a round finds nothing above low, and a release (a new entrypoint or tool behaviour is a release: AGENTS.md).
+
+### Phase 0 — measure what we do not know (no product code)
+
+- A five-line throwaway bundle that prints `process.version`, `process.platform`, `process.arch` to stderr and answers `initialize`: installed once on macOS and once on Windows by whoever has them. **Output: the minimum Node we must run on.**
+- `npm run build` output run under that Node version (nvm) against the unit tests that do not need Docker: list every API that is missing (candidates seen in the tree: `import.meta.dirname` in the CLI).
+- Decide the floor: if Desktop's Node is ≥ 22, nothing to do; if it is 20, the build target and a handful of call sites change, behind a CI job pinned to that version.
+
+**Results (2026-09-21).**
+
+- The probe bundle on macOS (Apple silicon) reported Node `v24.20.0`, Electron `44.2.0`, `darwin`/`arm64`, run by the app's own plugin helper process. A bundle therefore runs on **Electron's Node, not on a Node installed on the machine**: the Node version follows the Claude Desktop version. The same probe on Windows 11 (x64) reported the same pair, Node `v24.20.0` on Electron `44.2.0`, run by `Claude.exe` from the Store package `Claude_2.2553.1.0_x64`: both platforms ship one runtime, and Claude Desktop **2.2553.1** is the first version we have seen carry Node 24.
+- The compiled server was run under nvm: it works on Node 24, 22 and 20.11 (13 of 14 tools probed; see the next point) and fails on Node 18 (the logger needs `diagnostics_channel.tracingChannel`). `import.meta.dirname` in `src/stdio-main.ts` is the only API on the stdio graph newer than Node 20.0.
+- **Decided with the owner: the floor is Node 24**, the version we develop, test and ship in Docker. Nothing older is tested, so nothing older is promised. The manifest states `compatibility.runtimes.node: ">=24"` and a minimum Claude Desktop version (`compatibility.claude_desktop: ">=2.2553.1"`, the version measured on Windows; to be lowered only if an older one is shown to carry Node 24, and checked against the macOS version number in phase 6), so an older app refuses the bundle with a clear message instead of failing at start.
+- No functionality may be lost in the bundle. The one tool that depends on something outside Node is regex search, which shells out to ripgrep; without it the error says "the Docker image has it", which is wrong for a bundle user. Phase 5 adds the fallback: when `rg` is absent, regex search runs through our own linear-time safe-regex engine over the files (slower, same results, same limits), and the tests that skip today without `rg` run against that path instead.
+
+### Phase 1 — the stdio entrypoint (`./brainstem stdio`)
+
+- `src/stdio-main.ts`: `serveStdio((ctx) => createVaultServer(ctx, deps))`, the same factory the HTTP server uses, so both ways in expose the same 32 tools by construction.
+- Configuration without HTTP: a `loadVaultConfig(env)` carved out of `loadConfig` (vault path, daily notes, required frontmatter, timezone, watch polling, binary cap, reconcile interval, log level). `OWNER_SECRET`, `PUBLIC_URL`, tunnel settings are not read and not required. `--vault <path>` overrides `VAULT_PATH`.
+- **stdout carries the protocol and nothing else.** The logger writes to stderr; the launcher already prints its own messages to stderr; a test asserts that every line on stdout parses as JSON-RPC.
+- `src/cli/catalog.ts` gets the command first (the README table and its tests derive from it). `brainstem.cmd` gets the same.
+- **The launchers must not demand Docker for this command.** `brainstem` and `brainstem.cmd` exit 1 today when `docker` is missing, before any command runs; `stdio` (like `--help`) needs only Node. The check moves to the commands that use Docker.
+- Lifecycle: stdin closing, SIGTERM and SIGINT close the runtime (watcher, reconcile timer) and exit 0, as do a failing stdout (`EPIPE`: the client was killed) and a fatal transport error, so no server outlives its client. Stopping is orderly (found by adversarial review 2): running calls are drained and answered (`CallTracker`, a 250 ms quiet period so calls read together with the disconnect still run, capped at 1 s after the stop began so a busy client cannot postpone it: review 3), a call parked on the index gets 2 s and then `SHUTTING_DOWN`, stdout is flushed, then the transport and the runtime close; an unusable vault path exits 1 with one line on stderr before any protocol byte.
+- Tests, with a real child process and the SDK's stdio client: tool list identical to the HTTP harness (names, input and output schemas, annotations); read, write with `expectedHash`, conflict; stdout purity; clean exit on stdin close; refusal of a missing vault.
+
+### Phase 2 — a boot that does not make the client wait
+
+- `FrontmatterIndex`: `empty()` + `fill(adapter, onProgress)`; `build()` stays as the two together. `createLocalRuntime({ deferIndex: true })` returns at once with `indexState(): { ready, done, total }` and `indexReady: Promise<void>`.
+- The watcher and the reconcile timer start **after** the fill (an event handled mid-fill could be overwritten by the fill's older read), followed by one reconcile pass to catch what changed during it. The index is ready only when that pass **succeeded**: a failed pass is retried with a backoff (`DEFAULT_SETTLE_RETRY_MS`), and when every attempt fails the build is reported as failed (`INDEX_ERROR`) instead of ready. Notes the fill could not read are counted (`unreadable` in `brainstem_ping`), and closing the runtime stops the fill between batches (found by adversarial review 1).
+- One gate where tools are registered, not thirty edits: every vault tool waits for `indexReady` up to `INDEX_WAIT_MS` (45 s: measured, a 37,700-note index takes about 32 s, and the client SDK gives up at 60 s), then runs; if the index is still building it answers an error that says so, with `done` of `total`, and nothing else. Exempt, because they do not read the index: `brainstem_ping` (which reports the state), `brainstem_guide`, `vault_read`, `vault_daily_note_read`, `vault_daily_note_path`, `vault_canvas_read`. Writes wait like everything else.
+- The HTTP server keeps its blocking boot in this phase (its health check means "ready to answer anything"); moving it over is a separate, small decision once stdio has shown the gate works.
+- Tests, with an adapter whose reads are slowed by injection: `initialize` and `tools/list` answer in under a second; `ping` says building and counts; `vault_read` works; `vault_query` waits and then answers the full count; with a tiny wait the error names the progress; a write is not applied before the index is ready; after the fill a change made during it is visible.
+
+### Phase 3 — two processes on one vault, stated honestly; a read-only mode; setup without Docker
+
+- **Giving the vault path, in each way in.** Desktop: the install form's folder picker. Claude Code: `./brainstem stdio --vault <path>` or `VAULT_PATH` in `.env`. HTTP: `./brainstem setup`, as today. `setup` gains a **local mode** (asked first: "How will Claude reach this vault? locally on this machine / from claude.ai through a tunnel"): it asks only for the vault folder, writes `.env` without a secret or tunnel settings, needs no Docker, and prints the ready-to-paste `claude mcp add brainstem -- <abs path>/brainstem stdio` line.
+- **The path is validated at start**, with the validation `setup` and `status` already share (exists, is a folder, is writable, is not a system location): an unusable folder is one clear line on stderr and exit 1, never a server that half works. In Desktop that line lands in the extension's log.
+- **One vault per server, stated.** A Desktop install is one vault; two vaults in Claude Code are two entries with two names (`claude mcp add brainstem-work -- … --vault …`). Serving several vaults from one process is another project.
+
+- **`--read-only` (env `VAULT_READ_ONLY=true`)**: the server registers only the tools whose annotations say `readOnlyHint: true` (17 of 32 today), decided from the annotations so it cannot drift from the tool list; a test asserts that no registered tool in this mode can change a file. It is the right default for someone who only wants to ask questions, and the safety net for a vault that is synced between people. It applies to both ways in.
+
+- stdio keeps its transaction journal and (later) its cache in a machine-local state dir keyed by the vault's real path, not in `<vault>/_brainstem/` (`STATE_DIR` exists); the HTTP server keeps the vault-local state it has (tokens must travel with the vault).
+- README and `brainstem_ping`: "one server per vault" and what happens with two. A boot line on stderr when another brainstem process holds the same machine-local state dir.
+- A cross-process write lock is **not** in this project: `expectedHash` already turns a collision into a CONFLICT instead of a lost write. Revisit with evidence.
+
+### Phase 4 — the machine-local index cache
+
+As decided (point 4 above). Only after phases 1–2 are in use: it matters for a 37,000-note vault started per session and not at all for a small one. Acceptance: second start on the large vault under 3 s, identical query results with and without the cache, a cache from another vault or schema is discarded, permissions 0700/0600.
+
+### Phase 5 — the bundle
+
+What installing it looks like, which is the point of the phase: download `brainstem-mcp-X.Y.Z.mcpb` from the release page, open it (or Settings → Extensions in Claude Desktop), choose the vault folder in the form the manifest generates, done. No Docker, no Node to install (it ships with Claude for macOS and Windows), no tunnel, no secret. Updating is installing the newer file.
+
+
+- **The install form** (`user_config`, from which Claude Desktop generates its settings UI; it can be edited later under Settings → Extensions): `vault` (`directory`, required: any folder is a valid vault, an empty one included), `read_only` (`boolean`, default false), and optional `timezone`, `daily_notes_folder`, `daily_notes_format` with today's defaults. **No secret field**, on purpose (see "Why stdio needs no secret" below). Values reach the server through `mcp_config.args` / `env`.
+- `manifest.json` (0.3): `server.type: node`, `entry_point: dist/stdio-main.js`, `mcp_config.args: ["${__dirname}/dist/stdio-main.js", "--vault", "${user_config.vault}"]`; `user_config.vault` of type `directory`, required; optional timezone and daily-notes folder; `compatibility.platforms: darwin, win32, linux`, `runtimes.node: ">=24"` and the minimum Claude Desktop version (phase 0); `tools_generated: false` with the tool list generated from the registry so it cannot drift.
+- **The bundle holds the stdio server and nothing else.** It opens no port, has no URL, no OAuth, no tunnel: the HTTP server is a different deliverable (the Docker image), from the same repository and at the same version, for a vault several people reach from claude.ai. Nobody who installs the bundle gets or starts a network server.
+- Contents, preferred: **one JavaScript file** built with esbuild from `src/stdio-main.ts` (so only what stdio imports is in it: tools, vault, storage; not Express, the authorization server, the tunnel supervisor or the CLI), plus `manifest.json`, the licence and an icon. Reasons: the installers are on Windows 11 and macOS, and deep `node_modules` trees (8,400 files here) are the classic source of path-length failures when unpacking on Windows; a bundle the public downloads should carry no code it never runs. Risk: not every library bundles cleanly (the logger is the usual suspect). Proof: the whole stdio test suite runs against the bundled file, not only against the sources. Fallback if it does not come out clean: `dist/` plus production `node_modules`.
+- ripgrep is **not** bundled at first: search already falls back to a JavaScript scan; a per-platform binary is a later, measured decision.
+- `npm run bundle` = build + `npm ci --omit=dev` in a staging dir + `mcpb validate` + `mcpb pack`. CI builds it on every tag and attaches `brainstem-mcp-X.Y.Z.mcpb` to the GitHub release; `tests/release/version-consistency.test.ts` also checks `manifest.json`.
+- **Distribution.** CI builds the bundle on every release tag and attaches it to the GitHub release under two names: `brainstem-mcp-X.Y.Z.mcpb` and a fixed `brainstem-mcp.mcpb`, so `…/releases/latest/download/brainstem-mcp.mcpb` is a link that never changes. The repository is public and so is the bundle: it holds code only, no data and no secret; the vault stays on the machine of whoever installs it. Submission to the vendor's extension directory (review, automatic updates) is a later step.
+- **Signing (proposed, to be confirmed by the owner).** Facts from the MCPB CLI docs: `mcpb sign --cert … --key …` takes an X.509 certificate and key in PEM, self-signed or CA-issued ("should have Code Signing extended key usage"); the signature is a detached PKCS#7 appended to the zip; `mcpb verify` shows subject, fingerprint and a warning when self-signed. What Claude Desktop shows for an unsigned, a self-signed and a CA-signed bundle is **not documented: measure it here** before spending money. Proposal: (1) a project certificate, self-signed, Code Signing EKU, long-lived; its private key is a GitHub Actions secret in a protected environment that only release tags reach (the owner generates and stores it; it is never in the repository or in a log); its fingerprint is published in README and SECURITY.md so anyone can run `mcpb verify` and compare; (2) `SHA256SUMS` and a GitHub build-provenance attestation on every release asset (`gh attestation verify`), which for an open-source project says more than the certificate does: exactly which commit and workflow produced the file; (3) a CA-issued certificate only if the measurement shows Desktop treats it materially differently or the directory requires it, and only after checking that such a key can be used at all: CA code-signing keys now live on hardware or in a cloud HSM and cannot be exported, while `mcpb sign` wants a PEM key file.
+- **Who should install it.** The bundle needs the vault on the machine. For a personal vault that is the point. For a vault shared by a team it means a copy of the data on every laptop, which is an access decision, not a packaging one: there the HTTP server with a connector (one copy, controlled access) stays the right path, and the bundle is for whoever holds the data anyway.
+
+### Phase 6 — three operating systems
+
+- CI matrix `ubuntu | macos | windows` for unit tests (Docker smoke stays on Linux). Expected trouble, to be found by tests rather than by users: backslashes reaching the path policy, case-insensitive file systems (two notes that differ only by case; near-miss suggestions), atomic rename over an open file on Windows, watcher behaviour (FSEvents, ReadDirectoryChangesW), `\r\n` in notes, long paths.
+- Paths as people really have them: spaces and non-ASCII letters (`C:\\Users\\Ana Maria\\Documents\\Vault`), a vault inside a synced folder (iCloud Drive, OneDrive, Dropbox) whose files may be placeholders fetched on first read, which makes the first index build slow or partial: tested where CI can, documented where it cannot.
+- Nothing in the security invariants may weaken to make a platform pass; a platform that cannot hold one is listed as unsupported.
+
+### Phase 7 — proof with readers
+
+The five costliest prompts of the reader test, run through stdio in Claude Code on the large vault and compared with the HTTP runs (calls, characters, errors), then one session by a person on macOS or Windows with the installed bundle. Findings are fixed or listed.
+
+## Out of scope
+
+A stdio bridge to the HTTP server; any change under `src/auth/`; SQLite; multi-user; a setup UI; bundling a Node runtime of our own.
+
+## Open questions for the owner
+
+1. ~~Who will install the bundle?~~ Answered 2026-09-21: the owner's colleagues on Windows 11 and macOS, and anyone who downloads it from the public repository. So phase 6 (three operating systems in CI, and a real install on Windows 11 and on macOS) **gates** the first published bundle, and checksums plus a build attestation ship with it from the first release.
+2. Signing: confirm the proposal in phase 5 (project certificate, self-signed, plus checksums and build attestation), or choose otherwise.
+3. After phase 2, should the HTTP server also boot in the background (no 27 s gap at every deploy), with `/health` reporting "building"?
+
+## Why stdio needs no secret
+
+stdio is not a listening endpoint: there is no port, socket or named pipe to connect to. The client spawns the server and holds the only ends of two anonymous pipes. What another program running as the same user *can* do is start its own copy of the server on the same folder; but that program can already read and write the files directly, so nothing is gained by going through the server. The trust boundary is the operating-system account, as it is for the editor that owns the vault. A secret would sit in the extension's configuration under that same account, readable by exactly the programs it is meant to stop; it buys nothing here, and it is what the HTTP server has because there the boundary is a network. What does protect the vault on this path: nothing listens on the network; the path policy confines the server to the chosen folder and keeps `_brainstem/` reserved; Claude Desktop asks the user to grant permissions to the extension's tools; and `--read-only` removes the writing tools altogether.
+
+## Versioning: one version for everything
+
+The bundle is not a second product: it is the same code and the same tools, built by the same factory, in another wrapper. So there is **one version, in `package.json`**, and everything a tag produces carries it: the Docker images (`vX.Y.Z`, `latest`), `brainstem-mcp-X.Y.Z.mcpb` (and the fixed-name copy), and `manifest.json`'s `version`, which `tests/release/version-consistency.test.ts` checks like the changelog and the README. A running server reports `X.Y.Z+<commit>` from the bundle too (the commit is written at build time, as in the image). A change to the packaging alone (a new field in the install form) is still a release of the repository, with a patch bump.
+
+Two version lines were considered and rejected: "0.7.2" would mean different things to someone on Docker and someone on Desktop, and a second number is a second thing that can fall behind unnoticed, which is the failure fixed in 0.4.0. A monorepo with independently versioned packages pays off when different teams ship at different paces; here everything comes from one tree and one maintainer.
+
+What differs between the two ways in is how often someone must act: a file-installed extension does not update itself. That is answered in the changelog, not in the version: each entry says what it touches (the HTTP server and tunnel; stdio and the bundle; the tools, which are common to both), so a person on Desktop can tell from the release notes whether reinstalling is worth it.
+
+`1.0.0` is proposed for when this project has shipped and the tool contract has stood unchanged for a while; from then on a change that breaks clients is a major version.
+
+## Order and releases
+
+Phase 0 runs beside phase 1. **0.5.0** = phases 1 + 2 (usable at once from Claude Code on Linux). **0.6.0** = phases 3 + 4. **0.7.0** = phases 6 then 5 (the platforms are proven before the bundle is published), with the bundle on the release page. Phase 7 gates 0.7.0.
