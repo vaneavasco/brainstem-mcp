@@ -287,6 +287,8 @@ export class FrontmatterIndex {
   }
 
   rename(from: string, to: string): void {
+    // an unreadable note moves like any other (a rename needs no read permission)
+    if (this.unreadablePaths.delete(from)) this.unreadablePaths.add(to);
     const existing = this.entries.get(from);
     if (!existing) return;
     this.bytes -= this.entrySize(existing);
@@ -453,9 +455,10 @@ export class FrontmatterIndex {
         this.unindexable.delete(file.path);
         if (existing) refreshed += 1;
         else added += 1;
-      } else {
+      } else if (this.unreadablePaths.has(file.path)) {
+        // refreshPath said so (not UTF-8). A path it dropped without marking was gone, or was
+        // no longer a regular file, by the time it was read: not a note, nothing to count.
         this.unindexable.set(file.path, stamp);
-        this.unreadablePaths.add(file.path);
       }
     }
     for (const path of this.unreadablePaths) {

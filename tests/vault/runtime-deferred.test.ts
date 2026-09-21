@@ -367,3 +367,45 @@ describe('the unreadable count never outlives the file', () => {
     },
   );
 });
+
+describe('the unreadable set under a move and under a race', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'follows a renamed note, and does not count a file that vanished during the pass',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-unreadable-move-'));
+      try {
+        await fs.writeFile(path.join(root, 'locked.md'), '# locked\n');
+        await fs.chmod(path.join(root, 'locked.md'), 0o000);
+        const runtime = await createLocalRuntime({ vaultPath: root, reconcileMs: 0 });
+        try {
+          runtime.index.rename('locked.md', 'moved.md');
+          runtime.index.remove('locked.md'); // nothing left under the old name
+          expect(runtime.index.unreadableCount()).toBe(1);
+          runtime.index.remove('moved.md');
+          expect(runtime.index.unreadableCount()).toBe(0);
+          await fs.rm(path.join(root, 'locked.md'), { force: true });
+
+          // a listing that still names a file the read no longer finds
+          const adapter = runtime.adapter;
+          const racing = Object.create(adapter) as typeof adapter;
+          racing.list = async (...args: Parameters<typeof adapter.list>) => [
+            ...(await adapter.list(...args)),
+            {
+              path: 'ghost.md',
+              kind: 'file' as const,
+              size: 1,
+              modifiedAt: new Date().toISOString(),
+            },
+          ];
+          await runtime.index.reconcile(racing);
+          expect(runtime.index.unreadableCount()).toBe(0);
+        } finally {
+          await runtime.close();
+        }
+      } finally {
+        await fs.chmod(path.join(root, 'locked.md'), 0o644).catch(() => {});
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
