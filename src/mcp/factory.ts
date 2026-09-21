@@ -44,7 +44,7 @@ const PingOutput = z.looseObject({
     indexed: z.number(),
     /** Notes the current fill found to index; 0 until the initial listing finishes. */
     total: z.number(),
-    /** Notes the background build could not read (gone, not UTF-8, too large). They are in
+    /** Notes the background build could not read (no permission, a lock held by another program, not UTF-8). They are in
      *  neither `indexed` nor `notes`; the reconcile pass picks up the ones that become readable. */
     unreadable: z.number().optional(),
   }),

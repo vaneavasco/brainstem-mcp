@@ -40,7 +40,7 @@ export interface IndexState {
   done: number;
   total: number;
   error?: boolean;
-  /** Notes the fill could not read (gone, not UTF-8, too large): not counted in `done`. */
+  /** Notes the fill could not read (no permission, a lock held by another program, not UTF-8): not counted in `done`. */
   unreadable?: number;
 }
 

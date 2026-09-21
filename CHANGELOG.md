@@ -47,7 +47,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   starve every other file read in the process.
 - `brainstem_ping`'s `unreadable` follows the disk: it falls when a note becomes readable again
   and rises when one stops being, at the next reconcile pass or read; `total` counts the vault's
-  notes, readable or not, before and after the index is ready.
+  notes, readable or not, before and after the index is ready. A note that is deleted stops
+  being counted at once, and a special file that merely has a note's name is never counted.
 - `brainstem.cmd` writes its messages to stderr (stdout belongs to the protocol under `stdio`) and
   compares its first argument unquoted.
 

@@ -277,6 +277,7 @@ export class FrontmatterIndex {
   }
 
   remove(path: string): void {
+    this.unreadablePaths.delete(path); // a note that is gone is not an unreadable note
     const existing = this.entries.get(path);
     if (!existing) return;
     this.bytes -= this.entrySize(existing);
@@ -313,7 +314,7 @@ export class FrontmatterIndex {
     return this.entries.size;
   }
 
-  /** Notes on disk whose last read failed (no permission, not UTF-8, too large): kept current by
+  /** Notes on disk whose last read failed (no permission, a lock held by another program, not UTF-8): kept current by
    *  the fill, every reconcile pass and every successful read, so it falls when a note heals. */
   unreadableCount(): number {
     return this.unreadablePaths.size;
@@ -381,16 +382,21 @@ export class FrontmatterIndex {
     try {
       this.upsert(FrontmatterIndex.fromNote(await adapter.read(path)));
     } catch (error) {
-      if (error instanceof VaultError && error.code === 'NOT_FOUND') {
+      // Gone, or not a file at all (a folder, a FIFO or socket named like a note: no listing
+      // ever shows those, only a watcher event can bring one here): not a note, so not counted.
+      if (
+        error instanceof VaultError &&
+        (error.code === 'NOT_FOUND' || error.code === 'INVALID_INPUT')
+      ) {
         this.remove(path);
-        this.unreadablePaths.delete(path);
+        return;
+      }
+      if (error instanceof VaultError && error.code === 'ENCODING') {
+        this.remove(path);
+        this.unreadablePaths.add(path); // after remove(), which clears it
         return;
       }
       this.unreadablePaths.add(path);
-      if (error instanceof VaultError && error.code === 'ENCODING') {
-        this.remove(path);
-        return;
-      }
       throw error;
     }
   }

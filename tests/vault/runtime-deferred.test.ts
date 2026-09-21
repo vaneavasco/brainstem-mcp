@@ -335,3 +335,35 @@ describe('the unreadable count follows the disk', () => {
     },
   );
 });
+
+describe('the unreadable count never outlives the file', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a removed note, and a special file that is not a note at all, are not counted',
+    async () => {
+      const { execFileSync } = await import('node:child_process');
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-unreadable-gone-'));
+      try {
+        await fs.writeFile(path.join(root, 'a.md'), '# a\n');
+        await fs.writeFile(path.join(root, 'locked.md'), '# locked\n');
+        await fs.chmod(path.join(root, 'locked.md'), 0o000);
+        const runtime = await createLocalRuntime({ vaultPath: root, reconcileMs: 0 });
+        try {
+          expect(runtime.index.unreadableCount()).toBe(1);
+          // what vault_delete and the watcher's delete handler do: no reconcile pass follows
+          runtime.index.remove('locked.md');
+          expect(runtime.index.unreadableCount()).toBe(0);
+          expect(runtime.index.knownNoteCount()).toBe(1);
+          // what the watcher does when a FIFO named like a note appears: listings never show it
+          execFileSync('mkfifo', [path.join(root, 'pipe.md')]);
+          await runtime.index.refreshPath(runtime.adapter, 'pipe.md');
+          expect(runtime.index.unreadableCount()).toBe(0);
+        } finally {
+          await runtime.close();
+        }
+      } finally {
+        await fs.chmod(path.join(root, 'locked.md'), 0o644).catch(() => {});
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
