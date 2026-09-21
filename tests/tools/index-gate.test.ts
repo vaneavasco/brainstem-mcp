@@ -26,6 +26,29 @@ function slowAdapter(delayMs: number): typeof LocalFSAdapter.create {
   };
 }
 
+/**
+ * The same, but the fill is held until the test lets it go, instead of for a fixed time: a test
+ * that asserts "still building" must not depend on how fast the machine is (on a loaded CI runner
+ * a 200 ms delay was over before the first call was answered).
+ */
+function heldAdapter(): { create: typeof LocalFSAdapter.create; release: () => void } {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const create: typeof LocalFSAdapter.create = async (...args) => {
+    const adapter = await LocalFSAdapter.create(...args);
+    const batchRead = adapter.batchRead.bind(adapter);
+    adapter.batchRead = async (paths) => {
+      const result = await batchRead(paths);
+      await held;
+      return result;
+    };
+    return adapter;
+  };
+  return { create, release };
+}
+
 function brokenAdapter(): typeof LocalFSAdapter.create {
   return async (...args) => {
     const adapter = await LocalFSAdapter.create(...args);
@@ -53,9 +76,10 @@ afterEach(async () => {
 
 describe('the index-readiness gate on vault tools (deferIndex: true)', () => {
   it('brainstem_ping reports building with counts while the fill is in flight, then done', async () => {
+    const fill = heldAdapter();
     h = await startHarness(undefined, null, await seededRoot(), {
       deferIndex: true,
-      createAdapter: slowAdapter(200),
+      createAdapter: fill.create,
     });
     const first = await h.call('brainstem_ping');
     const firstBody = first.structuredContent as {
@@ -64,6 +88,7 @@ describe('the index-readiness gate on vault tools (deferIndex: true)', () => {
     expect(firstBody.index.building).toBe(true);
     expect(firstBody.index.total).toBe(1);
 
+    fill.release();
     await h.runtime.indexReady;
     const after = await h.call('brainstem_ping');
     const afterBody = after.structuredContent as {
@@ -74,23 +99,27 @@ describe('the index-readiness gate on vault tools (deferIndex: true)', () => {
   });
 
   it('vault_read is exempt: it works immediately, before the index is ready', async () => {
+    const fill = heldAdapter();
     h = await startHarness(undefined, null, await seededRoot(), {
       deferIndex: true,
-      createAdapter: slowAdapter(200),
+      createAdapter: fill.create,
     });
     await h.runtime.adapter.write('note.md', '# hello');
     const r = await h.call('vault_read', { path: 'note.md' });
     expect(r.isError).toBeFalsy();
     expect(h.runtime.indexState().ready).toBe(false); // proves this really didn't wait
+    fill.release();
   });
 
   it('vault_read gives no near-miss suggestion while the index is building, never waits, never throws', async () => {
+    const fill = heldAdapter();
     h = await startHarness(undefined, null, await seededRoot(), {
       deferIndex: true,
-      createAdapter: slowAdapter(300),
+      createAdapter: fill.create,
     });
     const r = await h.call('vault_read', { path: 'seed-typo.md' });
     expect(h.runtime.indexState().ready).toBe(false); // still building: proves this didn't wait
+    fill.release();
     expect(r.isError).toBe(true);
     const msg = (r.content[0] as { text: string }).text;
     expect(msg).not.toContain('Did you mean');
@@ -130,12 +159,15 @@ describe('the index-readiness gate on vault tools (deferIndex: true)', () => {
   });
 
   it('a vault_write issued during the fill is applied only after the index is ready, and reflected in it', async () => {
+    const fill = heldAdapter();
     h = await startHarness(undefined, null, await seededRoot(), {
       deferIndex: true,
-      createAdapter: slowAdapter(200),
+      createAdapter: fill.create,
     });
     const before = h.runtime.indexState().ready;
-    const writeResult = await h.call('vault_write', { path: 'new.md', content: '# New' });
+    const pending = h.call('vault_write', { path: 'new.md', content: '# New' });
+    setTimeout(fill.release, 100); // the call is parked at the gate by then; either order is valid
+    const writeResult = await pending;
     expect(before).toBe(false); // the write really was issued while still building
     expect(writeResult.isError).toBeFalsy();
     expect(h.runtime.indexState().ready).toBe(true); // the gate only let it run once ready
