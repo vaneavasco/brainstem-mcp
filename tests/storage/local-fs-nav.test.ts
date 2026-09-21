@@ -295,21 +295,55 @@ describe('watch', () => {
     const events: ChangeEvent[] = [];
     const unsubscribe = adapter.watch?.((e) => events.push(e));
     expect(unsubscribe).toBeTypeOf('function');
-    await new Promise((r) => setTimeout(r, 300)); // let chokidar finish its initial scan
+    // A fixed sleep to "let chokidar finish its initial scan" is exactly the kind of race that
+    // showed up on CI as flat-out missing events, twice in a row, on a loaded macOS runner
+    // (docs/plans/2026-09-21-claude-desktop-integration.md phase 6 triage, item H). Traced
+    // through chokidar's own source (v5, no native fsevents binding — it watches through Node's
+    // own fs.watch and manages recursion itself) before ruling out a symlink-based explanation:
+    // `this.root` is already `fs.realpath`d before chokidar ever sees it, chokidar's own internal
+    // `realpath` call on that root (its symlink-following default) is a no-op on an already
+    // -canonical path, and every nested path it tracks is built by joining that same root string
+    // with `readdir` results, never re-resolved — so a `/var` vs `/private/var` kind of mismatch
+    // does not appear to be reachable here. What actually reproduces the failure, even locally on
+    // Linux with a plain 300ms sleep: chokidar's own initial directory scan is asynchronous and
+    // hasn't necessarily started, let alone finished, right after `watch()` returns; a file
+    // created before that scan observes the directory is indistinguishable, to chokidar, from one
+    // that was already there when watching began — with `ignoreInitial: true` that file's own
+    // "create" (and everything chokidar would otherwise have told us about it) is simply never
+    // emitted, no matter how long anything then waits. A single canary has exactly the same race,
+    // so this retries a fresh one — a real, escalating wait, not a hope — until chokidar proves,
+    // by actually emitting a create for a file created AFTER this loop starts probing, that its
+    // scan is behind it and new files are being tracked for real.
+    const canaryDeadline = Date.now() + 20_000;
+    let canarySeen = false;
+    for (let attempt = 0; Date.now() < canaryDeadline && !canarySeen; attempt += 1) {
+      const name = `canary-${attempt}.md`;
+      await fs.writeFile(path.join(root, name), 'x');
+      const probeDeadline = Date.now() + 500;
+      while (Date.now() < probeDeadline && !events.some((e) => e.path === name)) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      canarySeen = events.some((e) => e.path === name && e.type === 'create');
+    }
+    expect(canarySeen).toBe(true);
+
     await vault.write('watched/new.md', 'v1');
     await vault.write('watched/new.md', 'v2');
     await fs.rm(path.join(root, 'watched/new.md'));
     // 20 s, not 5: on a machine busy writing thousands of fixture files for other suites the
     // watcher's events arrive late, and this test is about what arrives, not how fast.
     const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline && !events.some((e) => e.type === 'delete')) {
+    while (
+      Date.now() < deadline &&
+      !events.some((e) => e.type === 'delete' && e.path === 'watched/new.md')
+    ) {
       await new Promise((r) => setTimeout(r, 50));
     }
     unsubscribe?.();
     const types = events.filter((e) => e.path === 'watched/new.md').map((e) => e.type);
     expect(types[0]).toBe('create');
     expect(types.at(-1)).toBe('delete');
-  }, 45_000);
+  }, 60_000);
 
   it('watch() honours watchPollMs by using chokidar polling', async () => {
     const polled = await LocalFSAdapter.create(root, { ripgrepPath: null, watchPollMs: 300 });
