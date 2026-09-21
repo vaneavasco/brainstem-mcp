@@ -48,6 +48,7 @@ Each phase is shippable on its own and ends with `lint`, `typecheck`, `npm test`
 - Configuration without HTTP: a `loadVaultConfig(env)` carved out of `loadConfig` (vault path, daily notes, required frontmatter, timezone, watch polling, binary cap, reconcile interval, log level). `OWNER_SECRET`, `PUBLIC_URL`, tunnel settings are not read and not required. `--vault <path>` overrides `VAULT_PATH`.
 - **stdout carries the protocol and nothing else.** The logger writes to stderr; the launcher already prints its own messages to stderr; a test asserts that every line on stdout parses as JSON-RPC.
 - `src/cli/catalog.ts` gets the command first (the README table and its tests derive from it). `brainstem.cmd` gets the same.
+- **The launchers must not demand Docker for this command.** `brainstem` and `brainstem.cmd` exit 1 today when `docker` is missing, before any command runs; `stdio` (like `--help`) needs only Node. The check moves to the commands that use Docker.
 - Lifecycle: stdin closing, SIGTERM and SIGINT close the runtime (watcher, reconcile timer) and exit 0; an unusable vault path exits 1 with one line on stderr before any protocol byte.
 - Tests, with a real child process and the SDK's stdio client: tool list identical to the HTTP harness (names, input and output schemas, annotations); read, write with `expectedHash`, conflict; stdout purity; clean exit on stdin close; refusal of a missing vault.
 
@@ -70,6 +71,9 @@ Each phase is shippable on its own and ends with `lint`, `typecheck`, `npm test`
 As decided (point 4 above). Only after phases 1–2 are in use: it matters for a 37,000-note vault started per session and not at all for a small one. Acceptance: second start on the large vault under 3 s, identical query results with and without the cache, a cache from another vault or schema is discarded, permissions 0700/0600.
 
 ### Phase 5 — the bundle
+
+What installing it looks like, which is the point of the phase: download `brainstem-mcp-X.Y.Z.mcpb` from the release page, open it (or Settings → Extensions in Claude Desktop), choose the vault folder in the form the manifest generates, done. No Docker, no Node to install (it ships with Claude for macOS and Windows), no tunnel, no secret. Updating is installing the newer file.
+
 
 - `manifest.json` (0.3): `server.type: node`, `entry_point: dist/stdio-main.js`, `mcp_config.args: ["${__dirname}/dist/stdio-main.js", "--vault", "${user_config.vault}"]`; `user_config.vault` of type `directory`, required; optional timezone and daily-notes folder; `compatibility.platforms: darwin, win32, linux`, `runtimes.node` from phase 0; `tools_generated: false` with the tool list generated from the registry so it cannot drift.
 - Contents: `dist/`, production `node_modules`, `package.json`, the licence. ripgrep is **not** bundled at first: search already falls back to a JavaScript scan; a per-platform binary is a later, measured decision.
