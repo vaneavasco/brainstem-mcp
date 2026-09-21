@@ -7,6 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SERVER_INFO } from '../../src/version.ts';
+import { testStateHome } from '../helpers/state-home.ts';
 import { startHarness } from '../tools/harness.ts';
 
 const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
@@ -14,6 +15,7 @@ const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-m
 interface StdioSession {
   client: Client;
   root: string;
+  stateHome: string;
   close(): Promise<void>;
 }
 
@@ -24,6 +26,9 @@ async function startStdioSession(
   extraArgs: string[] = [],
 ): Promise<StdioSession> {
   const vaultRoot = root ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-')));
+  // Every real stdio child MUST get its own BRAINSTEM_STATE_HOME — otherwise it falls back to
+  // the developer's real ~/.local/state/brainstem and writes into it.
+  const stateHome = testStateHome();
   const client = new Client(
     { name: 'stdio-test', version: '0' },
     { versionNegotiation: { mode: 'auto' } },
@@ -32,7 +37,11 @@ async function startStdioSession(
     new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_MAIN, '--vault', vaultRoot, ...extraArgs],
-      ...(env ? { env: { ...(process.env as Record<string, string>), ...env } } : {}),
+      env: {
+        ...(process.env as Record<string, string>),
+        BRAINSTEM_STATE_HOME: stateHome,
+        ...env,
+      },
       // Piped (not the default 'inherit'): the server's own log lines go to its stderr, which
       // would otherwise print straight into the test run's own console.
       stderr: 'pipe',
@@ -41,9 +50,11 @@ async function startStdioSession(
   return {
     client,
     root: vaultRoot,
+    stateHome,
     async close() {
       await client.close(); // ends the child's stdin — the same shutdown path a real client uses
       await fs.rm(vaultRoot, { recursive: true, force: true });
+      await fs.rm(stateHome, { recursive: true, force: true });
     },
   };
 }
@@ -159,12 +170,22 @@ describe('read-only mode (--read-only and VAULT_READ_ONLY=true, over a real stdi
 });
 
 describe('stdio lifecycle (real child process)', () => {
+  const spawnedStateHomes: string[] = [];
+  afterEach(async () => {
+    while (spawnedStateHomes.length > 0) {
+      const dir = spawnedStateHomes.pop() as string;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   function spawnRaw(
     args: string[],
     envOverride?: Record<string, string | undefined>,
   ): ChildProcessWithoutNullStreams {
+    const stateHome = testStateHome();
+    spawnedStateHomes.push(stateHome);
     return spawn(process.execPath, [STDIO_MAIN, ...args], {
-      env: { ...process.env, ...envOverride },
+      env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome, ...envOverride },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   }
@@ -339,7 +360,10 @@ describe('stdio lifecycle (real child process)', () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-missing-'));
     const missing = path.join(parent, 'no-such-vault');
     try {
-      const child = spawn(process.execPath, [STDIO_MAIN, '--vault', missing], { stdio: 'pipe' });
+      const child = spawn(process.execPath, [STDIO_MAIN, '--vault', missing], {
+        env: { ...process.env, BRAINSTEM_STATE_HOME: testStateHome() },
+        stdio: 'pipe',
+      });
       let out = '';
       let err = '';
       child.stdout.on('data', (d: Buffer) => {
@@ -361,7 +385,10 @@ describe('stdio lifecycle (real child process)', () => {
 
   it('refuses a relative path, the filesystem root and the home directory as a vault', async () => {
     for (const bad of ['relative/vault', path.parse(os.tmpdir()).root, os.homedir()]) {
-      const child = spawn(process.execPath, [STDIO_MAIN, '--vault', bad], { stdio: 'pipe' });
+      const child = spawn(process.execPath, [STDIO_MAIN, '--vault', bad], {
+        env: { ...process.env, BRAINSTEM_STATE_HOME: testStateHome() },
+        stdio: 'pipe',
+      });
       let out = '';
       child.stdout.on('data', (d: Buffer) => {
         out += d.toString();
@@ -467,13 +494,18 @@ describe('a boot that does not make the client wait (deferIndex end to end)', ()
       { name: 'stdio-e2e', version: '0' },
       { versionNegotiation: { mode: 'auto' } },
     );
+    const stateHome = testStateHome();
     try {
       const started = Date.now();
       await client.connect(
         new StdioClientTransport({
           command: process.execPath,
           args: [SLOW_CHILD_ENTRY, '--vault', root],
-          env: { ...process.env, BRAINSTEM_TEST_SLOW_BATCH_MS: String(SLOW_BATCH_MS) },
+          env: {
+            ...process.env,
+            BRAINSTEM_TEST_SLOW_BATCH_MS: String(SLOW_BATCH_MS),
+            BRAINSTEM_STATE_HOME: stateHome,
+          },
           stderr: 'pipe',
         }),
       );
@@ -490,6 +522,7 @@ describe('a boot that does not make the client wait (deferIndex end to end)', ()
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(stateHome, { recursive: true, force: true });
     }
   }, 30_000);
 

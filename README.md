@@ -78,6 +78,15 @@ claude mcp add brainstem -- /path/to/brainstem stdio
 
 A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. Claude Desktop will use an installable bundle for this instead — coming soon. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
 
+### Where stdio keeps its state
+
+The stdio server splits what it keeps in two places:
+
+- `<vault>/_brainstem/instructions.md` is vault content — the same file the HTTP server reads and seeds, travelling with the vault wherever it's synced (see "Teach Claude your vault's conventions" below).
+- Everything that is *this process's own working state* — the `vault_transaction` journal today, a per-vault index cache later — lives in a **machine-local folder**, never inside the vault: `$XDG_STATE_HOME/brainstem/<hash>` or `~/.local/state/brainstem/<hash>` on Linux, `~/Library/Application Support/brainstem/<hash>` on macOS, `%LOCALAPPDATA%\brainstem\State\<hash>` on Windows — `<hash>` is the first 16 hex characters of the SHA-256 of the vault's real (symlink-resolved) path, so two spellings of the same vault share one folder. A vault may live in git or in a folder synced between machines (iCloud Drive, Dropbox, Syncthing), where an in-flight transaction journal or a machine-bound cache would be the wrong thing to sync, upload or merge — this keeps it out. Override the base directory with `BRAINSTEM_STATE_HOME=<absolute path>` in `.env` or the environment; `STATE_DIR` (test/dev-only, see `.env.example`) still overrides the journal's folder directly, same as before this split. Nothing here bends the vault's own `_brainstem/` reservation: every tool still refuses to list, read, write or search it.
+
+**Several stdio sessions on one vault are normal** — every Claude Code session, and every Claude Desktop restart, starts its own. Each one registers itself at `<local folder>/instances/<pid>.json` and prunes any left behind by a pid that's no longer alive; when another is already running, the new one logs one line on stderr saying how many, and `brainstem_ping`'s `localPeers` field (stdio only, absent on the HTTP server) shows the live count at any moment. What actually protects a vault written by more than one process at once is unchanged: `expectedHash` turns a colliding write into a `CONFLICT` instead of a lost write, and each process keeps its own in-memory index fresh through its filesystem watcher and periodic reconcile. **One vault per server** is still the design — a Desktop install serves one vault, and a second vault in Claude Code is a second `claude mcp add` entry with its own name (above), not a second vault served by one process.
+
 ### Read-only mode
 
 `./brainstem stdio --read-only` (or `VAULT_READ_ONLY=true` in `.env`, either way in) registers only the tools whose own annotations mark them `readOnlyHint: true` — reading, searching, listing, querying — so nothing that could change a note, a canvas or a file is even offered to the client; `tools/list` doesn't show the rest, and calling one fails as an unknown tool. It's the right default for a connection that should only ever be asked questions, and a safety net for a vault synced between people. `brainstem_ping`'s `readOnly` field and one extra sentence in the connection instructions say when it's on; `/health`'s `vault.readOnly` shows it for the HTTP server too. A read-only boot also writes nothing into the vault on its own (no seeded instructions template, no connection note): the OAuth token store is the one exception, since it isn't vault content.
@@ -170,7 +179,7 @@ Every read (`vault_read`, `vault_batch_read`, `vault_daily_note_read`, `vault_ou
 
 ## Vault sync notes
 
-The server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the connection note, instance info) so that whatever syncs your vault also carries that state to another machine.
+The HTTP server keeps all of its own state inside `<vault>/_brainstem/` (tokens, the connection note, instance info) so that whatever syncs your vault also carries that state to another machine. The stdio server is different, on purpose: its own working state (the transaction journal, later an index cache) lives outside the vault in a machine-local folder — see "Where stdio keeps its state" above — while `_brainstem/instructions.md` still travels with the vault either way.
 
 - **Obsidian Sync:** enable *Sync all other types* in the sync settings — plain JSON files are not synced by default, and `_brainstem/state.json` needs to travel.
 - **Syncthing / git / Dropbox:** nothing to configure; they sync everything already.

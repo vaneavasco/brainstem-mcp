@@ -12,6 +12,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { testStateHome } from '../helpers/state-home.ts';
 
 /** Repo root: this file lives at tests/cli/launcher.test.ts. */
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
@@ -159,7 +160,14 @@ describe.skipIf(process.platform === 'win32')(
         const { code, stderr } = await run(
           resolveBash(),
           ['./brainstem', 'stdio', '--vault', missing],
-          { env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' } },
+          {
+            env: {
+              ...process.env,
+              PATH: dir,
+              BRAINSTEM_SKIP_INSTALL: '1',
+              BRAINSTEM_STATE_HOME: testStateHome(),
+            },
+          },
         );
         expect(code).toBe(1);
         expect(stderr).not.toContain('Docker is required');

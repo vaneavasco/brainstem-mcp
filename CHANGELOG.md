@@ -19,6 +19,22 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 - The launchers (`brainstem`, `brainstem.cmd`) no longer require Docker for `setup` either — it
   asks first, and local mode needs none. The tunnel branch of `setup` itself now checks for
   Docker, with the same message the launcher used to print.
+- The stdio server now keeps its own working state (the `vault_transaction` journal today, an
+  index cache later) in a machine-local folder, never inside the vault — a vault may live in git
+  or in a folder synced between machines, where that state would be the wrong thing to sync,
+  upload or merge. New module `src/storage/local-state.ts` resolves it per vault (keyed by the
+  vault's real path) under the OS's state directory (`~/.local/state/brainstem` on Linux,
+  `~/Library/Application Support/brainstem` on macOS, `%LOCALAPPDATA%\brainstem\State` on
+  Windows), overridable with `BRAINSTEM_STATE_HOME`; `_brainstem/instructions.md` is vault
+  content and keeps travelling with the vault as before. `src/storage/transaction.ts` already
+  moved every byte across the journal↔vault boundary with `fs.copyFile` (never `fs.rename`, which
+  fails `EXDEV` across filesystems), so the journal now living on a different filesystem than the
+  vault needed no change there — proven by a test that runs it against a tmpfs (`/dev/shm`) when
+  one is available. Several stdio sessions on one vault, on one machine, are recorded at
+  `<local folder>/instances/<pid>.json` (`src/storage/local-peers.ts`): a stale entry from a dead
+  pid is pruned, a new session logs one line when others are already running, and
+  `brainstem_ping` gains `localPeers` (stdio only, counted at call time — absent on the HTTP
+  server).
 
 ### Added (both)
 

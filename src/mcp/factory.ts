@@ -23,6 +23,10 @@ export interface FactoryDeps {
    *  `src/tools/register.ts`'s `withIndexGate`). Defaults to false. Threaded from `Config`/
    *  `VaultConfig`'s `readOnly` by `src/app.ts` and `src/stdio-main.ts`. */
   readOnly?: boolean;
+  /** Counts other live stdio processes on this vault, on this machine (`src/storage/
+   *  local-peers.ts`), at call time — stdio only; the HTTP server never sets this, so
+   *  `brainstem_ping`'s `localPeers` field is absent there. */
+  localPeers?: () => Promise<number>;
 }
 
 const READ_ONLY_INSTRUCTIONS_SENTENCE =
@@ -58,6 +62,9 @@ const PingOutput = z.looseObject({
   /** True when this connection only exposes tools annotated `readOnlyHint: true` — see
    *  `FactoryDeps.readOnly`. */
   readOnly: z.boolean(),
+  /** Other live stdio processes on this vault, on this machine, counted at call time — see
+   *  `FactoryDeps.localPeers`. Absent on the HTTP server. */
+  localPeers: z.number().optional(),
 });
 
 /** Builds a fresh McpServer for one request (stateless per MCP 2026-07-28). */
@@ -121,6 +128,7 @@ export async function createVaultServer(
             ...(indexState.unreadable ? { unreadable: indexState.unreadable } : {}),
           },
           readOnly,
+          ...(deps.localPeers ? { localPeers: await deps.localPeers() } : {}),
         };
         return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
       }),

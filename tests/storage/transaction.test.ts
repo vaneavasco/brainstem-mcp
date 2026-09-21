@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +6,7 @@ import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
 import {
   classifyJournal,
   runTransaction,
+  scanLeftoverJournals,
   type TxDeps,
   type TxOp,
 } from '../../src/storage/transaction.ts';
@@ -531,4 +532,141 @@ describe('runTransaction append — unique: "line"', () => {
     expect(result.results[0]?.skipped).toBe(true);
     expect(await readText('related.md')).toBe('- Author of [[people/Alice Smith]]\n');
   });
+});
+
+describe('scanLeftoverJournals (the shared boot scan behind src/main.ts and src/stdio-main.ts)', () => {
+  it('resolves to [] when tx/ does not exist yet — the common case', async () => {
+    expect(await scanLeftoverJournals(deps.stateDir)).toEqual([]);
+  });
+
+  it('classifies every leftover journal directory, one entry per transaction', async () => {
+    await seed('a.md', 'A\n');
+    await seed('b.md', 'B\n');
+    adapter.append = async (): Promise<never> => {
+      throw new Error('disk on fire');
+    };
+    // fs.rm mocked to fail for both runs below, so closeJournal() can't remove either journal —
+    // exactly the existing "keeps a leftover journal" pattern (see the tests above), just run
+    // twice so scanLeftoverJournals has one of each terminal state to classify.
+    const rm = vi.spyOn(fs, 'rm').mockRejectedValue(new Error('EBUSY'));
+    let rolledBack: Awaited<ReturnType<typeof runTransaction>>;
+    let applied: Awaited<ReturnType<typeof runTransaction>>;
+    try {
+      rolledBack = await runTransaction(
+        deps,
+        [
+          { op: 'write', path: 'a.md', content: 'A2\n' },
+          { op: 'append', path: 'b.md', content: 'boom' },
+        ],
+        {},
+      );
+      adapter.append = LocalFSAdapter.prototype.append.bind(adapter);
+      applied = await runTransaction(deps, [{ op: 'write', path: 'a.md', content: 'A3\n' }], {});
+    } finally {
+      rm.mockRestore();
+    }
+
+    const leftovers = await scanLeftoverJournals(deps.stateDir);
+    expect(leftovers.map((l) => l.transaction).sort()).toEqual([rolledBack.id, applied.id].sort());
+    const rolledEntry = leftovers.find((l) => l.transaction === rolledBack.id);
+    expect(rolledEntry?.state).toBe('rolled-back');
+    expect(rolledEntry?.needsRestore).toBe(false);
+    const appliedEntry = leftovers.find((l) => l.transaction === applied.id);
+    expect(appliedEntry?.state).toBe('applied');
+    expect(appliedEntry?.needsRestore).toBe(false);
+  });
+
+  it('propagates a genuine read failure of tx/ (not ENOENT) instead of swallowing it', async () => {
+    const readdir = vi.spyOn(fs, 'readdir').mockImplementation(async (p: unknown) => {
+      if (String(p).endsWith(path.join('_brainstem', 'tx'))) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return [];
+    });
+    try {
+      await expect(scanLeftoverJournals(deps.stateDir)).rejects.toThrow('EACCES');
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+});
+
+describe('runTransaction with the journal on a different filesystem than the vault', () => {
+  // /dev/shm is a tmpfs on Linux, distinct from wherever os.tmpdir() (the vault root below) lives
+  // — proves the journal<->vault copies survive crossing a real filesystem boundary (fs.rename
+  // fails EXDEV across devices; fs.copyFile does not). Skipped where /dev/shm doesn't exist or
+  // isn't writable (non-Linux CI).
+  const SHM = '/dev/shm';
+
+  /** Synchronous (test collection happens before any `beforeEach`/async setup runs) — just an
+   *  existence + writability probe, cheap enough to do at describe-time. */
+  function shmAvailable(): boolean {
+    if (process.platform !== 'linux') return false;
+    try {
+      const probe = path.join(SHM, `brainstem-tx-xfs-probe-${process.pid}`);
+      writeFileSync(probe, '');
+      rmSync(probe, { force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it.runIf(shmAvailable())(
+    'applies a transaction whose journal lives on tmpfs while the vault stays on the default filesystem',
+    async () => {
+      const shmRoot = await fs.mkdtemp(path.join(SHM, 'brainstem-tx-xfs-'));
+      try {
+        const xDeps: TxDeps = { ...deps, stateDir: path.join(shmRoot, '_brainstem') };
+        await seed('a.md', 'A\n');
+        const result = await runTransaction(
+          xDeps,
+          [{ op: 'write', path: 'a.md', content: 'A2\n' }],
+          {},
+        );
+        expect(result.applied).toBe(true);
+        expect(await readText('a.md')).toBe('A2\n');
+        // the journal was cleaned up after a successful apply
+        expect(await fs.readdir(path.join(shmRoot, '_brainstem', 'tx')).catch(() => [])).toEqual(
+          [],
+        );
+      } finally {
+        await fs.rm(shmRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(shmAvailable())(
+    'rolls back across the filesystem boundary: pre-images copied from tmpfs restore the vault byte-for-byte',
+    async () => {
+      const shmRoot = await fs.mkdtemp(path.join(SHM, 'brainstem-tx-xfs-'));
+      try {
+        const xDeps: TxDeps = { ...deps, stateDir: path.join(shmRoot, '_brainstem') };
+        await seed('a.md', 'original A\n');
+        await seed('b.md', 'original B\n');
+        const before = await snapshot(['a.md', 'b.md']);
+        adapter.append = async (): Promise<never> => {
+          throw new Error('disk on fire');
+        };
+
+        const result = await runTransaction(
+          xDeps,
+          [
+            { op: 'write', path: 'a.md', content: 'changed A\n' },
+            { op: 'append', path: 'b.md', content: 'boom' },
+          ],
+          {},
+        );
+
+        expect(result.applied).toBe(false);
+        expect(result.rolledBack).toBe(true);
+        expect(await snapshot(['a.md', 'b.md'])).toEqual(before);
+        expect(await fs.readdir(path.join(shmRoot, '_brainstem', 'tx')).catch(() => [])).toEqual(
+          [],
+        );
+      } finally {
+        await fs.rm(shmRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });

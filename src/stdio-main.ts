@@ -7,13 +7,34 @@ import { type VaultPathContext, validateVaultPath } from './cli/vault-path.ts';
 import { ConfigError, loadVaultConfig } from './config.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
+import { listOtherLivePeers, registerInstance, unregisterInstance } from './storage/local-peers.ts';
+import { type LocalStateDeps, resolveLocalStateDir } from './storage/local-state.ts';
+import { scanLeftoverJournals } from './storage/transaction.ts';
 import {
   createInstructionsProvider,
   writeInstructionsTemplateIfMissing,
 } from './vault/instructions.ts';
 import { createLocalRuntime, type VaultRuntime } from './vault/runtime.ts';
+import { SERVER_INFO } from './version.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+/** `LocalStateDeps` built from the real filesystem and OS — the only place `src/storage/
+ *  local-state.ts`'s pure logic is wired to real I/O, so tests can inject their own instead. */
+function localStateDeps(env: Record<string, string | undefined>): LocalStateDeps {
+  return {
+    env,
+    platform: process.platform,
+    homedir: () => os.homedir(),
+    fs: {
+      mkdir: (p, opts) => fs.mkdir(p, opts),
+      realpath: (p) => fs.realpath(p),
+      stat: (p) => fs.stat(p),
+      writeFile: (p, data, opts) => fs.writeFile(p, data, opts),
+      rename: (a, b) => fs.rename(a, b),
+    },
+  };
+}
 
 /** Resolves once what was written to `stream` has left the process. A pipe is written
  *  asynchronously on Windows, so answers still queued at `exit()` would be lost there. */
@@ -161,7 +182,25 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   }
 
   const logger: Logger = createLogger(vaultConfig.logLevel, stderr);
-  const stateDir = vaultConfig.stateDir ?? path.join(vaultConfig.vaultPath, '_brainstem');
+
+  // Two different folders, on purpose (ADR 0008 amendment, phase 3): `instructionsDir` is vault
+  // content (the owner's `_brainstem/instructions.md`) and always travels with the vault, exactly
+  // like the HTTP server's state dir. `stateDir` is this *process's* working state — the
+  // transaction journal today, the index cache later — which must NOT travel: a vault may live in
+  // git or in a folder synced between machines, where a journal of in-flight edits or a
+  // machine-bound cache would be the wrong thing to sync, upload or merge. `STATE_DIR` (unchanged
+  // from before this split) still overrides where that working state lives, e.g. for tests.
+  const instructionsDir = path.join(vaultConfig.vaultPath, '_brainstem');
+  let stateDir: string;
+  if (vaultConfig.stateDir) {
+    stateDir = vaultConfig.stateDir;
+  } else {
+    const resolved = await resolveLocalStateDir(vaultConfig.vaultPath, localStateDeps(env));
+    if (!resolved.ok) {
+      return fail(`Could not set up the local state folder: ${resolved.error}`);
+    }
+    stateDir = resolved.dir;
+  }
 
   let runtime: VaultRuntime;
   try {
@@ -182,14 +221,15 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     return fail(error instanceof Error ? error.message : String(error));
   }
 
-  // Seeded once, from the same code the HTTP server uses (src/vault/instructions.ts), so a
+  // Seeded once, from the same code the HTTP server uses (src/vault/instructions.ts), into the
+  // vault-local instructionsDir (never stateDir — that folder now lives outside the vault) so a
   // reader who only ever uses stdio still gets the note explaining the feature in Obsidian —
   // skipped in read-only mode, which must not write into the vault on its own either.
   if (!vaultConfig.readOnly) {
     try {
-      if (await writeInstructionsTemplateIfMissing(stateDir)) {
+      if (await writeInstructionsTemplateIfMissing(instructionsDir)) {
         logger.info(
-          { file: path.join(stateDir, 'instructions.md') },
+          { file: path.join(instructionsDir, 'instructions.md') },
           'seeded owner instructions template',
         );
       }
@@ -197,7 +237,50 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       logger.warn({ err: error }, 'could not seed the owner instructions template');
     }
   }
-  const instructions = createInstructionsProvider(stateDir);
+  const instructions = createInstructionsProvider(instructionsDir);
+
+  // A journal outlives its transaction only after a crash mid-apply or a failed cleanup (see
+  // src/main.ts, which the HTTP server runs at boot the same way, sharing scanLeftoverJournals
+  // against its own vault-local stateDir). Never replayed — just reported.
+  try {
+    // The vault's own `_brainstem/tx` is looked at too (only looked at): that is where a stdio
+    // session older than 0.6, or the HTTP server, left its journals, and nobody else would say.
+    const places = stateDir === instructionsDir ? [stateDir] : [stateDir, instructionsDir];
+    const leftovers = (await Promise.all(places.map((dir) => scanLeftoverJournals(dir)))).flat();
+    for (const leftover of leftovers) {
+      logger.warn(
+        {
+          transaction: leftover.transaction,
+          journal: leftover.journal,
+          state: leftover.state,
+          needsRestore: leftover.needsRestore,
+        },
+        `transaction journal left behind — ${leftover.message}; nothing was replayed`,
+      );
+    }
+  } catch (error) {
+    logger.warn({ err: error }, 'could not scan the transaction journal folder');
+  }
+
+  // Several stdio processes on one vault, on this machine, are normal (every Claude Code session
+  // starts its own) — recorded here regardless of read-only mode, since this writes into the
+  // machine-local stateDir, never into the vault. `registerInstance` runs before the scan below
+  // so two processes booting at nearly the same moment still see each other.
+  await registerInstance(stateDir, {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    version: SERVER_INFO.version,
+  });
+  const otherPeers = await listOtherLivePeers(stateDir, process.pid);
+  if (otherPeers.length > 0) {
+    logger.info(
+      { count: otherPeers.length },
+      `${otherPeers.length} other brainstem stdio ${otherPeers.length === 1 ? 'process is' : 'processes are'} ` +
+        'already running on this vault on this machine — concurrent writes are protected by ' +
+        'expectedHash (a collision is a CONFLICT, never a lost write), and each process keeps its ' +
+        'own index fresh through the watcher and reconcile',
+    );
+  }
 
   // Declared before the server so the transport's own error report can end the process too.
   let onTransportError: (error: Error) => void = () => {};
@@ -208,6 +291,7 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
         logger,
         instructions: () => instructions.get(),
         readOnly: vaultConfig.readOnly,
+        localPeers: () => listOtherLivePeers(stateDir, process.pid).then((peers) => peers.length),
       }),
     { onerror: (error) => onTransportError(error) },
   );
@@ -224,12 +308,16 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     }, SHUTDOWN_TIMEOUT_MS);
     // Order matters: the calls already running finish and are answered while the transport is
     // still open (a burst of writes followed by a disconnect used to leave nothing on disk);
-    // only then is the transport closed, and the runtime last.
+    // only then is the transport closed, and the runtime last. The instance file is removed
+    // best-effort, in parallel with runtime.close() — its own failure must never hold up the
+    // rest of the shutdown (a stale file is pruned by the next boot's scan anyway).
     runtime.calls
       .drain()
       .then(() => flushed(process.stdout))
       .then(() => handle.close())
-      .then(() => runtime.close())
+      .then(() =>
+        Promise.all([runtime.close(), unregisterInstance(stateDir, process.pid).catch(() => {})]),
+      )
       .then(() => {
         clearTimeout(timer);
         exit(0);

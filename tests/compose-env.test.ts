@@ -13,6 +13,8 @@ const NOT_FOR_THE_APP = new Set([
   'BRAINSTEM_IMAGE', // image selection
   'BRAINSTEM_IMAGE_TAG',
   'BRAINSTEM_TUNNEL_IMAGE',
+  'BRAINSTEM_STATE_HOME', // stdio only — the HTTP server (this container) always keeps its
+  // state inside the bind-mounted vault, never in a machine-local folder
 ]);
 
 describe('compose.yaml passes every documented setting to the app', () => {
