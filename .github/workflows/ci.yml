@@ -29,7 +29,7 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run test:scale
-      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run build
       # Boots the tool registry through a plain Node import. Vitest resolves modules differently
       # and neither tsc nor biome sees evaluation order, so an import-cycle temporal-dead-zone

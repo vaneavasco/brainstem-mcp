@@ -45,7 +45,7 @@ npm run docker:smoke        # end-to-end against the Docker image (needs Docker)
 npm run mcp:call -- --list  # authenticate headlessly and call tools on a running instance
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note scale run, `npm audit --omit=dev --audit-level=high`, build, the Docker smoke, then publishes images. A change is not done until CI is green.
+CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note scale run, `npm audit --omit=dev --audit-level=moderate`, build, the Docker smoke, then publishes images. A change is not done until CI is green.
 
 ## Conventions that will bite you
 
