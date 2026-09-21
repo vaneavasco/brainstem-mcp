@@ -9,6 +9,17 @@ import {
   parseNote,
 } from './note-parse.ts';
 
+/**
+ * Bump this whenever `IndexEntry`'s shape, or how `fromNote` derives it, changes — it is the
+ * schema number embedded in the machine-local index cache's file name and header
+ * (`src/storage/local-cache.ts`, `index-v<N>.ndjson`). A cache written under the old number is
+ * never read back once this changes (the loader rejects a schema mismatch outright), so a stale
+ * shape can never be upserted straight into a live index. See also the comment at `fromNote`
+ * below, and `tests/vault/frontmatter-index.test.ts`'s key-set snapshot test, which fails on a
+ * shape change made without bumping this.
+ */
+export const INDEX_CACHE_SCHEMA = 1;
+
 export interface IndexEntry {
   path: string;
   frontmatter: Record<string, unknown>;
@@ -194,6 +205,7 @@ export class FrontmatterIndex {
     }
   }
 
+  // Bump INDEX_CACHE_SCHEMA (above) whenever this changes what it returns.
   static fromNote(note: Note): IndexEntry {
     // Everything stored here outlives the note it came from. In V8 a piece cut out of a larger
     // string (a link target, a heading, a YAML value) keeps the whole string alive, so without
@@ -223,34 +235,70 @@ export class FrontmatterIndex {
    * batch, so a caller can report "N of M notes indexed" while a large vault is still filling.
    * Safe to call on an index that already has entries (a reconcile does the equivalent lighter
    * sweep instead); `build()` is exactly `empty()` followed by `fill()`.
+   *
+   * `cached` (optional, from the machine-local index cache — `src/storage/local-cache.ts`, used
+   * only by the stdio entrypoint) is a hint, never a source: a markdown path in this boot's own
+   * listing is upserted straight from `cached` — no disk read — only when its `size` and
+   * `modifiedAt` are byte-for-byte equal to what the listing just reported; every other path (not
+   * in `cached`, or changed) goes through `batchRead` exactly as it would without a cache. A path
+   * cached but no longer in the listing is silently dropped, never upserted. Progress (`done`)
+   * counts a cache hit the same as a disk read — both are notes the fill no longer has to wait
+   * for. The known blind spot (a file rewritten with the same size and mtime, in the same second
+   * a coarse filesystem clock resolves to) is the same one `reconcile` already accepts.
    */
   async fill(
     adapter: StorageAdapter,
     onProgress?: (progress: { done: number; total: number }) => void,
     /** Asked between batches: a fill that is no longer wanted (the runtime is closing) stops. */
     shouldStop: () => boolean = () => false,
-  ): Promise<{ unreadable: number; stopped: boolean }> {
+    cached?: ReadonlyMap<string, IndexEntry>,
+  ): Promise<{ unreadable: number; stopped: boolean; fromCache: number; fromDisk: number }> {
     const files = await adapter.list('', { depth: Number.POSITIVE_INFINITY, includeDirs: false });
-    const mdPaths: string[] = [];
+    const mdFiles: { path: string; size: number; modifiedAt: string }[] = [];
     for (const file of files) {
-      if (isMarkdownPath(file.path)) mdPaths.push(file.path);
-      else this.addAsset(file.path);
+      if (isMarkdownPath(file.path)) {
+        mdFiles.push({ path: file.path, size: file.size ?? -1, modifiedAt: file.modifiedAt ?? '' });
+      } else {
+        this.addAsset(file.path);
+      }
     }
-    const total = mdPaths.length;
+    const total = mdFiles.length;
     let done = 0;
     onProgress?.({ done, total });
-    for (let i = 0; i < mdPaths.length; i += MAX_BATCH) {
-      if (shouldStop()) return { unreadable: this.unreadablePaths.size, stopped: true };
-      const chunk = mdPaths.slice(i, i + MAX_BATCH);
+
+    // The cache pass first, synchronously (no I/O): every hit removes one path from what
+    // `batchRead` below has to fetch. `cached` may hold entries for paths this listing no longer
+    // has at all (a note deleted since the cache was written) — those are simply never looked up.
+    const toRead: string[] = [];
+    let fromCache = 0;
+    for (const f of mdFiles) {
+      const hit = cached?.get(f.path);
+      if (hit && hit.size === f.size && hit.modifiedAt === f.modifiedAt) {
+        this.upsert(hit);
+        fromCache += 1;
+      } else {
+        toRead.push(f.path);
+      }
+    }
+    done = fromCache;
+    if (fromCache > 0) onProgress?.({ done, total });
+
+    let fromDisk = 0;
+    for (let i = 0; i < toRead.length; i += MAX_BATCH) {
+      if (shouldStop()) {
+        return { unreadable: this.unreadablePaths.size, stopped: true, fromCache, fromDisk };
+      }
+      const chunk = toRead.slice(i, i + MAX_BATCH);
       const { notes, failed } = await adapter.batchRead(chunk);
       for (const note of notes) this.upsert(FrontmatterIndex.fromNote(note));
       for (const { path } of failed) this.unreadablePaths.add(path);
+      fromDisk += chunk.length;
       // A note that vanished or could not be read is not "done": the unreadable ones are kept apart, and the
       // reconcile pass that follows the fill is what picks it up once it can be read.
       done += notes.length;
       onProgress?.({ done, total });
     }
-    return { unreadable: this.unreadablePaths.size, stopped: false };
+    return { unreadable: this.unreadablePaths.size, stopped: false, fromCache, fromDisk };
   }
 
   static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {

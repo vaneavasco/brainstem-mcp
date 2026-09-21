@@ -86,3 +86,58 @@ describe('upsertEnv', () => {
     expect(parseEnv(r.text).get('VAULT_PATH')).toBe('C:\\Users\\u\\Obsidian Vault');
   });
 });
+
+describe('upsertEnv — a duplicated key heals on the next write (F2)', () => {
+  it("the reviewer's case: VAULT_PATH=/old/first, OTHER=1, VAULT_PATH=/old/second", () => {
+    const src = 'VAULT_PATH=/old/first\nOTHER=1\nVAULT_PATH=/old/second\n';
+    const r = upsertEnv(src, { VAULT_PATH: '/new/path' }, { onlyIfEmpty: false });
+    expect(parseEnv(r.text).get('VAULT_PATH')).toBe('/new/path');
+    const vaultPathLines = r.text.split('\n').filter((l) => l.startsWith('VAULT_PATH='));
+    expect(vaultPathLines).toEqual(['VAULT_PATH=/new/path']);
+    expect(r.text).toContain('OTHER=1');
+    expect(r.removedDuplicates).toEqual(['VAULT_PATH']);
+  });
+
+  it('removes every earlier duplicate when there are more than two', () => {
+    const src = 'A=1\nA=2\nA=3\n';
+    const r = upsertEnv(src, { A: 'final' });
+    expect(r.text).toBe('A=final\n');
+    expect(r.removedDuplicates).toEqual(['A', 'A']);
+  });
+
+  it('never reports a duplicate for a key this call does not touch', () => {
+    const src = 'A=1\nA=2\nB=1\n';
+    const r = upsertEnv(src, { B: 'new' });
+    // A's duplicates are untouched — upsertEnv only ever touches the keys it's told to.
+    expect(r.text).toBe('A=1\nA=2\nB=new\n');
+    expect(r.removedDuplicates).toEqual([]);
+  });
+
+  it('recognizes an `export KEY=` line as defining KEY, dedups it, and keeps the LAST line’s export prefix', () => {
+    // The export-prefixed line is last, so it's the one that's kept (and rewritten) — the plain
+    // one above it is the earlier duplicate, dropped like any other.
+    const src = 'OWNER_SECRET=old1\nexport OWNER_SECRET=old2\n';
+    const r = upsertEnv(src, { OWNER_SECRET: 'newsecret' });
+    expect(r.text).toBe('export OWNER_SECRET=newsecret\n');
+    expect(r.removedDuplicates).toEqual(['OWNER_SECRET']);
+    expect(parseEnv(r.text).get('OWNER_SECRET')).toBe('newsecret');
+  });
+
+  it('heals duplicates in a CRLF file the same way, normalizing line endings to \\n', () => {
+    const src = 'VAULT_PATH=/old/first\r\nOTHER=1\r\nVAULT_PATH=/old/second\r\n';
+    const r = upsertEnv(src, { VAULT_PATH: '/new/path' });
+    expect(r.text).toBe('OTHER=1\nVAULT_PATH=/new/path\n');
+    expect(r.removedDuplicates).toEqual(['VAULT_PATH']);
+  });
+
+  it('a duplicated secret key: the removed-duplicate report never carries the value', () => {
+    const src = 'OWNER_SECRET=super-old-secret-value\nOWNER_SECRET=old-secret-value\n';
+    const r = upsertEnv(src, { OWNER_SECRET: 'brand-new-secret-value' });
+    expect(r.removedDuplicates).toEqual(['OWNER_SECRET']);
+    // The report is key names only; nowhere does it carry any of the secret values.
+    for (const key of r.removedDuplicates) {
+      expect(key).toBe('OWNER_SECRET');
+    }
+    expect(JSON.stringify(r.removedDuplicates)).not.toContain('secret-value');
+  });
+});

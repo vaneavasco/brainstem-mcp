@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { promises as fs, constants as fsConstants, type Stats } from 'node:fs';
+import { type Dirent, promises as fs, constants as fsConstants, type Stats } from 'node:fs';
 import path from 'node:path';
 import { sha256hex } from '../auth/hash.ts';
 import type { VaultGraph } from '../vault/graph.ts';
@@ -130,8 +130,9 @@ export interface JournalStatus {
 
 /**
  * Classifies a leftover journal from the raw text of its `manifest.json` (`null` when it could
- * not be read). Pure, so the boot scan in main.ts — which has no test harness — stays four lines.
- * Anything unreadable is treated as unfinished: over-warning is cheap, under-warning is not.
+ * not be read). Pure, so `scanLeftoverJournals` below — the shared boot scan both entrypoints
+ * call — stays a few lines. Anything unreadable is treated as unfinished: over-warning is cheap,
+ * under-warning is not.
  */
 export function classifyJournal(manifestJson: string | null): JournalStatus {
   let parsed: unknown;
@@ -185,6 +186,51 @@ export function classifyJournal(manifestJson: string | null): JournalStatus {
           'the manifest is missing or unreadable — treat it as unfinished and inspect the pre-images before deleting anything',
       };
   }
+}
+
+/** One leftover journal directory found under `<stateDir>/tx/`, classified and ready to log. */
+export interface LeftoverJournal {
+  transaction: string;
+  journal: string;
+  state: TxJournalState | 'unknown';
+  needsRestore: boolean;
+  message: string;
+}
+
+/**
+ * Lists every leftover transaction journal under `<stateDir>/tx/` — a journal outlives its
+ * transaction only after a crash mid-apply or a failed cleanup (there is deliberately no
+ * replay: spec 4.6 step 5). Shared by the HTTP boot (`src/main.ts`) and the stdio boot
+ * (`src/stdio-main.ts`, against its own machine-local `stateDir`) so both log the same thing the
+ * same way; each caller decides how to log it (a fatal-level HTTP logger versus a stderr-only
+ * stdio one). Resolves to `[]` when `tx/` does not exist yet (the common case); other read
+ * failures propagate so a caller's own try/catch can report "could not scan" as before.
+ */
+export async function scanLeftoverJournals(stateDir: string): Promise<LeftoverJournal[]> {
+  const out: LeftoverJournal[] = [];
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(path.join(stateDir, 'tx'), { withFileTypes: true });
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return out;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const journal = path.join(stateDir, 'tx', entry.name);
+    const manifest = await fs
+      .readFile(path.join(journal, 'manifest.json'), 'utf8')
+      .catch(() => null);
+    const status = classifyJournal(manifest);
+    out.push({
+      transaction: status.id ?? entry.name,
+      journal,
+      state: status.state,
+      needsRestore: status.needsRestore,
+      message: status.message,
+    });
+  }
+  return out;
 }
 
 /** What pre-flight computed for one op: the diff it would produce and the resulting hash. */

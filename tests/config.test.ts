@@ -104,6 +104,7 @@ describe('v2 variables', () => {
     expect(cfg.tunnelMode).toBe('none');
     expect(cfg.storage).toEqual({ backend: 'localfs', vaultPath: '/tmp/unused' });
     expect(cfg.reconcileMs).toBe(300_000);
+    expect(cfg.readOnly).toBe(false);
     expect('databaseUrl' in cfg).toBe(false);
   });
   it('parses the knobs', () => {
@@ -130,6 +131,11 @@ describe('v2 variables', () => {
   });
   it('VAULT_RECONCILE_MS=0 disables the background reconcile timer', () => {
     expect(loadConfig(baseEnv({ VAULT_RECONCILE_MS: '0' })).reconcileMs).toBe(0);
+  });
+  it('parses VAULT_READ_ONLY and rejects a nonsense value', () => {
+    expect(loadConfig(baseEnv({ VAULT_READ_ONLY: 'true' })).readOnly).toBe(true);
+    expect(loadConfig(baseEnv({ VAULT_READ_ONLY: 'false' })).readOnly).toBe(false);
+    expect(() => loadConfig(baseEnv({ VAULT_READ_ONLY: 'yes' }))).toThrow(/VAULT_READ_ONLY/);
   });
   it('rejects nonsense knobs by name', () => {
     expect(() => loadConfig(baseEnv({ VAULT_WATCH_POLL_MS: '-5' }))).toThrow(/VAULT_WATCH_POLL_MS/);
@@ -274,9 +280,20 @@ describe('loadVaultConfig', () => {
     expect(cfg.reconcileMs).toBe(300_000);
     expect(cfg.logLevel).toBe('info');
     expect(cfg.stateDir).toBeNull();
+    expect(cfg.readOnly).toBe(false);
     expect('storage' in cfg).toBe(false);
     expect('ownerSecret' in cfg).toBe(false);
     expect('publicUrl' in cfg).toBe(false);
+  });
+
+  it('parses VAULT_READ_ONLY the same way loadConfig does', () => {
+    expect(loadVaultConfig({ VAULT_PATH: '/tmp/my-vault', VAULT_READ_ONLY: 'true' }).readOnly).toBe(
+      true,
+    );
+    expect(loadVaultConfig({ VAULT_PATH: '/tmp/my-vault' }).readOnly).toBe(false);
+    expect(() => loadVaultConfig({ VAULT_PATH: '/tmp/my-vault', VAULT_READ_ONLY: 'nope' })).toThrow(
+      ConfigError,
+    );
   });
 
   it('is unaffected by an invalid or missing PUBLIC_URL/OWNER_SECRET in the environment', () => {

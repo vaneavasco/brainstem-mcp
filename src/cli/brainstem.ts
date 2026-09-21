@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { confirm, input, select } from '@inquirer/prompts';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { runStdioServer } from '../stdio-main.ts';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
 import { SERVER_INFO } from '../version.ts';
@@ -15,7 +15,7 @@ import { runDown } from './commands/down.ts';
 import { runLogs } from './commands/logs.ts';
 import { runRevokeAll } from './commands/revoke-all.ts';
 import { runSecretRotate, runSecretShow } from './commands/secret.ts';
-import { runSetup, type SetupDeps, type SetupIO } from './commands/setup.ts';
+import { runSetup, type SetupDeps, type SetupIO, type SetupMode } from './commands/setup.ts';
 import { runStart } from './commands/start.ts';
 import { runStatus } from './commands/status.ts';
 import { runUp } from './commands/up.ts';
@@ -41,7 +41,17 @@ function createIO(): SetupIO {
     return {
       prompt: async () => fail(),
       confirm: async () => fail(),
-      select: async () => fail(),
+      // A `select` call that carries a default (only the mode question does, today) answers
+      // it instead of failing: it's the one prompt whose absence must not break a script or
+      // launch that predates --mode (see setup.ts's resolveMode).
+      async select<T extends string>(
+        _q: string,
+        _choices: Array<{ value: T; name: string }>,
+        opts?: { default?: T },
+      ): Promise<T> {
+        if (opts?.default !== undefined) return opts.default;
+        return fail();
+      },
       print: (line) => console.log(line),
     };
   }
@@ -49,7 +59,8 @@ function createIO(): SetupIO {
     prompt: (question, opts) =>
       input({ message: question, default: opts.default, validate: opts.validate }),
     confirm: (question, def) => confirm({ message: question, default: def }),
-    select: (question, choices) => select({ message: question, choices }),
+    select: (question, choices, opts) =>
+      select({ message: question, choices, default: opts?.default }),
     print: (line) => console.log(line),
   };
 }
@@ -110,6 +121,8 @@ function buildSetupDeps(repoDir: string): SetupDeps {
     vaultCtx: createVaultCtx(repoDir),
     randomSecret: () => randomBytes(32).toString('base64url'),
     timezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    dockerAvailable: async () =>
+      (await createSystemProbe().exec('docker', ['--version'])).code === 0,
   };
 }
 
@@ -232,6 +245,11 @@ export function buildProgram(
             setup: () =>
               runSetup(
                 {
+                  // `start` always means Docker + tunnel — it goes straight on to `up`
+                  // (Docker), which a local-mode .env (no OWNER_SECRET, no TUNNEL_MODE)
+                  // could never satisfy — so it skips the "how will Claude reach this
+                  // vault?" question that a plain `./brainstem setup` asks first.
+                  mode: 'tunnel',
                   vault: opts.vault,
                   tunnelToken: opts.tunnelToken,
                   publicUrl: opts.publicUrl,
@@ -265,8 +283,14 @@ export function buildProgram(
   program
     .command('setup')
     .description(summaryOf('setup'))
+    .addOption(
+      new Option(
+        '--mode <mode>',
+        'how Claude reaches this vault: local (stdio, no Docker) or tunnel (Docker + Cloudflare)',
+      ).choices(['local', 'tunnel']),
+    )
     .option('--vault <path>', 'absolute path to your Obsidian vault')
-    .option('--tunnel-token <token>', 'Cloudflare tunnel token (stable URL)')
+    .option('--tunnel-token <token>', 'Cloudflare tunnel token (stable URL, tunnel mode only)')
     .option(
       '--public-url <url>',
       'public https URL for the Cloudflare tunnel (with --tunnel-token)',
@@ -277,6 +301,7 @@ export function buildProgram(
       try {
         await runSetup(
           {
+            mode: opts.mode as SetupMode | undefined,
             vault: opts.vault as string | undefined,
             tunnelToken: opts.tunnelToken as string | undefined,
             publicUrl: opts.publicUrl as string | undefined,
@@ -382,7 +407,11 @@ export function buildProgram(
     .command('stdio')
     .description(summaryOf('stdio'))
     .option('--vault <path>', 'absolute path to your Obsidian vault (overrides VAULT_PATH)')
-    .action(async (opts: { vault?: string }) => {
+    .option(
+      '--read-only',
+      'expose only the read-only tools (overrides VAULT_READ_ONLY); no --read-only=false — leave the flag out to use the env or its default',
+    )
+    .action(async (opts: { vault?: string; readOnly?: boolean }) => {
       // No Docker, no tunnel, no OAuth: runStdioServer manages its own exit code (0 on a clean
       // shutdown, 1 on a config/vault error or a failed one) — unlike every other command here,
       // it never returns a number for runAction to translate into process.exitCode.
@@ -390,6 +419,7 @@ export function buildProgram(
       // notes); without it a daily note lands at the vault root instead of its folder.
       await runStdioServer({
         vaultOverride: opts.vault,
+        readOnlyOverride: opts.readOnly,
         env: stdioEnv(await loadEnvMapOrNull(repoDir), process.env),
       });
     });

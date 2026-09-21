@@ -4,6 +4,11 @@ import {
   DEFAULT_RECONCILE_MIN_GAP_MS,
   DEFAULT_RECONCILE_MS,
   DEFAULT_SETTLE_RETRY_MS,
+  INDEX_CACHE_DEAD_CLIENT_SKIP_NOTES,
+  INDEX_CACHE_HOURLY_SAVE_MS,
+  INDEX_CACHE_RACY_RESAVE_MS,
+  INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS,
+  INDEX_CACHE_STALE_FRACTION,
   INDEX_WAIT_MS,
   MAX_BINARY_BYTES,
   MAX_INDEX_BYTES,
@@ -18,9 +23,42 @@ import { type DailyNoteSettings, DEFAULT_DAILY_NOTE_SETTINGS } from './daily-not
 import {
   FrontmatterIndex,
   type IndexBudgetState,
+  type IndexEntry,
   type ReconcileResult,
 } from './frontmatter-index.ts';
 import { VaultGraph } from './graph.ts';
+
+/**
+ * The machine-local index cache (stdio only — see `src/storage/local-cache.ts` and
+ * `src/stdio-main.ts`, the only caller that constructs one). Kept deliberately free of any path
+ * or environment logic: `runtime.ts` only loads, upserts and saves through this interface.
+ */
+export interface IndexCacheOption {
+  load(): Promise<{
+    entries: Map<string, IndexEntry> | null;
+    rejected?: string;
+    /** F4: lines dropped while loading (any reason) — surfaced verbatim in `IndexCacheStats`. */
+    skipped: number;
+  }>;
+  save(
+    entries: Iterable<IndexEntry>,
+    count: number,
+    opts?: { budgetMs?: number },
+  ): Promise<{ ok: boolean; reason?: string; durationMs: number; racySkipped?: number }>;
+}
+
+/** `brainstem_ping`'s `index.cache` field (stdio only) — the numbers of THIS boot. */
+export interface IndexCacheStats {
+  used: boolean;
+  entriesFromCache: number;
+  entriesRead: number;
+  /** F4: cache lines dropped at load (malformed JSON, wrong shape, a truncated last line, or one
+   *  over the byte cap) — 0 when no cache was found at all, not just when nothing was dropped. */
+  skipped: number;
+  /** Set only when a cache was found but thrown out whole (bad schema, wrong vault, corrupt
+   *  header) — never set when there was simply no cache yet. */
+  rejected?: string;
+}
 
 export interface VaultSettings {
   dailyNotes: DailyNoteSettings;
@@ -77,7 +115,15 @@ export interface VaultRuntime {
   /** How long a gated tool call (see `registerVaultTools`) waits for `indexReady` before giving
    *  up and answering the "still building" error. Defaults to `INDEX_WAIT_MS`. */
   indexWaitMs: number;
-  close(): Promise<void>;
+  /** THIS boot's use of the machine-local index cache (stdio only); undefined when no
+   *  `indexCache` option was given (the HTTP server, or a `deferIndex: false` boot). */
+  indexCacheStats(): IndexCacheStats | undefined;
+  /** `reason: 'client-dead'` (the stdio entrypoint's abrupt-disconnect shutdown routes — a broken
+   *  pipe, a destroyed stdout, stdin closing without an 'end') lets the index-cache save skip
+   *  itself for a large index instead of spending the shutdown window on a write nobody is
+   *  waiting for; omitted or `'normal'` (an orderly stop: stdin ending, SIGTERM/SIGINT) always
+   *  attempts it. Has no effect without an `indexCache` option. */
+  close(opts?: { reason?: 'normal' | 'client-dead' }): Promise<void>;
 }
 
 export type RuntimeResolver = (ctx: McpRequestContext) => Promise<VaultRuntime>;
@@ -136,6 +182,31 @@ export interface LocalRuntimeOptions {
   /** Overrides `INDEX_WAIT_MS` for this runtime (see `VaultRuntime.indexWaitMs`); tests shorten it
    *  to see the "still building" error without a real 45 s wait. */
   indexWaitMs?: number;
+  /** Machine-local cache of the frontmatter index (stdio only — `src/storage/local-cache.ts` via
+   *  `src/stdio-main.ts`); undefined disables it. Only meaningful together with `deferIndex: true`
+   *  — the non-deferred (HTTP) boot never looks at it. */
+  indexCache?: IndexCacheOption;
+  /** Called after a successful index-cache save, from any of its three triggers (post-fill,
+   *  hourly, on close). Logging only, like `onReconcile`. */
+  /** F3: `racySkipped` is how many entries were left out of this save for looking "racily clean"
+   *  (see `INDEX_CACHE_RACY_WINDOW_MS`'s doc comment in `src/storage/local-cache.ts`) — a debug
+   *  signal, not a warning: those paths are simply read from disk again next boot. */
+  onIndexCacheSaved?: (info: { durationMs: number; count: number; racySkipped: number }) => void;
+  /** Called when an index-cache save failed or was abandoned (its own time budget, or a write
+   *  error) — never thrown. Logging only, like `onReconcileError`. */
+  onIndexCacheSaveError?: (reason: string) => void;
+  /** Overrides INDEX_CACHE_STALE_FRACTION; tests shrink or grow it. */
+  indexCacheStaleFraction?: number;
+  /** Overrides INDEX_CACHE_HOURLY_SAVE_MS; tests shorten it. 0 disables the hourly timer. */
+  indexCacheSaveIntervalMs?: number;
+  /** Overrides INDEX_CACHE_RACY_RESAVE_MS: how long after a save that left racy entries out the
+   *  one follow-up save runs; tests shorten it. */
+  indexCacheRacyResaveMs?: number;
+  /** Overrides INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS for the save `close()` attempts; tests
+   *  shorten it to exercise abandonment without a real 5 s wait. */
+  indexCacheShutdownBudgetMs?: number;
+  /** Overrides INDEX_CACHE_DEAD_CLIENT_SKIP_NOTES; tests shrink it. */
+  indexCacheDeadClientSkipNotes?: number;
 }
 
 export function mergeSettings(overrides: LocalRuntimeOptions['settings']): VaultSettings {
@@ -162,6 +233,57 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   let built = !deferIndex;
   let buildFailed = false;
   let lastPassOk = false;
+
+  // Index-cache bookkeeping (stdio only — see IndexCacheOption); all stay at their defaults when
+  // opts.indexCache is undefined, and indexCacheStats() then reports undefined, not these zeros.
+  let cacheUsed = false;
+  let cacheEntriesFromCache = 0;
+  let cacheEntriesRead = 0;
+  let cacheSkipped = 0;
+  let cacheRejected: string | undefined;
+  let lastSavedCacheVersion = 0;
+  let cacheHourlyTimer: ReturnType<typeof setInterval> | null = null;
+  let racyResaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const runIndexCacheSave = async (
+    budgetMs?: number,
+  ): Promise<{ ok: boolean; reason?: string }> => {
+    if (!opts.indexCache) return { ok: false, reason: 'no index cache configured' };
+    const versionAtStart = index.version;
+    const result = await opts.indexCache.save(index.all(), index.size(), { budgetMs });
+    if (result.ok) {
+      lastSavedCacheVersion = versionAtStart;
+      // Entries modified just before the save are left out of the cache on purpose (the "racily
+      // clean" rule in local-cache.ts). After a fresh import that is EVERY entry: measured, each
+      // restart inside the window re-read the whole vault and saved an empty cache again. So a
+      // save that left some out is repeated, once, when their window has passed.
+      if (racyResaveTimer) clearTimeout(racyResaveTimer);
+      racyResaveTimer = null;
+      if ((result.racySkipped ?? 0) > 0 && !closed) {
+        racyResaveTimer = setTimeout(() => {
+          racyResaveTimer = null;
+          if (!closed) void runIndexCacheSave();
+        }, opts.indexCacheRacyResaveMs ?? INDEX_CACHE_RACY_RESAVE_MS);
+        racyResaveTimer.unref();
+      }
+      try {
+        opts.onIndexCacheSaved?.({
+          durationMs: result.durationMs,
+          count: index.size(),
+          racySkipped: result.racySkipped ?? 0,
+        });
+      } catch {
+        /* logging must not break the caller */
+      }
+    } else {
+      try {
+        opts.onIndexCacheSaveError?.(result.reason ?? 'index-cache save failed');
+      } catch {
+        /* logging must not break the caller */
+      }
+    }
+    return result;
+  };
 
   // One reconcile at a time. The timer simply skips a tick while a pass runs (the next tick is
   // soon enough). A watcher error is different: it means events were lost, so it is never
@@ -265,6 +387,16 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
       });
     fillPromise = (async () => {
       try {
+        let cachedEntries: Map<string, IndexEntry> | undefined;
+        if (opts.indexCache) {
+          const loaded = await opts.indexCache.load();
+          if (loaded.entries) {
+            cachedEntries = loaded.entries;
+            cacheUsed = true;
+          }
+          cacheSkipped = loaded.skipped;
+          if (loaded.rejected) cacheRejected = loaded.rejected;
+        }
         const filled = await index.fill(
           adapter,
           (progress) => {
@@ -272,7 +404,10 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
             fillTotal = progress.total;
           },
           () => closed,
+          cachedEntries,
         );
+        cacheEntriesFromCache = filled.fromCache;
+        cacheEntriesRead = filled.fromDisk;
         // close() ran mid-fill: the fill stopped between batches; stopping is not failing, and a
         // watcher is never started behind a closed runtime's back.
         if (closed || filled.stopped) return;
@@ -292,6 +427,31 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
           if (closed) return;
         }
         built = true;
+
+        if (opts.indexCache) {
+          // Never save an index that is not ready — built is true only from this point on, and
+          // the catch block below (a failed build) never reaches here at all.
+          const total = filled.fromCache + filled.fromDisk;
+          const staleFraction = total > 0 ? filled.fromDisk / total : 0;
+          const staleLimit = opts.indexCacheStaleFraction ?? INDEX_CACHE_STALE_FRACTION;
+          if (!cacheUsed || staleFraction > staleLimit) {
+            await runIndexCacheSave();
+          } else {
+            // The cache was already accurate enough that rewriting it now would buy nothing —
+            // but it still reflects the disk as of this boot, so later saves compare against it.
+            lastSavedCacheVersion = index.version;
+          }
+          if (!closed) {
+            const intervalMs = opts.indexCacheSaveIntervalMs ?? INDEX_CACHE_HOURLY_SAVE_MS;
+            if (intervalMs > 0) {
+              cacheHourlyTimer = setInterval(() => {
+                if (closed || index.version === lastSavedCacheVersion) return;
+                void runIndexCacheSave();
+              }, intervalMs);
+              cacheHourlyTimer.unref();
+            }
+          }
+        }
       } catch (error) {
         buildFailed = true;
         try {
@@ -341,14 +501,46 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     },
     indexReady: fillPromise,
     indexWaitMs: opts.indexWaitMs ?? INDEX_WAIT_MS,
-    async close() {
+    indexCacheStats(): IndexCacheStats | undefined {
+      if (!opts.indexCache) return undefined;
+      return {
+        used: cacheUsed,
+        entriesFromCache: cacheEntriesFromCache,
+        entriesRead: cacheEntriesRead,
+        skipped: cacheSkipped,
+        ...(cacheRejected !== undefined ? { rejected: cacheRejected } : {}),
+      };
+    },
+    async close(closeOpts) {
       closed = true;
       await fillPromise; // a fill in flight finishes (and, per its own check above, never starts
       // the watcher afterwards) before tearing anything down
       if (reconcileTimer) clearInterval(reconcileTimer);
       if (trailing) clearTimeout(trailing);
+      if (cacheHourlyTimer) clearInterval(cacheHourlyTimer);
+      if (racyResaveTimer) clearTimeout(racyResaveTimer);
       detach();
       await inFlight; // a reconcile pass in flight finishes before the caller tears the vault down
+
+      // A last save on the way out, only when there is something new to save: never an index
+      // that is not ready, never after a failed build, never a second write of what the hourly
+      // timer or the post-fill save already wrote.
+      if (
+        deferIndex &&
+        opts.indexCache &&
+        built &&
+        !buildFailed &&
+        index.version !== lastSavedCacheVersion
+      ) {
+        const deadClient = closeOpts?.reason === 'client-dead';
+        const skipThreshold =
+          opts.indexCacheDeadClientSkipNotes ?? INDEX_CACHE_DEAD_CLIENT_SKIP_NOTES;
+        const skip = deadClient && index.size() > skipThreshold;
+        if (!skip) {
+          const budgetMs = opts.indexCacheShutdownBudgetMs ?? INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS;
+          await runIndexCacheSave(budgetMs);
+        }
+      }
     },
   };
 }

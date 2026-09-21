@@ -42,9 +42,14 @@ export interface SecretRotateDeps {
 export async function runSecretRotate(deps: SecretRotateDeps): Promise<number> {
   const text = await deps.readFile(deps.envPath);
   const newSecret = deps.randomSecret();
-  const { text: updated } = upsertEnv(text, { OWNER_SECRET: newSecret }, { onlyIfEmpty: false });
+  const { text: updated, removedDuplicates } = upsertEnv(
+    text,
+    { OWNER_SECRET: newSecret },
+    { onlyIfEmpty: false },
+  );
   await deps.writeFile(deps.envPath, updated);
   deps.print(`OWNER_SECRET rotated: ${maskSecret(newSecret)}`);
+  for (const key of removedDuplicates) deps.print(`removed a duplicate ${key} line`);
 
   if (await deps.confirm('Also revoke all existing tokens?')) {
     await runRevokeAll(

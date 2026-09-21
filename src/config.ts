@@ -34,6 +34,9 @@ export interface Config {
   vaultSettings: VaultSettingsConfig;
   /** Cap for vault_write_binary (attachments); text writes stay at MAX_FILE_BYTES. */
   maxBinaryBytes: number;
+  /** When true, only tools whose annotations declare `readOnlyHint: true` are registered — see
+   *  `src/tools/register.ts`. Applies to both ways in (HTTP and stdio). */
+  readOnly: boolean;
 }
 
 export const OWNER_SECRET_MIN_BYTES = 32;
@@ -95,6 +98,7 @@ const EnvSchema = z.object({
   VAULT_TIMEZONE: z.string().min(1).default('UTC'),
   REQUIRED_FRONTMATTER: z.string().default(''),
   MAX_BINARY_BYTES: z.coerce.number().int().min(1).optional(),
+  VAULT_READ_ONLY: z.enum(['true', 'false']).default('false'),
 });
 
 const REQUIRED = ['PUBLIC_URL', 'OWNER_SECRET'] as const;
@@ -255,6 +259,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     storage,
     vaultSettings,
     maxBinaryBytes: d.MAX_BINARY_BYTES ?? MAX_BINARY_BYTES,
+    readOnly: d.VAULT_READ_ONLY === 'true',
   };
 }
 
@@ -268,6 +273,9 @@ export interface VaultConfig {
   reconcileMs: number;
   logLevel: LogLevel;
   stateDir: string | null;
+  /** When true, only tools whose annotations declare `readOnlyHint: true` are registered — see
+   *  `src/tools/register.ts`. Applies to both ways in (HTTP and stdio). */
+  readOnly: boolean;
 }
 
 /** The env keys `loadVaultConfig` reads. Everything else (`PUBLIC_URL`, `OWNER_SECRET`, tunnel
@@ -286,6 +294,7 @@ const VAULT_ENV_KEYS: ReadonlySet<string> = new Set([
   'MAX_BINARY_BYTES',
   'LOG_LEVEL',
   'STATE_DIR',
+  'VAULT_READ_ONLY',
 ]);
 
 /**
@@ -323,5 +332,6 @@ export function loadVaultConfig(
     reconcileMs: d.VAULT_RECONCILE_MS,
     logLevel: d.LOG_LEVEL,
     stateDir: d.STATE_DIR ?? null,
+    readOnly: d.VAULT_READ_ONLY === 'true',
   };
 }

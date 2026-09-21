@@ -88,12 +88,17 @@ export async function runVaultSet(args: VaultSetArgs, deps: VaultSetDeps): Promi
     }
   }
 
-  const { text } = upsertEnv(envText, { VAULT_PATH: verdict.path }, { onlyIfEmpty: false });
+  const { text, removedDuplicates } = upsertEnv(
+    envText,
+    { VAULT_PATH: verdict.path },
+    { onlyIfEmpty: false },
+  );
   await deps.writeFile(deps.envPath, text);
   // Same reason as in setup: create the reserved folder as the host user so
   // Docker never has to, which could leave it root-owned and unwritable.
   await deps.writeFile(mod.join(verdict.path, RESERVED_DIR, '.gitkeep'), '');
   deps.print(`set VAULT_PATH=${verdict.path}`);
+  for (const key of removedDuplicates) deps.print(`removed a duplicate ${key} line`);
 
   if (current !== '') {
     const state = await deps.readFile(mod.join(current, RESERVED_DIR, STATE_FILE));

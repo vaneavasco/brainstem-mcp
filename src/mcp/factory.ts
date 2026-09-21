@@ -19,7 +19,18 @@ export interface FactoryDeps {
    * Optional so tests and tools that don't care get the defaults.
    */
   instructions?: () => Promise<string>;
+  /** When true, only tools whose annotations declare `readOnlyHint: true` are registered (see
+   *  `src/tools/register.ts`'s `withIndexGate`). Defaults to false. Threaded from `Config`/
+   *  `VaultConfig`'s `readOnly` by `src/app.ts` and `src/stdio-main.ts`. */
+  readOnly?: boolean;
+  /** Counts other live stdio processes on this vault, on this machine (`src/storage/
+   *  local-peers.ts`), at call time — stdio only; the HTTP server never sets this, so
+   *  `brainstem_ping`'s `localPeers` field is absent there. */
+  localPeers?: () => Promise<number>;
 }
+
+const READ_ONLY_INSTRUCTIONS_SENTENCE =
+  'This connection is read-only: the vault cannot be changed through it.';
 
 const PingOutput = z.looseObject({
   server: z.string(),
@@ -47,7 +58,28 @@ const PingOutput = z.looseObject({
     /** Notes the background build could not read (no permission, a lock held by another program, not UTF-8). They are in
      *  neither `indexed` nor `notes`; the reconcile pass picks up the ones that become readable. */
     unreadable: z.number().optional(),
+    /** THIS boot's use of the machine-local index cache (stdio only — see
+     *  `src/storage/local-cache.ts`); absent when no cache was configured (the HTTP server, or
+     *  `BRAINSTEM_INDEX_CACHE=off`). */
+    cache: z
+      .looseObject({
+        used: z.boolean(),
+        entriesFromCache: z.number(),
+        entriesRead: z.number(),
+        /** Cache lines dropped while loading, for any reason (malformed JSON, wrong shape, a
+         *  truncated last line, or one over the per-line byte cap) — see
+         *  `src/storage/local-cache.ts`. */
+        skipped: z.number(),
+        rejected: z.string().optional(),
+      })
+      .optional(),
   }),
+  /** True when this connection only exposes tools annotated `readOnlyHint: true` — see
+   *  `FactoryDeps.readOnly`. */
+  readOnly: z.boolean(),
+  /** Other live stdio processes on this vault, on this machine, counted at call time — see
+   *  `FactoryDeps.localPeers`. Absent on the HTTP server. */
+  localPeers: z.number().optional(),
 });
 
 /** Builds a fresh McpServer for one request (stateless per MCP 2026-07-28). */
@@ -55,7 +87,11 @@ export async function createVaultServer(
   ctx: McpRequestContext,
   deps: FactoryDeps,
 ): Promise<McpServer> {
-  const instructions = deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS;
+  const readOnly = deps.readOnly ?? false;
+  const baseInstructions = deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS;
+  const instructions = readOnly
+    ? `${baseInstructions}\n\n${READ_ONLY_INSTRUCTIONS_SENTENCE}`
+    : baseInstructions;
   const runtime = await deps.resolveRuntime(ctx);
   const server = new McpServer(SERVER_INFO, {
     instructions,
@@ -105,7 +141,10 @@ export async function createVaultServer(
             indexed: indexState.done,
             total: indexState.total,
             ...(indexState.unreadable ? { unreadable: indexState.unreadable } : {}),
+            ...(runtime.indexCacheStats() ? { cache: runtime.indexCacheStats() } : {}),
           },
+          readOnly,
+          ...(deps.localPeers ? { localPeers: await deps.localPeers() } : {}),
         };
         return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
       }),
@@ -137,6 +176,7 @@ export async function createVaultServer(
   registerVaultTools(server, {
     runtime,
     log: (error) => deps.logger.error({ err: error }, 'tool failure'),
+    readOnly,
   });
   return server;
 }

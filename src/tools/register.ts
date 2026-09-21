@@ -18,6 +18,10 @@ import { registerWriteTools } from './write.ts';
 export interface ToolContext {
   runtime: VaultRuntime;
   log: (e: unknown) => void;
+  /** When true, `withIndexGate` below registers only tools whose annotations declare
+   *  `readOnlyHint: true` — the one place this decision is made, from the annotation every tool
+   *  already carries (src/tools/annotations.ts), so it cannot drift from a hand-written list. */
+  readOnly: boolean;
 }
 
 /** Re-reads `paths` into the index. Markdown-only (refreshPath skips anything else) — a mutation
@@ -115,12 +119,31 @@ export async function tracked<T>(
  *  them), instead of fighting `McpServer.registerTool`'s overloaded generic signature. */
 type ToolHandler = (...args: unknown[]) => unknown;
 
+/** The `annotations` shape every `server.registerTool` config carries, as much of it as this
+ *  file needs to read (see `isReadOnlyTool`). */
+interface ToolConfigWithAnnotations {
+  annotations?: { readOnlyHint?: boolean };
+}
+
+/** True when `config` (the second argument every `server.registerTool` call below passes)
+ *  declares `annotations.readOnlyHint: true` — read from the tool's own annotation
+ *  (src/tools/annotations.ts), never a second, hand-written list of tool names that could drift
+ *  from it. */
+function isReadOnlyTool(config: unknown): boolean {
+  return (
+    (config as ToolConfigWithAnnotations | null | undefined)?.annotations?.readOnlyHint === true
+  );
+}
+
 /**
- * Wraps every `server.registerTool` call made from here on (except `INDEX_GATE_EXEMPT`) so its
- * handler waits for the index — via `waitForIndex` — before running. One gate where tools are
- * registered, not thirty edits to the tool files themselves: this mutates `server.registerTool`
- * in place, so `registerReadTools`, `registerWriteTools`, etc. (which only ever call
- * `server.registerTool`, unchanged) pick it up automatically for every tool they register below.
+ * Wraps every `server.registerTool` call made from here on so its handler waits for the index —
+ * via `waitForIndex` — before running (except `INDEX_GATE_EXEMPT`), and, in read-only mode
+ * (`tc.readOnly`), so a tool whose annotations don't declare `readOnlyHint: true` is never
+ * registered at all: `tools/list` then never lists it, and calling it fails as an unknown tool.
+ * One gate where tools are registered, not thirty edits to the tool files themselves: this
+ * mutates `server.registerTool` in place, so `registerReadTools`, `registerWriteTools`, etc.
+ * (which only ever call `server.registerTool`, unchanged) pick both behaviours up automatically
+ * for every tool they register below.
  */
 function withIndexGate(server: McpServer, tc: ToolContext): void {
   const original = server.registerTool.bind(server) as unknown as (
@@ -129,6 +152,7 @@ function withIndexGate(server: McpServer, tc: ToolContext): void {
     cb: ToolHandler,
   ) => unknown;
   const gated = (name: string, config: unknown, cb: ToolHandler): unknown => {
+    if (tc.readOnly && !isReadOnlyTool(config)) return undefined;
     if (INDEX_GATE_EXEMPT.has(name)) {
       return original(name, config, (...args: unknown[]) => tracked(tc, () => cb(...args)));
     }

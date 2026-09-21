@@ -610,4 +610,36 @@ describe('secret show/rotate', () => {
     expect(lines.join('\n')).not.toContain('new-secret-value');
     expect(lines.join('\n')).toMatch(/\.\/brainstem up/);
   });
+
+  it('F2: reports a removed duplicate OWNER_SECRET line, without ever printing a secret value', async () => {
+    const envPath = path.join(dir, '.env');
+    const stateFile = path.join(dir, 'state.json');
+    const files = new Map<string, string>([
+      [envPath, 'OWNER_SECRET=old-secret-1\nOWNER_SECRET=old-secret-2\n'],
+    ]);
+    await FileTokenStore.open(stateFile);
+
+    const lines: string[] = [];
+    const code = await runSecretRotate({
+      envPath,
+      stateFile,
+      readFile: async (p) => files.get(p) ?? '',
+      writeFile: async (p, t) => {
+        files.set(p, t);
+      },
+      randomSecret: () => 'brand-new-secret',
+      print: (l) => lines.push(l),
+      confirm: async () => false,
+    });
+
+    expect(code).toBe(0);
+    const envText = files.get(envPath) ?? '';
+    expect(envText.match(/^OWNER_SECRET=/gm)).toHaveLength(1);
+    expect(envText).toContain('OWNER_SECRET=brand-new-secret');
+    expect(lines).toContain('removed a duplicate OWNER_SECRET line');
+    // None of the old or new secret VALUES ever appear in printed output.
+    expect(lines.join('\n')).not.toContain('old-secret-1');
+    expect(lines.join('\n')).not.toContain('old-secret-2');
+    expect(lines.join('\n')).not.toContain('brand-new-secret');
+  });
 });

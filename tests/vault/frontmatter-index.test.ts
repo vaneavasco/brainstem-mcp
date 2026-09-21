@@ -4,7 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
 import { LocalFSAdapter } from '../../src/storage/local-fs.ts';
-import { FrontmatterIndex } from '../../src/vault/frontmatter-index.ts';
+import {
+  FrontmatterIndex,
+  INDEX_CACHE_SCHEMA,
+  type IndexEntry,
+} from '../../src/vault/frontmatter-index.ts';
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -70,6 +74,147 @@ describe('FrontmatterIndex.empty + fill', () => {
     for (const s of snapshots) expect(s.total).toBe(28);
     const last = snapshots.at(-1);
     expect(last).toEqual({ done: 28, total: 28 });
+  });
+});
+
+describe('fill() with a cached entries map (the machine-local index cache — a hint, never a source)', () => {
+  it('a cache hit (same path, size and modifiedAt as the listing) is upserted with no disk read', async () => {
+    const built = FrontmatterIndex.empty();
+    await built.fill(vault);
+    const real = built.get('a.md');
+    if (!real) throw new Error('expected a.md to be indexed');
+
+    // Proves the hit skipped batchRead entirely, not merely that the result matches: batchRead
+    // for a.md would fail if called, since the counting adapter below only forwards other paths.
+    const countingVault = Object.create(vault) as typeof vault;
+    countingVault.batchRead = (paths: string[]) => {
+      if (paths.includes('a.md')) throw new Error('a.md must not be read from disk on a cache hit');
+      return vault.batchRead(paths);
+    };
+
+    const cached = new Map<string, IndexEntry>([['a.md', real]]);
+    const index = FrontmatterIndex.empty();
+    const result = await index.fill(countingVault, undefined, undefined, cached);
+    expect(result.fromCache).toBe(1);
+    expect(result.fromDisk).toBe(27); // every other markdown note, still read
+    expect(index.get('a.md')).toEqual(real);
+    expect(index.size()).toBe(28);
+  });
+
+  it('a stale cache entry (size or modifiedAt differs from the listing) is re-read from disk', async () => {
+    const cached = new Map<string, IndexEntry>([
+      [
+        'a.md',
+        {
+          path: 'a.md',
+          frontmatter: { stale: true },
+          hasFrontmatter: true,
+          size: 999_999, // does not match the real file's size
+          modifiedAt: '1999-01-01T00:00:00.000Z',
+          hash: 'stale-hash',
+          links: [],
+          tags: [],
+          headings: [],
+          blockIds: [],
+          wordCount: 0,
+        },
+      ],
+    ]);
+    const index = FrontmatterIndex.empty();
+    await index.fill(vault, undefined, undefined, cached);
+    // re-read from disk: the real frontmatter shows, not the stale cached one
+    expect(index.get('a.md')?.frontmatter).toMatchObject({ type: 'project' });
+    expect(index.get('a.md')?.frontmatter).not.toMatchObject({ stale: true });
+  });
+
+  it('a cached path no longer in the listing (a note deleted since the cache was written) is dropped', async () => {
+    const cached = new Map<string, IndexEntry>([
+      [
+        'gone.md',
+        {
+          path: 'gone.md',
+          frontmatter: {},
+          hasFrontmatter: false,
+          size: 1,
+          modifiedAt: new Date().toISOString(),
+          hash: 'x',
+          links: [],
+          tags: [],
+          headings: [],
+          blockIds: [],
+          wordCount: 0,
+        },
+      ],
+    ]);
+    const index = FrontmatterIndex.empty();
+    const result = await index.fill(vault, undefined, undefined, cached);
+    expect(index.get('gone.md')).toBeUndefined();
+    expect(result.fromCache).toBe(0);
+    expect(result.fromDisk).toBe(28);
+  });
+
+  it('progress counts a cache hit as done, the same as a disk read', async () => {
+    const built = FrontmatterIndex.empty();
+    await built.fill(vault);
+    const cached = new Map(built.all().map((e) => [e.path, e]));
+
+    const snapshots: { done: number; total: number }[] = [];
+    const index = FrontmatterIndex.empty();
+    await index.fill(vault, (p) => snapshots.push({ ...p }), undefined, cached);
+    expect(snapshots[0]).toEqual({ done: 0, total: 28 });
+    expect(snapshots.at(-1)).toEqual({ done: 28, total: 28 });
+    // everything came from the cache — no disk read at all
+    const result = await FrontmatterIndex.empty().fill(vault, undefined, undefined, cached);
+    expect(result.fromCache).toBe(28);
+    expect(result.fromDisk).toBe(0);
+  });
+
+  it('byteSize() is identical whether entries came from disk or from a cache hit', async () => {
+    const cold = FrontmatterIndex.empty();
+    await cold.fill(vault);
+    const cached = new Map(cold.all().map((e) => [e.path, e]));
+
+    const warm = FrontmatterIndex.empty();
+    await warm.fill(vault, undefined, undefined, cached);
+
+    expect(warm.byteSize()).toBe(cold.byteSize());
+    expect(warm.all()).toEqual(cold.all());
+  });
+
+  it('with no cache at all, behaves exactly as before (undefined cachedEntries)', async () => {
+    const index = FrontmatterIndex.empty();
+    const result = await index.fill(vault);
+    expect(result.fromCache).toBe(0);
+    expect(result.fromDisk).toBe(28);
+    expect(index.size()).toBe(28);
+  });
+});
+
+describe('INDEX_CACHE_SCHEMA guards IndexEntry’s shape', () => {
+  it('a representative entry’s sorted key list matches the schema number — bump both together', async () => {
+    // If this fails because IndexEntry gained, lost or renamed a field, the fix is: update the
+    // key list below AND bump INDEX_CACHE_SCHEMA (src/vault/frontmatter-index.ts) — a cache
+    // written under the old schema must never be upserted straight into an index expecting the
+    // new shape (src/storage/local-cache.ts rejects a schema mismatch outright).
+    expect(INDEX_CACHE_SCHEMA).toBe(1);
+    const index = await FrontmatterIndex.build(vault);
+    const entry = index.get('a.md');
+    if (!entry) throw new Error('expected a.md to be indexed');
+    expect(Object.keys(entry).sort()).toEqual(
+      [
+        'blockIds',
+        'frontmatter',
+        'hasFrontmatter',
+        'hash',
+        'headings',
+        'links',
+        'modifiedAt',
+        'path',
+        'size',
+        'tags',
+        'wordCount',
+      ].sort(),
+    );
   });
 });
 

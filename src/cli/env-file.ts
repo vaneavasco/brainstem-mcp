@@ -27,18 +27,46 @@ function stripQuotes(value: string): string {
   return value;
 }
 
-/** Parses `KEY=VALUE` lines into a map; comments (`#...`) and blank lines are ignored. */
+interface ParsedKeyLine {
+  key: string;
+  /** Whether the key was written as `export KEY=...` (a common convention that also lets the
+   *  file be `source`d by a shell) — carried through so a rewritten line keeps the prefix. */
+  exported: boolean;
+  /** Index of the `=` in the ORIGINAL (untrimmed) line — value slicing uses this, unaffected by
+   *  stripping a leading `export `, since that only touches the part before `=`. */
+  eq: number;
+}
+
+/** A line's `KEY` (and whether it's `export`-prefixed), or null when the line is blank, a
+ *  comment, has no `=`, or its key doesn't look like an env var name. Shared by `parseEnv` and
+ *  `upsertEnv` so both agree on what counts as "the same key" — including `export KEY=...`. */
+function parseKeyLine(line: string): ParsedKeyLine | null {
+  const trimmed = line.trim();
+  if (trimmed === '' || trimmed.startsWith('#')) return null;
+  const eq = line.indexOf('=');
+  if (eq === -1) return null;
+  let keyPart = line.slice(0, eq).trim();
+  let exported = false;
+  const exportMatch = /^export\s+(\S.*)$/.exec(keyPart);
+  if (exportMatch) {
+    keyPart = exportMatch[1] as string;
+    exported = true;
+  }
+  if (!KEY_RE.test(keyPart)) return null;
+  return { key: keyPart, exported, eq };
+}
+
+/** Parses `KEY=VALUE` lines into a map; comments (`#...`) and blank lines are ignored. An
+ *  `export KEY=VALUE` line is read the same as `KEY=VALUE`. A key repeated on more than one line
+ *  reads as its LAST occurrence — the same line `upsertEnv` treats as authoritative and keeps
+ *  (see below), so the two agree on what a duplicated key currently means. */
 export function parseEnv(text: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const line of splitLines(text)) {
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq === -1) continue;
-    const key = line.slice(0, eq).trim();
-    if (!KEY_RE.test(key)) continue;
-    const rawValue = line.slice(eq + 1).trim();
-    map.set(key, stripQuotes(rawValue));
+    const parsed = parseKeyLine(line);
+    if (!parsed) continue;
+    const rawValue = line.slice(parsed.eq + 1).trim();
+    map.set(parsed.key, stripQuotes(rawValue));
   }
   return map;
 }
@@ -74,34 +102,60 @@ function formatValue(value: string): string {
  * the end, after a single `# added by setup` marker line (only emitted when
  * at least one key is actually appended). Line endings are always
  * normalized to `\n`.
+ *
+ * F2: when a key being set (only those — a key not in `values` is left exactly as it is, dupes
+ * included) appears on more than one line, the new value is written at the LAST occurrence's
+ * line (matching `parseEnv`'s own "last one wins" reading) and every EARLIER line defining that
+ * key is dropped outright, not just left stale — so the file and `parseEnv` can never again
+ * disagree about what a re-read gets. `removedDuplicates` names the key once per line removed
+ * this way (never a value), so a caller can print e.g. `removed a duplicate OWNER_SECRET line`
+ * without ever risking a secret in its own output. An `export KEY=...` line counts as defining
+ * `KEY` for all of this, and the prefix is kept on whichever line survives.
  */
 export function upsertEnv(
   text: string,
   values: Record<string, string>,
   opts?: { onlyIfEmpty?: boolean },
-): { text: string; changed: string[]; kept: string[] } {
+): { text: string; changed: string[]; kept: string[]; removedDuplicates: string[] } {
   const onlyIfEmpty = opts?.onlyIfEmpty ?? false;
   const remaining = new Map(Object.entries(values));
   const changed: string[] = [];
   const kept: string[] = [];
+  const removedDuplicates: string[] = [];
 
-  const outLines = splitLines(text).map((line) => {
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) return line;
-    const eq = line.indexOf('=');
-    if (eq === -1) return line;
-    const key = line.slice(0, eq).trim();
-    if (!remaining.has(key)) return line;
+  const lines = splitLines(text);
 
-    const newValue = remaining.get(key) as string;
-    remaining.delete(key);
-    const current = stripQuotes(line.slice(eq + 1).trim());
-    if (onlyIfEmpty && current !== '') {
-      kept.push(key);
-      return line;
+  // The LAST line index for each key we're about to touch — everything else defining that same
+  // key is a duplicate to drop, whichever position it's in.
+  const lastIndexForKey = new Map<string, number>();
+  lines.forEach((line, i) => {
+    const parsed = parseKeyLine(line);
+    if (parsed && remaining.has(parsed.key)) lastIndexForKey.set(parsed.key, i);
+  });
+
+  const outLines: string[] = [];
+  lines.forEach((line, i) => {
+    const parsed = parseKeyLine(line);
+    if (!parsed || !remaining.has(parsed.key)) {
+      outLines.push(line);
+      return;
     }
-    changed.push(key);
-    return `${key}=${formatValue(newValue)}`;
+    if (lastIndexForKey.get(parsed.key) !== i) {
+      removedDuplicates.push(parsed.key); // an earlier duplicate — dropped, not kept stale
+      return;
+    }
+
+    const newValue = remaining.get(parsed.key) as string;
+    remaining.delete(parsed.key);
+    const current = stripQuotes(line.slice(parsed.eq + 1).trim());
+    if (onlyIfEmpty && current !== '') {
+      kept.push(parsed.key);
+      outLines.push(line);
+      return;
+    }
+    changed.push(parsed.key);
+    const prefix = parsed.exported ? 'export ' : '';
+    outLines.push(`${prefix}${parsed.key}=${formatValue(newValue)}`);
   });
 
   if (remaining.size > 0) {
@@ -112,5 +166,5 @@ export function upsertEnv(
     }
   }
 
-  return { text: `${outLines.join('\n')}\n`, changed, kept };
+  return { text: `${outLines.join('\n')}\n`, changed, kept, removedDuplicates };
 }

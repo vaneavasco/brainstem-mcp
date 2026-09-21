@@ -8,7 +8,7 @@ import { StoreCorruptError } from './auth/store/types.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './logger.ts';
 import { startServer } from './server.ts';
-import { classifyJournal } from './storage/transaction.ts';
+import { scanLeftoverJournals } from './storage/transaction.ts';
 import { waitForPublicUrl, watchPublicUrl } from './tunnel/public-url-file.ts';
 import { writeConnectionNote, writeInstanceFile } from './vault/connection-note.ts';
 import {
@@ -156,43 +156,39 @@ async function main(): Promise<void> {
   // A journal outlives its transaction only after a crash mid-apply or a failed cleanup. Report
   // it and leave it alone — there is deliberately no replay (spec 4.6 step 5) — but say which of
   // the two it is: telling the owner to restore the pre-images of a *committed* batch would
-  // revert it, so the manifest's own `state` decides the advice.
+  // revert it, so the manifest's own `state` decides the advice. Shared with the stdio boot
+  // (src/stdio-main.ts), against its own machine-local stateDir, via scanLeftoverJournals.
   try {
-    const txRoot = path.join(stateDir, 'tx');
-    for (const entry of await fs.readdir(txRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const journal = path.join(txRoot, entry.name);
-      const manifest = await fs
-        .readFile(path.join(journal, 'manifest.json'), 'utf8')
-        .catch(() => null);
-      const status = classifyJournal(manifest);
+    for (const leftover of await scanLeftoverJournals(stateDir)) {
       logger.warn(
         {
-          transaction: status.id ?? entry.name,
-          journal,
-          state: status.state,
-          needsRestore: status.needsRestore,
+          transaction: leftover.transaction,
+          journal: leftover.journal,
+          state: leftover.state,
+          needsRestore: leftover.needsRestore,
         },
-        `transaction journal left behind — ${status.message}; nothing was replayed`,
+        `transaction journal left behind — ${leftover.message}; nothing was replayed`,
       );
     }
   } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') {
-      logger.warn({ err: error }, 'could not scan the transaction journal folder');
-    }
+    logger.warn({ err: error }, 'could not scan the transaction journal folder');
   }
 
-  // The owner's vault-conventions note lives in the reserved state dir; seed
-  // it once so it is discoverable in Obsidian next to connection.md.
-  try {
-    if (await writeInstructionsTemplateIfMissing(stateDir)) {
-      logger.info(
-        { file: path.join(stateDir, 'instructions.md') },
-        'seeded owner instructions template',
-      );
+  // The owner's vault-conventions note lives in the reserved state dir; seed it once so it is
+  // discoverable in Obsidian next to connection.md — skipped in read-only mode, which must not
+  // write into the vault on its own either (the OAuth token store below is server state, not
+  // vault content, and keeps working regardless).
+  if (!config.readOnly) {
+    try {
+      if (await writeInstructionsTemplateIfMissing(stateDir)) {
+        logger.info(
+          { file: path.join(stateDir, 'instructions.md') },
+          'seeded owner instructions template',
+        );
+      }
+    } catch (error) {
+      logger.warn({ err: error }, 'could not seed the owner instructions template');
     }
-  } catch (error) {
-    logger.warn({ err: error }, 'could not seed the owner instructions template');
   }
   const instructions = createInstructionsProvider(stateDir);
 
@@ -213,36 +209,43 @@ async function main(): Promise<void> {
     },
   );
 
-  await writeConnectionNote(stateDir, {
-    publicUrl: config.publicUrl.href,
-    mcpUrl: config.mcpUrl.href,
-    tunnelMode: config.tunnelMode,
-    updatedAt: new Date().toISOString(),
-  });
+  // The connection note and the instance heartbeat file are both writes into the vault, so both
+  // are skipped in read-only mode along with the instructions template above: a reconnect note
+  // and cross-process liveness detection are conveniences, not something a read-only server may
+  // do unasked.
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  if (!config.readOnly) {
+    await writeConnectionNote(stateDir, {
+      publicUrl: config.publicUrl.href,
+      mcpUrl: config.mcpUrl.href,
+      tunnelMode: config.tunnelMode,
+      updatedAt: new Date().toISOString(),
+    });
 
-  const hostname = os.hostname();
-  const startedAt = new Date().toISOString();
-  const { otherHost } = await writeInstanceFile(stateDir, {
-    hostname,
-    startedAt,
-    heartbeatAt: startedAt,
-  });
-  if (otherHost) {
-    logger.warn(
-      { otherHost },
-      'another brainstem-mcp instance looks live on this vault — two processes writing the same vault can race each other',
-    );
-  }
-  const heartbeatTimer = setInterval(() => {
-    void writeInstanceFile(stateDir, {
+    const hostname = os.hostname();
+    const startedAt = new Date().toISOString();
+    const { otherHost } = await writeInstanceFile(stateDir, {
       hostname,
       startedAt,
-      heartbeatAt: new Date().toISOString(),
-    }).catch((error: unknown) => {
-      logger.error({ err: error }, 'instance heartbeat failed');
+      heartbeatAt: startedAt,
     });
-  }, HEARTBEAT_INTERVAL_MS);
-  heartbeatTimer.unref();
+    if (otherHost) {
+      logger.warn(
+        { otherHost },
+        'another brainstem-mcp instance looks live on this vault — two processes writing the same vault can race each other',
+      );
+    }
+    heartbeatTimer = setInterval(() => {
+      void writeInstanceFile(stateDir, {
+        hostname,
+        startedAt,
+        heartbeatAt: new Date().toISOString(),
+      }).catch((error: unknown) => {
+        logger.error({ err: error }, 'instance heartbeat failed');
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref();
+  }
 
   let stopWatch: (() => void) | null = null;
 
@@ -252,7 +255,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, 'shutting down');
     clearInterval(sweepTimer);
-    clearInterval(heartbeatTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     stopWatch?.();
     const timer = setTimeout(() => process.exit(1), 10_000);
     running

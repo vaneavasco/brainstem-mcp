@@ -33,6 +33,9 @@ export async function startHarness(
   /** Extra `createLocalRuntime` options (e.g. `deferIndex`, `createAdapter`, `indexWaitMs`) —
    *  spread in after the harness's own defaults, so a test can override any of them too. */
   runtimeOptions?: Partial<LocalRuntimeOptions>,
+  /** VAULT_READ_ONLY=true for this instance — only tools annotated `readOnlyHint: true` are
+   *  registered. Defaults to false. */
+  readOnly = false,
 ): Promise<Harness> {
   const root = existingRoot ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-tools-')));
   const runtime = await createLocalRuntime({
@@ -42,7 +45,7 @@ export async function startHarness(
     stateDir: path.join(root, '_brainstem'),
     ...runtimeOptions,
   });
-  const config = loadConfig(baseEnv());
+  const config = loadConfig(baseEnv(readOnly ? { VAULT_READ_ONLY: 'true' } : {}));
   const t = await createTestAuth(config, root);
   const token = await t.issueAccessToken();
   const { app } = createApp(config, createLogger('fatal'), async () => runtime, t.auth);
