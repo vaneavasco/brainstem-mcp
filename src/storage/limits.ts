@@ -72,6 +72,36 @@ export const STOPPING_INDEX_WAIT_MS = 2_000;
 export const DEFAULT_SETTLE_RETRY_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
 /** Shortest allowed reconcile interval: each pass lists the whole vault. */
 export const MIN_RECONCILE_MS = 10_000;
+/** Fraction of markdown notes that had to be read from disk (not served from the machine-local
+ *  index cache — `src/storage/local-cache.ts`) above which the cache is worth rewriting right
+ *  after the index becomes ready, even though it was present and valid: a cache 1% stale is
+ *  barely worth a rewrite; the boot that follows would still hit disk for almost everything if it
+ *  weren't refreshed. Below this, the existing cache is left as it is until something else
+ *  triggers a save (an hourly tick, or a clean shutdown with a changed index). */
+export const INDEX_CACHE_STALE_FRACTION = 0.01;
+/** How often a warm, still-running stdio server rewrites its index cache if anything changed
+ *  since the last save — an unref'd timer, so it never keeps the process alive on its own. */
+export const INDEX_CACHE_HOURLY_SAVE_MS = 60 * 60 * 1000;
+/** Time budget for the index-cache save attempted during shutdown (`VaultRuntime.close()`):
+ *  shorter than the background default (`DEFAULT_SAVE_BUDGET_MS` in local-cache.ts, 30 s) because
+ *  `src/stdio-main.ts` gives the whole shutdown sequence only SHUTDOWN_TIMEOUT_MS (10 s) — this
+ *  leaves headroom for draining calls and closing the transport around it. Measured
+ *  (`tests/scale/vault.scale.ts`): saving the 40,000-note scale vault's cache (~75 MiB, 40,001
+ *  entries) took ~386 ms on the machine this was developed on; 5 s is generous margin for a
+ *  slower disk, not a number this vault needs.
+ */
+export const INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS = 5_000;
+/**
+ * A shutdown save is skipped outright (not even attempted) when the shutdown reason is a dead
+ * client (the other end of the pipe is already gone — nobody is waiting on this session again
+ * soon, so a slow disk turning a bounded save into wasted shutdown time buys nothing) AND the
+ * index holds more notes than this. Measured on the 40,000-note scale vault: an index that size
+ * saves in well under a second — ~386 ms, see INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS above — so this
+ * is set well above that vault's size (about 3.75x its note count): a dead-client shutdown only
+ * skips the save for a vault substantially larger than the one this project measured, where "well
+ * under a second" is no longer a safe assumption.
+ */
+export const INDEX_CACHE_DEAD_CLIENT_SKIP_NOTES = 150_000;
 /** Minimum distance between reconciles triggered by watcher errors. */
 export const DEFAULT_RECONCILE_MIN_GAP_MS = 30_000;
 export const MAX_RECENT = 200;

@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
-import { testStateHome } from '../helpers/state-home.ts';
+import { removeMachineHomes, testMachineHomeEnv } from '../helpers/state-home.ts';
 
 const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
 
@@ -51,7 +51,7 @@ interface Session {
 
 async function start(env: Record<string, string> = {}): Promise<Session> {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-ls-')));
-  const stateHome = testStateHome();
+  const homes = testMachineHomeEnv();
   const client = new Client(
     { name: 'local-state-test', version: '0' },
     { versionNegotiation: { mode: 'auto' } },
@@ -60,18 +60,18 @@ async function start(env: Record<string, string> = {}): Promise<Session> {
     new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_MAIN, '--vault', root],
-      env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome, ...env },
+      env: { ...process.env, ...homes, ...env },
       stderr: 'pipe',
     }),
   );
   return {
     client,
     root,
-    stateHome,
+    stateHome: homes.BRAINSTEM_STATE_HOME,
     async close() {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
-      await fs.rm(stateHome, { recursive: true, force: true });
+      await removeMachineHomes(homes);
     },
   };
 }
@@ -114,7 +114,7 @@ describe('the stdio server keeps its own working state on the machine, not in th
 
   it('STATE_DIR still overrides where the journal lives (today’s override keeps working)', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-ls-override-'));
-    const stateHome = testStateHome();
+    const homes = testMachineHomeEnv();
     const overrideDir = path.join(root, '_brainstem'); // vault-local, exactly the pre-feature spot
     const client = new Client(
       { name: 'override-test', version: '0' },
@@ -125,7 +125,7 @@ describe('the stdio server keeps its own working state on the machine, not in th
         new StdioClientTransport({
           command: process.execPath,
           args: [STDIO_MAIN, '--vault', root],
-          env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome, STATE_DIR: overrideDir },
+          env: { ...process.env, ...homes, STATE_DIR: overrideDir },
           stderr: 'pipe',
         }),
       );
@@ -139,18 +139,18 @@ describe('the stdio server keeps its own working state on the machine, not in th
       const txEntries = await fs.readdir(path.join(overrideDir, 'tx'));
       expect(txEntries).toEqual([]);
       const localHash = sha256hex(await fs.realpath(root)).slice(0, 16);
-      await expect(fs.stat(path.join(stateHome, localHash))).rejects.toThrow();
+      await expect(fs.stat(path.join(homes.BRAINSTEM_STATE_HOME, localHash))).rejects.toThrow();
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
-      await fs.rm(stateHome, { recursive: true, force: true });
+      await removeMachineHomes(homes);
     }
   });
 
   it('prunes a stale instances/<pid>.json of a dead pid at boot', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-ls-stale-')));
-    const stateHome = testStateHome();
-    const localDir = localFolderFor(stateHome, root);
+    const homes = testMachineHomeEnv();
+    const localDir = localFolderFor(homes.BRAINSTEM_STATE_HOME, root);
     await fs.mkdir(path.join(localDir, 'instances'), { recursive: true });
     // Far past any real pid on Linux (pid_max is at most a few million) — if this ever collided
     // with a live process the assertion below would only be too strict, never silently wrong.
@@ -170,7 +170,7 @@ describe('the stdio server keeps its own working state on the machine, not in th
         new StdioClientTransport({
           command: process.execPath,
           args: [STDIO_MAIN, '--vault', root],
-          env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome },
+          env: { ...process.env, ...homes },
           stderr: 'pipe',
         }),
       );
@@ -178,7 +178,7 @@ describe('the stdio server keeps its own working state on the machine, not in th
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
-      await fs.rm(stateHome, { recursive: true, force: true });
+      await removeMachineHomes(homes);
     }
   });
 });
@@ -186,7 +186,7 @@ describe('the stdio server keeps its own working state on the machine, not in th
 describe('journals left inside the vault by an older session or by the HTTP server', () => {
   it('are reported at boot (only reported), although this server journals elsewhere', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-ls-old-')));
-    const stateHome = testStateHome();
+    const homes = testMachineHomeEnv();
     const old = path.join(root, '_brainstem', 'tx', 'tx-left-behind');
     await fs.mkdir(old, { recursive: true });
     await fs.writeFile(path.join(old, 'manifest.json'), JSON.stringify({ state: 'applying' }));
@@ -197,7 +197,7 @@ describe('journals left inside the vault by an older session or by the HTTP serv
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_MAIN, '--vault', root],
-      env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome },
+      env: { ...process.env, ...homes },
       stderr: 'pipe',
     });
     let err = '';
@@ -213,7 +213,7 @@ describe('journals left inside the vault by an older session or by the HTTP serv
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });
-      await fs.rm(stateHome, { recursive: true, force: true });
+      await removeMachineHomes(homes);
     }
   });
 });
@@ -231,12 +231,12 @@ describe('several stdio processes on one vault, on one machine, are normal', () 
 
   it('the second process logs a peers line, and both report localPeers correctly as they start and stop', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-ls-peers-')));
-    const stateHome = testStateHome();
+    const homes = testMachineHomeEnv();
     try {
       const transportA = new StdioClientTransport({
         command: process.execPath,
         args: [STDIO_MAIN, '--vault', root],
-        env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome },
+        env: { ...process.env, ...homes },
         stderr: 'pipe',
       });
       let errA = '';
@@ -261,7 +261,7 @@ describe('several stdio processes on one vault, on one machine, are normal', () 
       const transportB = new StdioClientTransport({
         command: process.execPath,
         args: [STDIO_MAIN, '--vault', root],
-        env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome },
+        env: { ...process.env, ...homes },
         stderr: 'pipe',
       });
       let errB = '';
@@ -288,7 +288,7 @@ describe('several stdio processes on one vault, on one machine, are normal', () 
       await untilLocalPeers(clientB, 0);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
-      await fs.rm(stateHome, { recursive: true, force: true });
+      await removeMachineHomes(homes);
     }
   }, 20_000);
 });

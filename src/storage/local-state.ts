@@ -61,6 +61,15 @@ function defaultBaseDir(deps: Pick<LocalStateDeps, 'platform' | 'env' | 'homedir
     : mod.join(home, '.local', 'state', 'brainstem');
 }
 
+/** The 16-hex key every per-vault machine-local folder is named after: the first 16 hex
+ *  characters of the SHA-256 of the vault's *real* (symlink-resolved) path. Shared by the state
+ *  folder (this module) and the index cache folder (`src/storage/local-cache.ts`) so the two
+ *  never drift apart on how a vault is identified — exported here, reused there, never
+ *  recomputed with different logic. */
+export function vaultKey(vaultRealPath: string): string {
+  return sha256hex(vaultRealPath).slice(0, 16);
+}
+
 /** The base directory every vault's local-state folder lives under: `BRAINSTEM_STATE_HOME` when
  *  set (must be absolute), otherwise the per-platform default above. Exported on its own so
  *  `./brainstem doctor`/`status` can show it without resolving a vault. */
@@ -138,7 +147,7 @@ export async function resolveLocalStateDir(
     };
   }
 
-  const hash = sha256hex(vaultRealPath).slice(0, 16);
+  const hash = vaultKey(vaultRealPath);
   const mod = pathModule(deps.platform);
   const dir = mod.join(base.dir, hash);
 

@@ -15,6 +15,8 @@ const NOT_FOR_THE_APP = new Set([
   'BRAINSTEM_TUNNEL_IMAGE',
   'BRAINSTEM_STATE_HOME', // stdio only — the HTTP server (this container) always keeps its
   // state inside the bind-mounted vault, never in a machine-local folder
+  'BRAINSTEM_INDEX_CACHE', // stdio only — the HTTP server never builds an index cache
+  'BRAINSTEM_CACHE_HOME', // stdio only — same reasoning as BRAINSTEM_STATE_HOME above
 ]);
 
 describe('compose.yaml passes every documented setting to the app', () => {

@@ -4,7 +4,7 @@ Guide for coding agents (Cursor, Copilot, Codex, Claude Code via `CLAUDE.md`, �
 
 ## What this is
 
-A **single-user, self-hosted MCP server** that gives Claude read/write access to the owner's Obsidian vault. Node 24 + Express 5 + the official MCP TypeScript SDK 2.0, packaged as two Docker images (app, Cloudflare tunnel) and a TypeScript CLI (`./brainstem …`). It is also its own **OAuth 2.1 authorization server** (owner secret + consent page, PKCE, Client ID Metadata Documents, refresh rotation). Everything the **HTTP server** persists lives as hashed JSON under `<vault>/_brainstem/`. The **stdio server** (ADR 0008) splits this: `_brainstem/instructions.md` is vault content and still travels with the vault, but its own working state — the `vault_transaction` journal, later an index cache — lives in a machine-local folder outside the vault (`src/storage/local-state.ts`, `BRAINSTEM_STATE_HOME`), because a vault may be in git or synced between machines where that state would be the wrong thing to carry along.
+A **single-user, self-hosted MCP server** that gives Claude read/write access to the owner's Obsidian vault. Node 24 + Express 5 + the official MCP TypeScript SDK 2.0, packaged as two Docker images (app, Cloudflare tunnel) and a TypeScript CLI (`./brainstem …`). It is also its own **OAuth 2.1 authorization server** (owner secret + consent page, PKCE, Client ID Metadata Documents, refresh rotation). Everything the **HTTP server** persists lives as hashed JSON under `<vault>/_brainstem/`. The **stdio server** (ADR 0008) splits this: `_brainstem/instructions.md` is vault content and still travels with the vault, but its own working state — the `vault_transaction` journal (`src/storage/local-state.ts`, `BRAINSTEM_STATE_HOME`) and the machine-local frontmatter-index cache (`src/storage/local-cache.ts`, `BRAINSTEM_CACHE_HOME`, a *hint, never a source* — validated per entry against the current listing, safe to delete) — lives in a machine-local folder outside the vault, because a vault may be in git or synced between machines where that state would be the wrong thing to carry along.
 
 Binding documents, in order of authority:
 1. `docs/superpowers/specs/2026-08-28-single-user-local-tunnel-design.md` (core) and `docs/superpowers/specs/2026-08-30-phase-4-vault-graph-and-safety-design.md` (vault graph, safe concurrent writes) — the design specs.
@@ -26,7 +26,8 @@ src/auth/mount.ts     rate limiters, bearer gate, router mounting
 src/mcp/factory.ts    McpServer per request; instructions; brainstem_ping, brainstem_guide
 src/tools/            the 30 vault_* tools (read/write/search/manage/daily/canvas/analytics/graph/query/tx/template)
 src/storage/          LocalFSAdapter, path policy (reserved `_brainstem/`), frontmatter, limits, write-gate, transaction,
-                      local-state (stdio's machine-local state folder), local-peers (instances/<pid>.json, localPeers)
+                      local-state (stdio's machine-local state folder), local-peers (instances/<pid>.json, localPeers),
+                      local-cache (stdio's machine-local frontmatter-index cache)
 src/vault/            runtime, frontmatter index, note-parse, graph, link-rewrite, query, sections, templates,
                       daily notes, canvas, connection note, instructions
 src/tunnel/           cloudflared supervisor (quick + named modes), public-url file
@@ -59,6 +60,7 @@ CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note sca
 - **TDD is the working style**: write the failing test first, then the code. Tests exercise real behaviour (temp dirs, real HTTP, real MCP client); external processes and the clock are injected through a `deps` object rather than mocked globally. Every `src/cli/commands/*.ts` exports `runX(args, deps)` for that reason.
 - **`src/cli/catalog.ts` is the single source of truth for CLI commands**: `--help`, the README command tables and `tests/cli/{catalog,readme}.test.ts` are derived from or checked against it. Add a command there first.
 - **Never print, log or commit secrets**: `OWNER_SECRET`, `TUNNEL_TOKEN`, tokens. `.env` is git-ignored on purpose; `*dev-tokens*.json` too.
+- **Changing `IndexEntry`'s shape, or how `FrontmatterIndex.fromNote` derives it, means bumping `INDEX_CACHE_SCHEMA`** (next to `IndexEntry` in `src/vault/frontmatter-index.ts`) in the same change — the machine-local index cache (`src/storage/local-cache.ts`) embeds that number in its file name and header, and rejects (deletes, cold-fills) a cache written under any other number. `tests/vault/frontmatter-index.test.ts` snapshots the sorted key list alongside the schema number and fails if they drift apart without a bump.
 - Conventional Commits (`feat(auth): …`, `fix(cli): …`, `docs: …`, `chore(release): …`).
 
 ## Security invariants — do not weaken without an adversarial review

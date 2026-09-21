@@ -12,7 +12,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { testStateHome } from '../helpers/state-home.ts';
+import { testCacheHome, testStateHome } from '../helpers/state-home.ts';
 
 /** Repo root: this file lives at tests/cli/launcher.test.ts. */
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
@@ -166,6 +166,7 @@ describe.skipIf(process.platform === 'win32')(
               PATH: dir,
               BRAINSTEM_SKIP_INSTALL: '1',
               BRAINSTEM_STATE_HOME: testStateHome(),
+              BRAINSTEM_CACHE_HOME: testCacheHome(),
             },
           },
         );

@@ -32,6 +32,20 @@ const FOLDERS = 200;
 const TAGS = 3_000;
 const BODY_CHARS = 3_000;
 
+/** Warm-boot ceiling for the machine-local index cache (src/storage/local-cache.ts): a client
+ *  that starts the stdio server per session must be ready in a few seconds even on this vault.
+ *  Measured on the machine this was developed on: cold ~19.7 s (including a ~0.4 s cache save),
+ *  warm ~3.5 s (about 5.6x faster) — CI runners run several times slower than a workstation, so
+ *  5 s here is generous rather than tight. */
+const WARM_BOOT_MAX_MS = 5_000;
+/** Warm must be meaningfully faster than cold, not merely "not slower" — a third of cold (the
+ *  measured ratio was 5.6x) is loose enough to survive a slow CI runner while still catching a
+ *  cache that silently stopped helping. */
+const WARM_VS_COLD_DIVISOR = 3;
+/** The warm boot loads entries from the cache instead of reading and parsing every note, so its
+ *  heap should be no worse than the cold boot's; 10% covers run-to-run GC/measurement noise. */
+const WARM_HEAP_OVER_COLD_TOLERANCE = 0.1;
+
 // 18 characters: V8 copies a substring under 13, and a copy cannot show a retention bug
 const name = (i: number): string => `working-note-${String(i).padStart(5, '0')}`;
 const folder = (i: number): string => `area-${String(i % FOLDERS).padStart(3, '0')}`;
@@ -115,6 +129,74 @@ await runtime.close();
 console.log(JSON.stringify(out));
 `;
 
+/** Cold vs warm deferred boot, through the same machine-local index cache the stdio entrypoint
+ *  uses (src/storage/local-cache.ts) — its own temp cache home, never the developer's real one. */
+const MEASURE_CACHE = `
+import { performance } from 'node:perf_hooks';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createLocalRuntime } from ${JSON.stringify(path.resolve('src/vault/runtime.ts'))};
+import { createIndexCacheHandle, resolveLocalCacheDir } from ${JSON.stringify(path.resolve('src/storage/local-cache.ts'))};
+import { evaluateQuery } from ${JSON.stringify(path.resolve('src/vault/query.ts'))};
+
+const heap = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed; };
+const root = process.argv[1];
+const cacheHome = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-scale-cache-'));
+const vaultRealPath = await fs.realpath(root);
+const resolved = await resolveLocalCacheDir(vaultRealPath, {
+  env: { BRAINSTEM_CACHE_HOME: cacheHome },
+  platform: process.platform,
+  homedir: () => os.homedir(),
+  fs: { mkdir: (p, opts) => fs.mkdir(p, opts) },
+});
+if (!resolved.ok) throw new Error('could not resolve a scratch cache dir: ' + resolved.error);
+
+const QUERIES = [
+  { where: [{ field: 'status', op: 'eq', value: 'open' }] },
+  { groupBy: 'owner', countOnly: true },
+  { where: [{ field: 'priority', op: 'gte', value: 4 }] },
+];
+
+let savedInfo = null;
+const before1 = heap();
+const t0 = performance.now();
+const cold = await createLocalRuntime({
+  vaultPath: root, ripgrepPath: null, reconcileMs: 0, deferIndex: true,
+  indexCache: createIndexCacheHandle(resolved.dir, resolved.key, 'scale-test'),
+  onIndexCacheSaved: (info) => { savedInfo = info; },
+});
+await cold.indexReady;
+const coldMs = performance.now() - t0;
+const coldHeap = heap() - before1;
+const coldTotals = QUERIES.map((q) => evaluateQuery(cold.index.all(), cold.graph, q).total);
+await cold.close();
+
+const cacheFileName = (await fs.readdir(resolved.dir)).find((f) => f.startsWith('index-v'));
+const cacheFileBytes = (await fs.stat(path.join(resolved.dir, cacheFileName))).size;
+
+const before2 = heap();
+const t1 = performance.now();
+const warm = await createLocalRuntime({
+  vaultPath: root, ripgrepPath: null, reconcileMs: 0, deferIndex: true,
+  indexCache: createIndexCacheHandle(resolved.dir, resolved.key, 'scale-test'),
+});
+await warm.indexReady;
+const warmMs = performance.now() - t1;
+const warmHeap = heap() - before2;
+const warmTotals = QUERIES.map((q) => evaluateQuery(warm.index.all(), warm.graph, q).total);
+const warmCacheStats = warm.indexCacheStats();
+await warm.close();
+
+await fs.rm(cacheHome, { recursive: true, force: true }).catch(() => {});
+
+console.log(JSON.stringify({
+  coldMs, warmMs, coldHeap, warmHeap, cacheFileBytes,
+  saveDurationMs: savedInfo ? savedInfo.durationMs : null,
+  coldTotals, warmTotals, warmCacheStats,
+}));
+`;
+
 let root: string;
 let h: Harness | undefined;
 
@@ -162,6 +244,40 @@ describe(`a vault of ${NOTES} notes`, () => {
     expect(m.indexHeap / m.indexBytes).toBeLessThan(2.5);
     expect(m.pass).toMatchObject({ refreshed: 0, removed: 0, added: 0 });
     expect(m.pass.durationMs).toBeLessThan(30_000);
+  });
+
+  it('a warm (cached) deferred boot is fast and small next to a cold one, with identical query results', async () => {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ['--expose-gc', '--input-type=module', '-e', MEASURE_CACHE, root],
+      { maxBuffer: 1 << 20 },
+    );
+    const m = JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as {
+      coldMs: number;
+      warmMs: number;
+      coldHeap: number;
+      warmHeap: number;
+      cacheFileBytes: number;
+      saveDurationMs: number | null;
+      coldTotals: number[];
+      warmTotals: number[];
+      warmCacheStats: { used: boolean; entriesFromCache: number; entriesRead: number };
+    };
+    console.log(
+      `[scale] index cache: cold ${Math.round(m.coldMs)} ms (incl. a ${Math.round(m.saveDurationMs ?? -1)} ms save) → ` +
+        `warm ${Math.round(m.warmMs)} ms (${(m.coldMs / m.warmMs).toFixed(1)}x) · ` +
+        `heap cold ${Math.round(m.coldHeap / 1024)} KiB, warm ${Math.round(m.warmHeap / 1024)} KiB · ` +
+        `cache file ${Math.round(m.cacheFileBytes / 1024)} KiB`,
+    );
+    expect(m.warmCacheStats).toEqual({
+      used: true,
+      entriesFromCache: NOTES + 1,
+      entriesRead: 0,
+    });
+    expect(m.warmTotals).toEqual(m.coldTotals);
+    expect(m.warmMs).toBeLessThan(WARM_BOOT_MAX_MS);
+    expect(m.warmMs).toBeLessThan(m.coldMs / WARM_VS_COLD_DIVISOR);
+    expect(m.warmHeap).toBeLessThan(m.coldHeap * (1 + WARM_HEAP_OVER_COLD_TOLERANCE));
   });
 
   it('answers every list-shaped call within what the strictest client accepts', async () => {

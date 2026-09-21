@@ -8,6 +8,28 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ### Added (stdio)
 
+- A machine-local cache of the frontmatter index, so the second (and every later) start on a
+  large vault is ready in a few seconds instead of rebuilding it from scratch: measured on a
+  40,000-note vault, a cold deferred boot to "index ready" took ~19.7 s (including a ~0.4 s
+  cache save), a warm one ~3.5 s (about 5.6x faster), for a ~75 MiB cache file. New module
+  `src/storage/local-cache.ts` resolves a machine-local folder per vault (same vault-key hashing
+  as `local-state.ts`, a separate folder under a separate env var: `~/.cache/brainstem` on Linux,
+  `~/Library/Caches/brainstem` on macOS, `%LOCALAPPDATA%\brainstem\Cache` on Windows, overridable
+  with `BRAINSTEM_CACHE_HOME`), holding one file (`index-v<N>.ndjson`, one JSON entry per line,
+  written atomically). **The cache is a hint, never a source**: an entry is used only when the
+  file's size and modification time, in the current boot's own listing, exactly match what was
+  cached; everything else is read from disk exactly as before. The one known blind spot — a file
+  rewritten with the same size and the same modification time — is the same one the index's own
+  background reconcile pass already accepts. Saved once after the index becomes ready (when the
+  cache was absent, invalid, or more than 1% of notes had to be re-read), at most once an hour
+  while a session runs with unsaved changes, and once more on a clean shutdown if anything
+  changed — a shutdown triggered by the client simply vanishing skips that last save above a
+  size where it would no longer reliably fit in the shutdown window. Unlike the state folder, a
+  cache that cannot be created or written is never fatal: the server runs without one and logs a
+  single warning line. `BRAINSTEM_INDEX_CACHE=off` disables it outright. `brainstem_ping`'s
+  `index.cache` field (stdio only) reports this boot's own `used`/`entriesFromCache`/
+  `entriesRead`/`rejected`. Only the stdio server uses it; the HTTP server's blocking boot has no
+  need of it.
 - `./brainstem setup` asks first how Claude will reach the vault: locally on this machine
   (`--mode local`) or from claude.ai through a tunnel (`--mode tunnel`, today's flow — the
   default when the flag is absent and the run is non-interactive, so no existing script needs

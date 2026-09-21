@@ -58,6 +58,17 @@ const PingOutput = z.looseObject({
     /** Notes the background build could not read (no permission, a lock held by another program, not UTF-8). They are in
      *  neither `indexed` nor `notes`; the reconcile pass picks up the ones that become readable. */
     unreadable: z.number().optional(),
+    /** THIS boot's use of the machine-local index cache (stdio only — see
+     *  `src/storage/local-cache.ts`); absent when no cache was configured (the HTTP server, or
+     *  `BRAINSTEM_INDEX_CACHE=off`). */
+    cache: z
+      .looseObject({
+        used: z.boolean(),
+        entriesFromCache: z.number(),
+        entriesRead: z.number(),
+        rejected: z.string().optional(),
+      })
+      .optional(),
   }),
   /** True when this connection only exposes tools annotated `readOnlyHint: true` — see
    *  `FactoryDeps.readOnly`. */
@@ -126,6 +137,7 @@ export async function createVaultServer(
             indexed: indexState.done,
             total: indexState.total,
             ...(indexState.unreadable ? { unreadable: indexState.unreadable } : {}),
+            ...(runtime.indexCacheStats() ? { cache: runtime.indexCacheStats() } : {}),
           },
           readOnly,
           ...(deps.localPeers ? { localPeers: await deps.localPeers() } : {}),

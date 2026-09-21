@@ -9,7 +9,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { testStateHome } from '../helpers/state-home.ts';
+import { removeMachineHomes, testMachineHomeEnv } from '../helpers/state-home.ts';
 
 const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
 const BUSY_RELAY = path.resolve(import.meta.dirname, 'helpers', 'busy-relay.ts');
@@ -48,7 +48,7 @@ async function waitForText(
 const cleanupPids: number[] = [];
 const cleanupRoots: string[] = [];
 const cleanupChildren: ChildProcess[] = [];
-const cleanupStateHomes: string[] = [];
+const cleanupMachineHomes: ReturnType<typeof testMachineHomeEnv>[] = [];
 
 afterEach(async () => {
   for (const child of cleanupChildren.splice(0)) {
@@ -72,8 +72,8 @@ afterEach(async () => {
   for (const root of cleanupRoots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
   }
-  for (const dir of cleanupStateHomes.splice(0)) {
-    await fs.rm(dir, { recursive: true, force: true });
+  for (const homes of cleanupMachineHomes.splice(0)) {
+    await removeMachineHomes(homes);
   }
 });
 
@@ -96,10 +96,10 @@ describe('a client that dies with calls in flight does not orphan the server', (
     const ATTEMPTS = 8;
     let orphaned = 0;
     for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
-      const stateHome = testStateHome();
-      cleanupStateHomes.push(stateHome);
+      const homes = testMachineHomeEnv();
+      cleanupMachineHomes.push(homes);
       const relay = spawn(process.execPath, [BUSY_RELAY, STDIO_MAIN, root], {
-        env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome },
+        env: { ...process.env, ...homes },
         stdio: ['ignore', 'pipe', 'ignore'],
       });
       cleanupChildren.push(relay);
@@ -141,11 +141,11 @@ describe('a client that dies with calls in flight does not orphan the server', (
   it('a crashed reader (stdout destroyed, stdin left open) exits the server within 5 s', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-brokenreader-'));
     cleanupRoots.push(root);
-    const stateHome = testStateHome();
-    cleanupStateHomes.push(stateHome);
+    const homes = testMachineHomeEnv();
+    cleanupMachineHomes.push(homes);
 
     const child = spawn(process.execPath, [STDIO_MAIN, '--vault', root], {
-      env: { ...process.env, BRAINSTEM_STATE_HOME: stateHome },
+      env: { ...process.env, ...homes },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     cleanupChildren.push(child);
@@ -206,11 +206,11 @@ describe('stopping while the index is still being built', () => {
   async function startSlow(): Promise<{
     child: ReturnType<typeof spawn>;
     root: string;
-    stateHome: string;
+    homes: ReturnType<typeof testMachineHomeEnv>;
     err: () => string;
   }> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-stop-'));
-    const stateHome = testStateHome();
+    const homes = testMachineHomeEnv();
     await Promise.all(
       Array.from({ length: 400 }, (_, i) => fs.writeFile(path.join(root, `n${i}.md`), `# n${i}\n`)),
     );
@@ -220,7 +220,7 @@ describe('stopping while the index is still being built', () => {
       env: {
         ...process.env,
         BRAINSTEM_TEST_SLOW_BATCH_MS: '1000',
-        BRAINSTEM_STATE_HOME: stateHome,
+        ...homes,
       },
     });
     let err = '';
@@ -231,12 +231,12 @@ describe('stopping while the index is still being built', () => {
       () => err,
       (t) => t.includes('stdio server ready'),
     );
-    return { child, root, stateHome, err: () => err };
+    return { child, root, homes, err: () => err };
   }
 
   for (const how of ['SIGTERM', 'stdin end'] as const) {
     it(`${how} during the fill exits 0 within 3 s`, async () => {
-      const { child, root, stateHome, err } = await startSlow();
+      const { child, root, homes, err } = await startSlow();
       try {
         const started = Date.now();
         const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
@@ -249,7 +249,7 @@ describe('stopping while the index is still being built', () => {
       } finally {
         child.kill('SIGKILL');
         await fs.rm(root, { recursive: true, force: true });
-        await fs.rm(stateHome, { recursive: true, force: true });
+        await removeMachineHomes(homes);
       }
     }, 30_000);
   }

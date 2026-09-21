@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { testStateHome } from '../helpers/state-home.ts';
+import { removeMachineHomes, testMachineHomeEnv } from '../helpers/state-home.ts';
 
 const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
 const SLOW_ENTRY = path.resolve(import.meta.dirname, 'helpers', 'slow-child-entry.ts');
@@ -14,14 +14,14 @@ const WRITES = 30;
 
 const children: ChildProcess[] = [];
 const roots: string[] = [];
-const stateHomes: string[] = [];
+const machineHomes: ReturnType<typeof testMachineHomeEnv>[] = [];
 
 afterEach(async () => {
   for (const child of children.splice(0)) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   }
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
-  for (const dir of stateHomes.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+  for (const homes of machineHomes.splice(0)) await removeMachineHomes(homes);
 });
 
 async function until(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
@@ -49,8 +49,8 @@ interface StartOptions {
 async function start({ settle = true, slowNotes = 0 }: StartOptions = {}): Promise<Session> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-drain-'));
   roots.push(root);
-  const stateHome = testStateHome();
-  stateHomes.push(stateHome);
+  const homes = testMachineHomeEnv();
+  machineHomes.push(homes);
   await Promise.all(
     Array.from({ length: slowNotes }, (_, i) => fs.writeFile(path.join(root, `s${i}.md`), '# s\n')),
   );
@@ -61,7 +61,7 @@ async function start({ settle = true, slowNotes = 0 }: StartOptions = {}): Promi
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        BRAINSTEM_STATE_HOME: stateHome,
+        ...homes,
         ...(slowNotes > 0 ? { BRAINSTEM_TEST_SLOW_BATCH_MS: '1000' } : {}),
       },
     },

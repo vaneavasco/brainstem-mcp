@@ -7,6 +7,12 @@ import { type VaultPathContext, validateVaultPath } from './cli/vault-path.ts';
 import { ConfigError, loadVaultConfig } from './config.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
+import {
+  createIndexCacheHandle,
+  type LocalCacheEnvDeps,
+  type LocalCacheFsDeps,
+  resolveLocalCacheDir,
+} from './storage/local-cache.ts';
 import { listOtherLivePeers, registerInstance, unregisterInstance } from './storage/local-peers.ts';
 import { type LocalStateDeps, resolveLocalStateDir } from './storage/local-state.ts';
 import { scanLeftoverJournals } from './storage/transaction.ts';
@@ -33,6 +39,20 @@ function localStateDeps(env: Record<string, string | undefined>): LocalStateDeps
       writeFile: (p, data, opts) => fs.writeFile(p, data, opts),
       rename: (a, b) => fs.rename(a, b),
     },
+  };
+}
+
+/** `LocalCacheEnvDeps & { fs }` built from the real filesystem and OS, mirroring
+ *  `localStateDeps` above — the only place `src/storage/local-cache.ts`'s pure logic is wired to
+ *  real I/O, so tests can inject their own instead. */
+function localCacheDeps(
+  env: Record<string, string | undefined>,
+): LocalCacheEnvDeps & { fs: LocalCacheFsDeps } {
+  return {
+    env,
+    platform: process.platform,
+    homedir: () => os.homedir(),
+    fs: { mkdir: (p, opts) => fs.mkdir(p, opts) },
   };
 }
 
@@ -202,6 +222,30 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     stateDir = resolved.dir;
   }
 
+  // The machine-local index cache (ADR 0008 amendment, phase 4): read-only mode may use and
+  // write it too — it lives outside the vault, so it writes nothing a read-only boot must avoid.
+  // Disabled outright by BRAINSTEM_INDEX_CACHE=off; otherwise a folder that cannot be created or
+  // written just means running without one, logged as a single warning line — unlike stateDir
+  // above, this is never a reason to exit (the cache is a hint, never a source).
+  let indexCacheHandle: ReturnType<typeof createIndexCacheHandle> | undefined;
+  if (env.BRAINSTEM_INDEX_CACHE !== 'off') {
+    try {
+      const vaultRealPath = await fs.realpath(vaultConfig.vaultPath);
+      const resolvedCache = await resolveLocalCacheDir(vaultRealPath, localCacheDeps(env));
+      if (resolvedCache.ok) {
+        indexCacheHandle = createIndexCacheHandle(
+          resolvedCache.dir,
+          resolvedCache.key,
+          SERVER_INFO.version,
+        );
+      } else {
+        logger.warn({ reason: resolvedCache.error }, 'running without an index cache');
+      }
+    } catch (error) {
+      logger.warn({ err: error }, 'running without an index cache');
+    }
+  }
+
   let runtime: VaultRuntime;
   try {
     runtime = await createLocalRuntime({
@@ -212,6 +256,9 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       maxBinaryBytes: vaultConfig.maxBinaryBytes,
       reconcileMs: vaultConfig.reconcileMs,
       deferIndex: true,
+      indexCache: indexCacheHandle,
+      onIndexCacheSaved: (info) => logger.info(info, 'index cache saved'),
+      onIndexCacheSaveError: (reason) => logger.warn({ reason }, 'index cache save failed'),
       onIndexError: (error) => logger.error({ err: error }, 'background index build failed'),
       onReconcileError: () => logger.warn('index reconcile failed; the next pass will retry'),
       onIndexOverBudget: (state) =>
@@ -296,6 +343,13 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     { onerror: (error) => onTransportError(error) },
   );
 
+  // 'transport-error', 'stdin-close' and 'stdout-error' are exactly the signs (see onTransportError
+  // and the stdin 'close' listener below) that the other end of the pipes is already gone, not a
+  // deliberate stop — the index-cache save on the way out (VaultRuntime.close()) reads this to
+  // skip a large save nobody is left to benefit from. SIGTERM/SIGINT/stdin-end are an orderly
+  // stop (a supervisor, or the client closing its side properly) and always attempt it.
+  const DEAD_CLIENT_SHUTDOWN_REASONS = new Set(['transport-error', 'stdin-close', 'stdout-error']);
+
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
@@ -306,6 +360,7 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       logger.error({ signal, afterMs: SHUTDOWN_TIMEOUT_MS }, 'shutdown did not finish in time');
       exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
+    const closeReason = DEAD_CLIENT_SHUTDOWN_REASONS.has(signal) ? 'client-dead' : 'normal';
     // Order matters: the calls already running finish and are answered while the transport is
     // still open (a burst of writes followed by a disconnect used to leave nothing on disk);
     // only then is the transport closed, and the runtime last. The instance file is removed
@@ -316,7 +371,10 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       .then(() => flushed(process.stdout))
       .then(() => handle.close())
       .then(() =>
-        Promise.all([runtime.close(), unregisterInstance(stateDir, process.pid).catch(() => {})]),
+        Promise.all([
+          runtime.close({ reason: closeReason }),
+          unregisterInstance(stateDir, process.pid).catch(() => {}),
+        ]),
       )
       .then(() => {
         clearTimeout(timer);
