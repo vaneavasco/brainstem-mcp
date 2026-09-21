@@ -37,6 +37,31 @@ jobs:
       # the only step that catches it before the server fails to start.
       - run: node -e "import('./src/tools/register.ts').then(()=>console.log('tools boot ok'))"
 
+  # The stdio server is what a colleague installs on their own machine (Claude Desktop bundle,
+  # Claude Code): macOS and Windows 11, and no ripgrep there. The whole suite runs on each, as the
+  # machine comes — nothing is installed beside Node — so a test that only passes on the Linux
+  # runner, or only with ripgrep, shows up here. Phase 6 of the Claude Desktop integration plan:
+  # this job gates the published bundle.
+  platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # the repository's text files are LF; a CRLF checkout would change what the tests read
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: node -e "import('./src/tools/register.ts').then(()=>console.log('tools boot ok'))"
+
   # The compose stack end-to-end: build, boot in `none` tunnel mode against a
   # throwaway vault, then run the same smoke script used locally. Node is on the
   # runner for the smoke's own `node -e` seeder and the `npx` MCP Inspector.
