@@ -63,7 +63,7 @@ describe('GET /health', () => {
       publicUrl: 'https://brainstem.example.com/',
       mcpUrl: 'https://brainstem.example.com/mcp',
       tunnelMode: 'none',
-      vault: { notes: 0, reconciledAt: null, indexOverBudget: false },
+      vault: { notes: 0, reconciledAt: null, indexOverBudget: false, readOnly: false },
     });
     expect(typeof body.version).toBe('string');
   });
@@ -87,7 +87,11 @@ describe('/mcp with a 2026-07-28 (modern) client', () => {
       expect(ping?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
       const result = await client.callTool({ name: 'brainstem_ping', arguments: {} });
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent).toMatchObject({ server: 'brainstem-mcp', era: 'modern' });
+      expect(result.structuredContent).toMatchObject({
+        server: 'brainstem-mcp',
+        era: 'modern',
+        readOnly: false,
+      });
       const body = result.structuredContent as {
         index: {
           notes: number;

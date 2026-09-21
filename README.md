@@ -76,6 +76,10 @@ claude mcp add brainstem -- /path/to/brainstem stdio
 
 `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
 
+### Read-only mode
+
+`./brainstem stdio --read-only` (or `VAULT_READ_ONLY=true` in `.env`, either way in) registers only the tools whose own annotations mark them `readOnlyHint: true` — reading, searching, listing, querying — so nothing that could change a note, a canvas or a file is even offered to the client; `tools/list` doesn't show the rest, and calling one fails as an unknown tool. It's the right default for a connection that should only ever be asked questions, and a safety net for a vault synced between people. `brainstem_ping`'s `readOnly` field and one extra sentence in the connection instructions say when it's on; `/health`'s `vault.readOnly` shows it for the HTTP server too. A read-only boot also writes nothing into the vault on its own (no seeded instructions template, no connection note): the OAuth token store is the one exception, since it isn't vault content.
+
 ## Commands
 
 `./brainstem help <command>` prints the full options for any command below.

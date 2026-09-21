@@ -382,7 +382,11 @@ export function buildProgram(
     .command('stdio')
     .description(summaryOf('stdio'))
     .option('--vault <path>', 'absolute path to your Obsidian vault (overrides VAULT_PATH)')
-    .action(async (opts: { vault?: string }) => {
+    .option(
+      '--read-only',
+      'expose only the read-only tools (overrides VAULT_READ_ONLY); no --read-only=false — leave the flag out to use the env or its default',
+    )
+    .action(async (opts: { vault?: string; readOnly?: boolean }) => {
       // No Docker, no tunnel, no OAuth: runStdioServer manages its own exit code (0 on a clean
       // shutdown, 1 on a config/vault error or a failed one) — unlike every other command here,
       // it never returns a number for runAction to translate into process.exitCode.
@@ -390,6 +394,7 @@ export function buildProgram(
       // notes); without it a daily note lands at the vault root instead of its folder.
       await runStdioServer({
         vaultOverride: opts.vault,
+        readOnlyOverride: opts.readOnly,
         env: stdioEnv(await loadEnvMapOrNull(repoDir), process.env),
       });
     });

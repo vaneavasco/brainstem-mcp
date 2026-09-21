@@ -19,7 +19,14 @@ export interface FactoryDeps {
    * Optional so tests and tools that don't care get the defaults.
    */
   instructions?: () => Promise<string>;
+  /** When true, only tools whose annotations declare `readOnlyHint: true` are registered (see
+   *  `src/tools/register.ts`'s `withIndexGate`). Defaults to false. Threaded from `Config`/
+   *  `VaultConfig`'s `readOnly` by `src/app.ts` and `src/stdio-main.ts`. */
+  readOnly?: boolean;
 }
+
+const READ_ONLY_INSTRUCTIONS_SENTENCE =
+  'This connection is read-only: the vault cannot be changed through it.';
 
 const PingOutput = z.looseObject({
   server: z.string(),
@@ -48,6 +55,9 @@ const PingOutput = z.looseObject({
      *  neither `indexed` nor `notes`; the reconcile pass picks up the ones that become readable. */
     unreadable: z.number().optional(),
   }),
+  /** True when this connection only exposes tools annotated `readOnlyHint: true` — see
+   *  `FactoryDeps.readOnly`. */
+  readOnly: z.boolean(),
 });
 
 /** Builds a fresh McpServer for one request (stateless per MCP 2026-07-28). */
@@ -55,7 +65,11 @@ export async function createVaultServer(
   ctx: McpRequestContext,
   deps: FactoryDeps,
 ): Promise<McpServer> {
-  const instructions = deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS;
+  const readOnly = deps.readOnly ?? false;
+  const baseInstructions = deps.instructions ? await deps.instructions() : DEFAULT_INSTRUCTIONS;
+  const instructions = readOnly
+    ? `${baseInstructions}\n\n${READ_ONLY_INSTRUCTIONS_SENTENCE}`
+    : baseInstructions;
   const runtime = await deps.resolveRuntime(ctx);
   const server = new McpServer(SERVER_INFO, {
     instructions,
@@ -106,6 +120,7 @@ export async function createVaultServer(
             total: indexState.total,
             ...(indexState.unreadable ? { unreadable: indexState.unreadable } : {}),
           },
+          readOnly,
         };
         return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
       }),
@@ -137,6 +152,7 @@ export async function createVaultServer(
   registerVaultTools(server, {
     runtime,
     log: (error) => deps.logger.error({ err: error }, 'tool failure'),
+    readOnly,
   });
   return server;
 }

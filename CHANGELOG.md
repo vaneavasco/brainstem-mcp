@@ -6,6 +6,18 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added (both)
+
+- Read-only mode: `VAULT_READ_ONLY=true` in `.env`, or `./brainstem stdio --read-only` (the flag
+  wins over the env), registers only the tools whose own annotations declare `readOnlyHint: true`
+  — decided at registration time from that annotation, never a separate hand-maintained list, so
+  it cannot drift from the tool list. A tool left out is not merely refused: `tools/list` never
+  shows it, and calling it fails as an unknown tool. `brainstem_ping` and `/health`'s `vault` both
+  gain a `readOnly` boolean, and a read-only connection's `instructions` gain one sentence saying
+  so. A read-only boot also writes nothing into the vault on its own — no seeded
+  `_brainstem/instructions.md`, no `connection.md`, no instance heartbeat file — the OAuth token
+  store is the one exception, since it is server state, not vault content.
+
 ## [0.5.0] — 2026-09-21
 
 A second way in: the same tools over stdin/stdout, for Claude Code (and, later, a Claude Desktop

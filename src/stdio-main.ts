@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, constants as fsConstants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,6 +26,12 @@ function flushed(stream: NodeJS.WriteStream): Promise<void> {
   });
 }
 
+/** `--read-only` from an argv array; `true` when present, `undefined` otherwise — there is no
+ *  `--read-only=false` (leave the flag out to fall back to `VAULT_READ_ONLY`/its default). */
+export function parseReadOnlyArg(argv: readonly string[]): boolean | undefined {
+  return argv.includes('--read-only') ? true : undefined;
+}
+
 /** `--vault <path>` from an argv array (e.g. `process.argv.slice(2)`); `undefined` when absent. */
 export function parseVaultArg(argv: readonly string[]): string | undefined {
   const inline = argv.find((arg) => arg.startsWith('--vault='));
@@ -44,7 +50,7 @@ export function parseVaultArg(argv: readonly string[]): string | undefined {
 
 /** What `validateVaultPath` needs from the machine; the code's own folder stands in for "the
  *  repository" (a vault that contains the running server is wrong whichever way it was installed). */
-function vaultPathContext(): VaultPathContext {
+function vaultPathContext(readOnly: boolean): VaultPathContext {
   return {
     home: os.homedir(),
     repoDir: path.resolve(import.meta.dirname, '..'),
@@ -58,6 +64,16 @@ function vaultPathContext(): VaultPathContext {
       }
     },
     async probeWrite(p) {
+      // A read-only server writes nothing, this probe file included, and serves a folder it has
+      // no write permission on: there it must be able to list the folder, nothing more.
+      if (readOnly) {
+        try {
+          await fs.access(p, fsConstants.R_OK | fsConstants.X_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      }
       const probe = path.join(p, `.brainstem-write-test-${process.pid}-${Date.now()}`);
       try {
         await fs.writeFile(probe, '');
@@ -73,6 +89,9 @@ function vaultPathContext(): VaultPathContext {
 export interface StdioMainOptions {
   /** Overrides `VAULT_PATH` — what `--vault <path>` resolves to. */
   vaultOverride?: string;
+  /** Overrides `VAULT_READ_ONLY` to true — what `--read-only` sets; the flag wins over the env
+   *  (there is no `--read-only=false`: leave the flag out and, if set, the env decides). */
+  readOnlyOverride?: boolean;
   env?: Record<string, string | undefined>;
   /** Where the process exits (mockable so a test can assert on the call instead of the process
    *  actually dying); defaults to the real `process.exit`. */
@@ -90,6 +109,10 @@ export interface StdioMainOptions {
  * ways in expose the same tools by construction. The owner's `_brainstem/instructions.md` reaches
  * this server the same way it reaches the HTTP one — by reusing `src/vault/instructions.ts`, not
  * copying it.
+ *
+ * `VAULT_READ_ONLY=true`/`--read-only` (`readOnlyOverride`, which wins over the env) registers
+ * only tools annotated `readOnlyHint: true` and skips seeding the instructions template below —
+ * a read-only boot writes nothing into the vault.
  *
  * stdout carries the protocol and nothing else: every log line goes to stderr
  * (`createLogger(level, stderr)`), and an unusable or missing vault path is reported there, as a
@@ -110,9 +133,11 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
 
   let vaultConfig: ReturnType<typeof loadVaultConfig>;
   try {
-    vaultConfig = loadVaultConfig(
-      opts.vaultOverride !== undefined ? { ...env, VAULT_PATH: opts.vaultOverride } : env,
-    );
+    vaultConfig = loadVaultConfig({
+      ...env,
+      ...(opts.vaultOverride !== undefined ? { VAULT_PATH: opts.vaultOverride } : {}),
+      ...(opts.readOnlyOverride ? { VAULT_READ_ONLY: 'true' } : {}),
+    });
   } catch (error) {
     if (error instanceof ConfigError) return fail(error.message);
     throw error;
@@ -121,8 +146,16 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   // Before anything is created: a mistyped folder must be an error, not an empty vault that the
   // server quietly makes and then serves. Same rules as `./brainstem setup` (absolute, exists,
   // a folder, writable, not the filesystem root, not the home directory, not around this code).
-  const verdict = await validateVaultPath(vaultConfig.vaultPath, vaultPathContext());
-  if (!verdict.ok) return fail(`Unusable vault folder: ${verdict.error}`);
+  const verdict = await validateVaultPath(
+    vaultConfig.vaultPath,
+    vaultPathContext(vaultConfig.readOnly),
+  );
+  if (!verdict.ok) {
+    const error = vaultConfig.readOnly
+      ? verdict.error.replace('is not writable', 'cannot be read')
+      : verdict.error;
+    return fail(`Unusable vault folder: ${error}`);
+  }
   if (vaultConfig.vaultPath.split(/[\\/]/).includes('_brainstem')) {
     return fail(`Unusable vault folder: "${vaultConfig.vaultPath}" is inside a _brainstem folder`);
   }
@@ -150,16 +183,19 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   }
 
   // Seeded once, from the same code the HTTP server uses (src/vault/instructions.ts), so a
-  // reader who only ever uses stdio still gets the note explaining the feature in Obsidian.
-  try {
-    if (await writeInstructionsTemplateIfMissing(stateDir)) {
-      logger.info(
-        { file: path.join(stateDir, 'instructions.md') },
-        'seeded owner instructions template',
-      );
+  // reader who only ever uses stdio still gets the note explaining the feature in Obsidian —
+  // skipped in read-only mode, which must not write into the vault on its own either.
+  if (!vaultConfig.readOnly) {
+    try {
+      if (await writeInstructionsTemplateIfMissing(stateDir)) {
+        logger.info(
+          { file: path.join(stateDir, 'instructions.md') },
+          'seeded owner instructions template',
+        );
+      }
+    } catch (error) {
+      logger.warn({ err: error }, 'could not seed the owner instructions template');
     }
-  } catch (error) {
-    logger.warn({ err: error }, 'could not seed the owner instructions template');
   }
   const instructions = createInstructionsProvider(stateDir);
 
@@ -171,6 +207,7 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
         resolveRuntime: async () => runtime,
         logger,
         instructions: () => instructions.get(),
+        readOnly: vaultConfig.readOnly,
       }),
     { onerror: (error) => onTransportError(error) },
   );
@@ -245,7 +282,8 @@ if (isMain) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   }
-  runStdioServer({ vaultOverride }).catch((error: unknown) => {
+  const readOnlyOverride = parseReadOnlyArg(process.argv.slice(2));
+  runStdioServer({ vaultOverride, readOnlyOverride }).catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });

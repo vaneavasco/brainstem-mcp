@@ -20,6 +20,8 @@ interface StdioSession {
 async function startStdioSession(
   root?: string,
   env?: Record<string, string>,
+  /** Extra CLI args after `--vault <root>`, e.g. `['--read-only']`. */
+  extraArgs: string[] = [],
 ): Promise<StdioSession> {
   const vaultRoot = root ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-')));
   const client = new Client(
@@ -29,7 +31,7 @@ async function startStdioSession(
   await client.connect(
     new StdioClientTransport({
       command: process.execPath,
-      args: [STDIO_MAIN, '--vault', vaultRoot],
+      args: [STDIO_MAIN, '--vault', vaultRoot, ...extraArgs],
       ...(env ? { env: { ...(process.env as Record<string, string>), ...env } } : {}),
       // Piped (not the default 'inherit'): the server's own log lines go to its stderr, which
       // would otherwise print straight into the test run's own console.
@@ -123,6 +125,39 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
   });
 });
 
+describe('read-only mode (--read-only and VAULT_READ_ONLY=true, over a real stdio child)', () => {
+  it('--read-only and VAULT_READ_ONLY=true both produce the same reduced tool list', async () => {
+    const full = await startStdioSession();
+    cleanups.push(() => full.close());
+    const { tools: fullTools } = await full.client.listTools();
+    const expectedNames = fullTools
+      .filter((t) => t.annotations?.readOnlyHint === true)
+      .map((t) => t.name)
+      .sort();
+    expect(expectedNames.length).toBeGreaterThan(0);
+    expect(expectedNames.length).toBeLessThan(fullTools.length);
+
+    const viaEnv = await startStdioSession(undefined, { VAULT_READ_ONLY: 'true' });
+    cleanups.push(() => viaEnv.close());
+    const { tools: envTools } = await viaEnv.client.listTools();
+    expect(envTools.map((t) => t.name).sort()).toEqual(expectedNames);
+
+    const viaFlag = await startStdioSession(undefined, undefined, ['--read-only']);
+    cleanups.push(() => viaFlag.close());
+    const { tools: flagTools } = await viaFlag.client.listTools();
+    expect(flagTools.map((t) => t.name).sort()).toEqual(expectedNames);
+  });
+
+  it('the CLI flag wins over the env: --read-only alongside VAULT_READ_ONLY=false still reduces the list', async () => {
+    const session = await startStdioSession(undefined, { VAULT_READ_ONLY: 'false' }, [
+      '--read-only',
+    ]);
+    cleanups.push(() => session.close());
+    const ping = await session.client.callTool({ name: 'brainstem_ping', arguments: {} });
+    expect(structured(ping).readOnly).toBe(true);
+  });
+});
+
 describe('stdio lifecycle (real child process)', () => {
   function spawnRaw(
     args: string[],
@@ -160,6 +195,93 @@ describe('stdio lifecycle (real child process)', () => {
   }
 
   const READY_MARKER = 'stdio server ready';
+
+  /** Every path under `root`, files and folders, relative and sorted — used to prove a read-only
+   *  boot creates nothing (including `_brainstem/`, which a normal boot seeds). */
+  async function recursiveListing(root: string): Promise<string[]> {
+    const out: string[] = [];
+    async function walk(dir: string, rel: string): Promise<void> {
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        const relPath = rel === '' ? entry.name : `${rel}/${entry.name}`;
+        out.push(entry.isDirectory() ? `${relPath}/` : relPath);
+        if (entry.isDirectory()) await walk(path.join(dir, entry.name), relPath);
+      }
+    }
+    await walk(root, '');
+    return out.sort();
+  }
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a folder without write permission is served in read-only mode, and refused otherwise',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-nowrite-'));
+      await fs.writeFile(path.join(root, 'existing.md'), '# hi\n');
+      await fs.chmod(root, 0o555);
+      try {
+        const readOnly = spawnRaw(['--vault', root, '--read-only']);
+        const err = collect(readOnly.stderr);
+        await waitForText(err, (t) => t.includes(READY_MARKER));
+        readOnly.stdin.end();
+        await new Promise((resolve) => readOnly.once('close', resolve));
+
+        const writable = spawnRaw(['--vault', root]);
+        const refused = collect(writable.stderr);
+        const code = await new Promise((resolve) => writable.once('close', resolve));
+        expect(code).toBe(1);
+        expect(refused.text()).toContain('is not writable');
+      } finally {
+        await fs.chmod(root, 0o755);
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  it('a read-only boot creates nothing inside the vault folder (no _brainstem/ either)', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-readonly-boot-'));
+    await fs.writeFile(path.join(root, 'existing.md'), '# hi\n');
+    try {
+      const before = await recursiveListing(root);
+      const child = spawnRaw(['--vault', root, '--read-only']);
+      const out = collect(child.stdout);
+      const err = collect(child.stderr);
+      await waitForText(err, (t) => t.includes(READY_MARKER));
+
+      child.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: { name: 'readonly-boot-test', version: '0.0.0' },
+          },
+        })}\n`,
+      );
+      await waitForText(out, (t) => t.includes('"id":1'));
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
+      );
+      child.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'vault_read', arguments: { path: 'existing.md' } },
+        })}\n`,
+      );
+      await waitForText(out, (t) => t.includes('"id":2'));
+
+      child.stdin.end();
+      await new Promise<void>((resolve) => child.on('exit', () => resolve()));
+
+      const after = await recursiveListing(root);
+      expect(after).toEqual(before);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 10_000);
 
   it('closing stdin makes the process exit 0 within 5 s', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-lifecycle-'));

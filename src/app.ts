@@ -64,7 +64,13 @@ export function createApp(
   extras: AppExtras = {},
 ): AppBundle {
   const handler = createMcpHandler(
-    (ctx) => createVaultServer(ctx, { resolveRuntime, logger, instructions: extras.instructions }),
+    (ctx) =>
+      createVaultServer(ctx, {
+        resolveRuntime,
+        logger,
+        instructions: extras.instructions,
+        readOnly: config.readOnly,
+      }),
     {
       legacy: config.legacyMode,
       keepAliveMs: 15_000, // keeps SSE streams alive through proxies that drop idle connections
@@ -96,6 +102,7 @@ export function createApp(
         notes: extras.notes?.() ?? 0,
         reconciledAt: extras.reconciledAt?.()?.toISOString() ?? null,
         indexOverBudget: extras.indexOverBudget?.() ?? false,
+        readOnly: config.readOnly,
       },
     });
   });
