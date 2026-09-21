@@ -6,6 +6,12 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-21
+
+The stdio server becomes something a colleague can be given: a read-only mode, a setup that
+needs no Docker, working state kept on the machine instead of in the vault, and a start that
+takes seconds on a large vault. Phases 3 and 4 of the Claude Desktop integration plan.
+
 ### Added (stdio)
 
 - A machine-local cache of the frontmatter index, so the second (and every later) start on a
@@ -648,6 +654,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.6.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.3.1...v0.4.0
