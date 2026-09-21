@@ -1,4 +1,5 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
+import { STOPPING_INDEX_WAIT_MS } from '../storage/limits.ts';
 import type { Note } from '../storage/types.ts';
 import type { IndexState, VaultRuntime } from '../vault/runtime.ts';
 import { registerAnalyticsTools } from './analytics.ts';
@@ -78,12 +79,31 @@ async function waitForIndex(tc: ToolContext): Promise<CallToolResult | null> {
   const state = runtime.indexState();
   if (state.ready) return null;
   if (state.error) return indexNotReadyResult(state);
+  const timers: NodeJS.Timeout[] = [];
+  const after = (ms: number) =>
+    new Promise<void>((resolve) => timers.push(setTimeout(resolve, ms)));
   await Promise.race([
     runtime.indexReady,
-    new Promise<void>((resolve) => setTimeout(resolve, runtime.indexWaitMs)),
+    after(runtime.indexWaitMs),
+    // a stopping server gives the index a last short while, then answers instead of vanishing
+    runtime.calls.closing.then(() => after(STOPPING_INDEX_WAIT_MS)),
   ]);
-  const after = runtime.indexState();
-  return after.ready ? null : indexNotReadyResult(after);
+  for (const timer of timers) clearTimeout(timer);
+  const now = runtime.indexState();
+  if (now.ready) return null;
+  return runtime.calls.stopping ? shuttingDownResult() : indexNotReadyResult(now);
+}
+
+function shuttingDownResult(): CallToolResult {
+  return fail('SHUTTING_DOWN: the server is stopping; this call was not started.');
+}
+
+/** Runs a tool — its wait for the index included — inside the runtime's call tracker, so a
+ *  stopping server waits for it and answers it; refuses to start one once the server is
+ *  stopping (the client that asked is, as a rule, already gone). */
+function tracked(tc: ToolContext, fn: () => unknown): unknown {
+  const calls = tc.runtime.calls;
+  return calls.closed ? shuttingDownResult() : calls.run(fn);
 }
 
 /** The shape every `registerTool` handler actually has here: every vault tool declares an
@@ -106,11 +126,11 @@ function withIndexGate(server: McpServer, tc: ToolContext): void {
     cb: ToolHandler,
   ) => unknown;
   const gated = (name: string, config: unknown, cb: ToolHandler): unknown => {
-    if (INDEX_GATE_EXEMPT.has(name)) return original(name, config, cb);
-    const handler: ToolHandler = async (...args: unknown[]) => {
-      const blocked = await waitForIndex(tc);
-      return blocked ?? cb(...args);
-    };
+    if (INDEX_GATE_EXEMPT.has(name)) {
+      return original(name, config, (...args: unknown[]) => tracked(tc, () => cb(...args)));
+    }
+    const handler: ToolHandler = (...args: unknown[]) =>
+      tracked(tc, async () => (await waitForIndex(tc)) ?? cb(...args));
     return original(name, config, handler);
   };
   server.registerTool = gated as unknown as McpServer['registerTool'];

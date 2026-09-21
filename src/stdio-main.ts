@@ -15,6 +15,17 @@ import { createLocalRuntime, type VaultRuntime } from './vault/runtime.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
+/** Resolves once what was written to `stream` has left the process. A pipe is written
+ *  asynchronously on Windows, so answers still queued at `exit()` would be lost there. */
+function flushed(stream: NodeJS.WriteStream): Promise<void> {
+  if (stream.writableLength === 0 || stream.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    stream.once('drain', resolve);
+    stream.once('error', () => resolve());
+    stream.once('close', () => resolve());
+  });
+}
+
 /** `--vault <path>` from an argv array (e.g. `process.argv.slice(2)`); `undefined` when absent. */
 export function parseVaultArg(argv: readonly string[]): string | undefined {
   const inline = argv.find((arg) => arg.startsWith('--vault='));
@@ -174,8 +185,13 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       logger.error({ signal, afterMs: SHUTDOWN_TIMEOUT_MS }, 'shutdown did not finish in time');
       exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
-    handle
-      .close()
+    // Order matters: the calls already running finish and are answered while the transport is
+    // still open (a burst of writes followed by a disconnect used to leave nothing on disk);
+    // only then is the transport closed, and the runtime last.
+    runtime.calls
+      .drain()
+      .then(() => flushed(process.stdout))
+      .then(() => handle.close())
       .then(() => runtime.close())
       .then(() => {
         clearTimeout(timer);
@@ -204,6 +220,9 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     }
   };
   process.stdin.on('close', () => shutdown('stdin-close'));
+  // The log goes to stderr. A client that closes that pipe too must not turn a clean stop into an
+  // uncaught EPIPE (exit code 1, nothing closed): the log line is lost, the stop goes on.
+  process.stderr.on('error', () => shutdown('stderr-error'));
   process.stdout.on('error', (error: NodeJS.ErrnoException) => {
     logger.warn({ code: error.code }, 'stdout failed: the client is gone');
     shutdown('stdout-error');

@@ -267,3 +267,33 @@ describe('closing during the fill', () => {
     expect(state.done).toBeLessThan(400);
   });
 });
+
+describe('a note the operating system refuses to read', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'is counted as unreadable: the rest of the vault is still indexed',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-eacces-'));
+      try {
+        for (const name of ['a', 'b', 'c', 'd']) {
+          await fs.writeFile(path.join(root, `${name}.md`), `---\nk: ${name}\n---\n`);
+        }
+        await fs.chmod(path.join(root, 'c.md'), 0o000);
+        const runtime = await createLocalRuntime({ vaultPath: root, deferIndex: true });
+        try {
+          await runtime.indexReady;
+          expect(runtime.indexState()).toMatchObject({ ready: true, unreadable: 1 });
+          expect(runtime.index.size()).toBe(3);
+        } finally {
+          await runtime.close();
+        }
+        // the blocking boot (the HTTP server's) must not refuse to start over one file either
+        const blocking = await createLocalRuntime({ vaultPath: root });
+        expect(blocking.index.size()).toBe(3);
+        await blocking.close();
+      } finally {
+        await fs.chmod(path.join(root, 'c.md'), 0o644).catch(() => {});
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});

@@ -214,7 +214,15 @@ export class LocalFSAdapter implements StorageAdapter {
     const stat = await this.statOrNull(abs);
     if (!stat) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
     if (stat.isDirectory()) throw new VaultError('INVALID_INPUT', `${p} is a folder, not a file.`);
-    const bytes = await fs.readFile(abs);
+    let bytes: Buffer;
+    try {
+      bytes = await fs.readFile(abs);
+    } catch (error) {
+      // Gone between the stat and the read is "not found"; anything else (no permission, a file
+      // another program holds locked) is this one note's failure, never the whole batch's.
+      if (isEnoent(error)) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
+      throw new VaultError('IO', `Could not read ${p}.`);
+    }
     return this.toNote(p, bytes, stat);
   }
 

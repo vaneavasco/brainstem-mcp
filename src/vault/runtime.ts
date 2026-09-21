@@ -12,6 +12,7 @@ import { LocalFSAdapter } from '../storage/local-fs.ts';
 import { RESERVED_DIR } from '../storage/path-policy.ts';
 import type { StorageAdapter, Unsubscribe } from '../storage/types.ts';
 import { WriteGate } from '../storage/write-gate.ts';
+import { CallTracker } from '../tools/call-tracker.ts';
 import type { AnalyticsReport } from './analytics.ts';
 import { type DailyNoteSettings, DEFAULT_DAILY_NOTE_SETTINGS } from './daily-notes.ts';
 import {
@@ -52,6 +53,8 @@ export interface VaultRuntime {
   caches: { analytics?: { at: number; report: AnalyticsReport } };
   /** Keyed write lock every mutating tool call runs inside (see src/storage/write-gate.ts). */
   gate: WriteGate;
+  /** The tool calls running right now: a stopping server drains it before closing anything. */
+  calls: CallTracker;
   /** The cap actually given to the adapter's writeBinary (see MAX_BINARY_BYTES); exposed here so
    *  tool descriptions (vault_write_binary) can state the real configured limit. */
   maxBinaryBytes: number;
@@ -316,6 +319,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     now: opts.now ?? (() => new Date()),
     caches: {},
     gate: new WriteGate(),
+    calls: new CallTracker(),
     maxBinaryBytes,
     paths: { vaultRoot: adapter.root, stateDir },
     indexState(): IndexState {

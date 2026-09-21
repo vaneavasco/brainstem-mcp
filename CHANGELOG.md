@@ -31,6 +31,15 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   (`EPIPE`), or a transport error. A client killed in the middle of a call used to leave the
   server running with nobody attached. Stopping during the index build no longer waits for the
   build: the fill stops between batches and the process exits 0.
+- A stopping stdio server finishes what it was asked first. The tool calls already running are
+  waited for and answered before the transport closes, and calls read together with the
+  disconnect are still run (the door closes after 250 ms in which nothing new started): a client
+  that sent 30 writes and closed the pipe used to find none of them on disk. A call still
+  waiting for the index gets two more seconds, then the answer `SHUTTING_DOWN`. A broken stderr
+  pipe no longer turns a clean stop into an uncaught `EPIPE` (exit code 1).
+- One file the operating system refuses to read (no permission, a lock held by another program)
+  no longer stops the whole index from being built, or the HTTP server from starting: the read
+  fails for that note alone, the note is counted in `unreadable`, and the rest is indexed.
 - `brainstem.cmd` writes its messages to stderr (stdout belongs to the protocol under `stdio`) and
   compares its first argument unquoted.
 
