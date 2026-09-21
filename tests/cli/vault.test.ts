@@ -123,6 +123,22 @@ describe('runVaultSet', () => {
     expect(env.get('TUNNEL_MODE')).toBe('quick');
   });
 
+  it('F2: heals a duplicated VAULT_PATH line and reports it, without touching other keys', async () => {
+    const h = harness({ ps: '' });
+    h.files.set(
+      ENV_PATH,
+      `OWNER_SECRET=keep-me\nVAULT_PATH=${OLD_VAULT}\nTUNNEL_MODE=quick\nVAULT_PATH=/some/older/entry\n`,
+    );
+    const code = await runVaultSet({ path: NEW_VAULT }, h.deps);
+    expect(code).toBe(0);
+    const envText = h.files.get(ENV_PATH) ?? '';
+    expect(envText.match(/^VAULT_PATH=/gm)).toHaveLength(1);
+    const env = parseEnv(envText);
+    expect(env.get('VAULT_PATH')).toBe(NEW_VAULT);
+    expect(env.get('OWNER_SECRET')).toBe('keep-me');
+    expect(h.printed).toContain('removed a duplicate VAULT_PATH line');
+  });
+
   it('pre-creates _brainstem/ in the new vault, as setup does', async () => {
     const h = harness();
     await runVaultSet({ path: NEW_VAULT }, h.deps);

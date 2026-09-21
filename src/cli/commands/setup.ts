@@ -216,6 +216,23 @@ function launcherPathOf(deps: SetupDeps): string {
   return mod.join(deps.cwd, name);
 }
 
+/** A path is safe to paste unquoted into a shell command example only when every character is
+ *  one of these; anything else (a space, an apostrophe, …) needs quoting. */
+const SHELL_SAFE_PATH_CHARS = /^[A-Za-z0-9_./:\\-]+$/;
+
+/**
+ * Quotes a path for the `claude mcp add …` example line printed by local setup, so it can be
+ * pasted as a single argument: POSIX single quotes, escaping an embedded `'` as `'\''` (closing
+ * the quote, an escaped literal quote, reopening it); Windows double quotes, doubling an embedded
+ * `"` (cmd.exe's own escape for a literal quote inside a quoted argument). A path with nothing
+ * outside SHELL_SAFE_PATH_CHARS is returned unchanged — most vault paths never need this.
+ */
+export function quotePathForShellExample(p: string, platform: NodeJS.Platform): string {
+  if (SHELL_SAFE_PATH_CHARS.test(p)) return p;
+  if (platform === 'win32') return `"${p.replace(/"/g, '""')}"`;
+  return `'${p.replace(/'/g, "'\\''")}'`;
+}
+
 /**
  * Local (stdio) mode: Claude Code / Claude Desktop start the server
  * themselves on this machine, over stdin/stdout — no Docker, no owner
@@ -230,10 +247,15 @@ async function runLocalSetup(args: SetupArgs, deps: SetupDeps, envPath: string):
   const existingText = (await deps.readFile(envPath)) ?? '';
   const existingKeys = [...parseEnv(existingText).keys()].filter((k) => k !== VAULT_PATH_KEY);
 
-  const { text } = upsertEnv(existingText, { [VAULT_PATH_KEY]: vaultPath }, { onlyIfEmpty: false });
+  const { text, removedDuplicates } = upsertEnv(
+    existingText,
+    { [VAULT_PATH_KEY]: vaultPath },
+    { onlyIfEmpty: false },
+  );
   await deps.writeFile(envPath, text);
 
   deps.io.print(`set ${VAULT_PATH_KEY}=${vaultPath}`);
+  for (const key of removedDuplicates) deps.io.print(`removed a duplicate ${key} line`);
   for (const key of existingKeys) deps.io.print(`kept ${key}`);
 
   deps.io.print(`Vault: ${vaultPath}`);
@@ -242,7 +264,7 @@ async function runLocalSetup(args: SetupArgs, deps: SetupDeps, envPath: string):
       'no Docker, no owner secret, no tunnel.',
   );
 
-  const launcherPath = launcherPathOf(deps);
+  const launcherPath = quotePathForShellExample(launcherPathOf(deps), deps.platform);
   deps.io.print(`Claude Code: claude mcp add brainstem -- ${launcherPath} stdio`);
   deps.io.print(
     'A second vault is a second entry with its own name, e.g. ' +
@@ -320,6 +342,11 @@ export async function runSetup(args: SetupArgs, deps: SetupDeps): Promise<void> 
   };
   for (const key of [...afterMain.changed, ...afterTunnel.changed]) {
     deps.io.print(`set ${describe(key)}`);
+  }
+  // Key names only — never a value, secret or not (`describe` above is for "set"/"kept" lines,
+  // which do show values; this one never calls it).
+  for (const key of [...afterMain.removedDuplicates, ...afterTunnel.removedDuplicates]) {
+    deps.io.print(`removed a duplicate ${key} line`);
   }
   for (const key of [...afterMain.kept, ...afterTunnel.kept]) {
     deps.io.print(`kept ${describe(key)}`);

@@ -250,6 +250,21 @@ describe('runSetup — local mode', () => {
     expect(printed).toContain('kept PUBLIC_URL');
   });
 
+  it("F2: the reviewer's duplicated VAULT_PATH case heals on local setup and is reported", async () => {
+    const existing = 'VAULT_PATH=/old/first\nOTHER=1\nVAULT_PATH=/old/second\n';
+    const files = new Map<string, string>([[path.join(CWD, '.env'), existing]]);
+    const printed: string[] = [];
+    await runSetup(
+      { mode: 'local', vault: '/home/u/Vault' },
+      deps(files, { confirm: [], select: [] }, 'linux', printed),
+    );
+    const envText = files.get(path.join(CWD, '.env')) ?? '';
+    expect(envText.match(/^VAULT_PATH=/gm)).toHaveLength(1);
+    expect(parseEnv(envText).get('VAULT_PATH')).toBe('/home/u/Vault');
+    expect(envText).toContain('OTHER=1');
+    expect(printed).toContain('removed a duplicate VAULT_PATH line');
+  });
+
   it('refuses an unusable vault folder with the shared validation message, touching nothing', async () => {
     const files = new Map<string, string>();
     const dockerAvailable = vi.fn(async () => true);
@@ -297,6 +312,56 @@ describe('runSetup — local mode', () => {
       deps(files, { confirm: [], select: [] }, 'linux', printed),
     );
     expect(printed.some((l) => l.startsWith('Next:'))).toBe(false);
+  });
+
+  it('single-quotes (POSIX) a launcher path that contains a space, escaping embedded quotes', async () => {
+    const files = new Map<string, string>();
+    const printed: string[] = [];
+    await runSetup(
+      { mode: 'local', vault: '/home/u/Vault' },
+      deps(files, { confirm: [], select: [] }, 'linux', printed, { cwd: '/proj with space' }),
+    );
+    expect(printed).toContain(
+      "Claude Code: claude mcp add brainstem -- '/proj with space/brainstem' stdio",
+    );
+  });
+
+  it('single-quotes (POSIX) a launcher path that itself contains a single quote', async () => {
+    const files = new Map<string, string>();
+    const printed: string[] = [];
+    await runSetup(
+      { mode: 'local', vault: '/home/u/Vault' },
+      deps(files, { confirm: [], select: [] }, 'linux', printed, { cwd: "/proj's" }),
+    );
+    expect(printed).toContain(
+      "Claude Code: claude mcp add brainstem -- '/proj'\\''s/brainstem' stdio",
+    );
+  });
+
+  it('double-quotes (Windows) a launcher path that contains a space', async () => {
+    const files = new Map<string, string>();
+    const printed: string[] = [];
+    await runSetup(
+      { mode: 'local', vault: 'C:\\Users\\u\\Vault' },
+      deps(files, { confirm: [], select: [] }, 'win32', printed, {
+        cwd: 'C:\\Users\\u with space',
+      }),
+    );
+    expect(printed).toContain(
+      'Claude Code: claude mcp add brainstem -- "C:\\Users\\u with space\\brainstem.cmd" stdio',
+    );
+  });
+
+  it('double-quotes (Windows) a launcher path that contains a single quote', async () => {
+    const files = new Map<string, string>();
+    const printed: string[] = [];
+    await runSetup(
+      { mode: 'local', vault: 'C:\\Users\\u\\Vault' },
+      deps(files, { confirm: [], select: [] }, 'win32', printed, { cwd: "C:\\Users\\u's" }),
+    );
+    expect(printed).toContain(
+      'Claude Code: claude mcp add brainstem -- "C:\\Users\\u\'s\\brainstem.cmd" stdio',
+    );
   });
 });
 

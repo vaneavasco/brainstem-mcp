@@ -116,6 +116,24 @@ export const MAX_SEARCH_PATHS = 200;
  *  matched file's index entry against the same where/tags/pathPrefix query. */
 export const MAX_SEARCH_SCAN = 2000;
 
+/** How often a running stdio process re-writes (touches) its own `instances/<pid>.json` (F5,
+ *  `src/storage/local-peers.ts`) — an unref'd timer, so it never keeps the process alive on its
+ *  own. Also the grace period an unparseable instance file gets before it's pruned (it may be
+ *  mid-write by an older, non-atomic-writing version — one heartbeat interval is enough for that
+ *  to resolve itself either way). */
+export const INSTANCE_HEARTBEAT_MS = 60_000;
+/** An instance file older than this (or whose pid is dead) is no longer a live peer and is
+ *  pruned. Three heartbeats: the portable defence against pid reuse (a crashed server's pid
+ *  reused by an unrelated process stops counting once its stale instance file ages out), with
+ *  margin for a heartbeat that was merely late (a slow disk, a busy event loop). */
+export const INSTANCE_STALE_MS = 3 * INSTANCE_HEARTBEAT_MS;
+/** Bounded concurrency for the `instances/` directory scan (stat/read per entry). */
+export const INSTANCE_SCAN_CONCURRENCY = 32;
+/** Caps one `listOtherLivePeers` scan at this many directory entries — several stdio sessions on
+ *  one vault is normal, but nothing should make one `brainstem_ping` call stat and read an
+ *  unbounded number of files. Logged once per call when the cap is actually hit. */
+export const INSTANCE_SCAN_MAX = 2_000;
+
 // Obsidian's own accepted attachment formats (Files & links → "Supported file formats"), plus
 // the pre-existing png/jpeg/gif/webp/pdf. `.webm` is deliberately listed under both audio/webm
 // and video/webm — extensionAllowedFor looks up by MIME key, so either MIME accepts the same

@@ -31,7 +31,9 @@ interface FakeCache {
 }
 
 function fakeIndexCache(
-  loadResult: { entries: Map<string, IndexEntry> | null; rejected?: string } = { entries: null },
+  loadResult: { entries: Map<string, IndexEntry> | null; rejected?: string; skipped?: number } = {
+    entries: null,
+  },
   saveResult: { ok: boolean; reason?: string } = { ok: true },
 ): FakeCache {
   const saveCalls: { count: number; budgetMs?: number }[] = [];
@@ -44,7 +46,7 @@ function fakeIndexCache(
     cache: {
       async load() {
         loadCalls += 1;
-        return loadResult;
+        return { ...loadResult, skipped: loadResult.skipped ?? 0 };
       },
       async save(_entries, count, opts) {
         saveCalls.push({ count, budgetMs: opts?.budgetMs });
@@ -101,6 +103,7 @@ describe('createLocalRuntime({ deferIndex: true, indexCache })', () => {
         used: true,
         entriesFromCache: NOTES,
         entriesRead: 0,
+        skipped: 0,
       });
       expect(runtime.index.size()).toBe(NOTES);
     } finally {
@@ -124,6 +127,7 @@ describe('createLocalRuntime({ deferIndex: true, indexCache })', () => {
         used: false,
         entriesFromCache: 0,
         entriesRead: NOTES,
+        skipped: 0,
         rejected: 'schema mismatch (example)',
       });
     } finally {

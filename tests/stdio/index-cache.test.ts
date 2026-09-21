@@ -22,7 +22,13 @@ function structured(result: CallToolResult): Record<string, unknown> {
 
 interface PingIndex {
   building: boolean;
-  cache?: { used: boolean; entriesFromCache: number; entriesRead: number; rejected?: string };
+  cache?: {
+    used: boolean;
+    entriesFromCache: number;
+    entriesRead: number;
+    skipped: number;
+    rejected?: string;
+  };
 }
 
 async function seedFixtureVault(root: string): Promise<void> {
@@ -142,6 +148,7 @@ describe('the machine-local index cache, end to end over a real stdio child', ()
       used: true,
       entriesFromCache: 2,
       entriesRead: 0,
+      skipped: 0,
     });
     const secondQuery = await second.client.callTool({ name: 'vault_query', arguments: {} });
     expect(secondQuery.structuredContent).toEqual(firstQuery.structuredContent);

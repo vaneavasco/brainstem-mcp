@@ -36,12 +36,14 @@ export interface IndexCacheOption {
   load(): Promise<{
     entries: Map<string, IndexEntry> | null;
     rejected?: string;
+    /** F4: lines dropped while loading (any reason) — surfaced verbatim in `IndexCacheStats`. */
+    skipped: number;
   }>;
   save(
     entries: Iterable<IndexEntry>,
     count: number,
     opts?: { budgetMs?: number },
-  ): Promise<{ ok: boolean; reason?: string; durationMs: number }>;
+  ): Promise<{ ok: boolean; reason?: string; durationMs: number; racySkipped?: number }>;
 }
 
 /** `brainstem_ping`'s `index.cache` field (stdio only) — the numbers of THIS boot. */
@@ -49,6 +51,9 @@ export interface IndexCacheStats {
   used: boolean;
   entriesFromCache: number;
   entriesRead: number;
+  /** F4: cache lines dropped at load (malformed JSON, wrong shape, a truncated last line, or one
+   *  over the byte cap) — 0 when no cache was found at all, not just when nothing was dropped. */
+  skipped: number;
   /** Set only when a cache was found but thrown out whole (bad schema, wrong vault, corrupt
    *  header) — never set when there was simply no cache yet. */
   rejected?: string;
@@ -182,7 +187,10 @@ export interface LocalRuntimeOptions {
   indexCache?: IndexCacheOption;
   /** Called after a successful index-cache save, from any of its three triggers (post-fill,
    *  hourly, on close). Logging only, like `onReconcile`. */
-  onIndexCacheSaved?: (info: { durationMs: number; count: number }) => void;
+  /** F3: `racySkipped` is how many entries were left out of this save for looking "racily clean"
+   *  (see `INDEX_CACHE_RACY_WINDOW_MS`'s doc comment in `src/storage/local-cache.ts`) — a debug
+   *  signal, not a warning: those paths are simply read from disk again next boot. */
+  onIndexCacheSaved?: (info: { durationMs: number; count: number; racySkipped: number }) => void;
   /** Called when an index-cache save failed or was abandoned (its own time budget, or a write
    *  error) — never thrown. Logging only, like `onReconcileError`. */
   onIndexCacheSaveError?: (reason: string) => void;
@@ -227,6 +235,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   let cacheUsed = false;
   let cacheEntriesFromCache = 0;
   let cacheEntriesRead = 0;
+  let cacheSkipped = 0;
   let cacheRejected: string | undefined;
   let lastSavedCacheVersion = 0;
   let cacheHourlyTimer: ReturnType<typeof setInterval> | null = null;
@@ -240,7 +249,11 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     if (result.ok) {
       lastSavedCacheVersion = versionAtStart;
       try {
-        opts.onIndexCacheSaved?.({ durationMs: result.durationMs, count: index.size() });
+        opts.onIndexCacheSaved?.({
+          durationMs: result.durationMs,
+          count: index.size(),
+          racySkipped: result.racySkipped ?? 0,
+        });
       } catch {
         /* logging must not break the caller */
       }
@@ -363,6 +376,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
             cachedEntries = loaded.entries;
             cacheUsed = true;
           }
+          cacheSkipped = loaded.skipped;
           if (loaded.rejected) cacheRejected = loaded.rejected;
         }
         const filled = await index.fill(
@@ -475,6 +489,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
         used: cacheUsed,
         entriesFromCache: cacheEntriesFromCache,
         entriesRead: cacheEntriesRead,
+        skipped: cacheSkipped,
         ...(cacheRejected !== undefined ? { rejected: cacheRejected } : {}),
       };
     },

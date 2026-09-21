@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cacheTtlMs, createCimdResolver, validateClientIdUrl } from '../../src/auth/as/cimd.ts';
 import { assertPublicAddress, fetchClientMetadataDocument } from '../../src/auth/as/net.ts';
 import { FileTokenStore } from '../../src/auth/store/file-store.ts';
@@ -147,8 +147,16 @@ describe('fetchClientMetadataDocument + resolver', () => {
   });
   afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
+  // `mk()` below makes one `/tmp/brainstem-cimd-*` dir per call (for its own FileTokenStore);
+  // registered here and removed after every test so the suite leaves nothing behind.
+  const mkDirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(mkDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
+  });
+
   const mk = async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-cimd-'));
+    mkDirs.push(dir);
     const store = await FileTokenStore.open(path.join(dir, 'state.json'));
     let now = 1_000_000;
     const seenIps: string[] = [];

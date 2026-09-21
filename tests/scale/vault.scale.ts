@@ -148,7 +148,7 @@ const resolved = await resolveLocalCacheDir(vaultRealPath, {
   env: { BRAINSTEM_CACHE_HOME: cacheHome },
   platform: process.platform,
   homedir: () => os.homedir(),
-  fs: { mkdir: (p, opts) => fs.mkdir(p, opts) },
+  fs: { mkdir: (p, opts) => fs.mkdir(p, opts), realpath: (p) => fs.realpath(p) },
 });
 if (!resolved.ok) throw new Error('could not resolve a scratch cache dir: ' + resolved.error);
 
@@ -273,6 +273,7 @@ describe(`a vault of ${NOTES} notes`, () => {
       used: true,
       entriesFromCache: NOTES + 1,
       entriesRead: 0,
+      skipped: 0,
     });
     expect(m.warmTotals).toEqual(m.coldTotals);
     expect(m.warmMs).toBeLessThan(WARM_BOOT_MAX_MS);

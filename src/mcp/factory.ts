@@ -66,6 +66,10 @@ const PingOutput = z.looseObject({
         used: z.boolean(),
         entriesFromCache: z.number(),
         entriesRead: z.number(),
+        /** Cache lines dropped while loading, for any reason (malformed JSON, wrong shape, a
+         *  truncated last line, or one over the per-line byte cap) — see
+         *  `src/storage/local-cache.ts`. */
+        skipped: z.number(),
         rejected: z.string().optional(),
       })
       .optional(),

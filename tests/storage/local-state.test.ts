@@ -29,6 +29,11 @@ function fakeFs(): LocalStateDeps['fs'] & { written: Map<string, string> } {
       if (written.has(p)) return {};
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     },
+    async readFile(p) {
+      const data = written.get(p);
+      if (data === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return data;
+    },
     async writeFile(p, data) {
       written.set(p, data);
     },
@@ -179,6 +184,38 @@ describe('resolveLocalStateDir (deps injected, no real filesystem)', () => {
     if (result.ok) return;
     expect(result.error).toContain('BRAINSTEM_STATE_HOME');
   });
+
+  it('F7: a pre-existing vault.json naming a different vault is reported once and left untouched', async () => {
+    const fs_ = fakeFs();
+    const expectedHash = sha256hex('/vaults/mine').slice(0, 16);
+    const markerFile = `/home/tester/.local/state/brainstem/${expectedHash}/vault.json`;
+    const staleContent = JSON.stringify({
+      vaultPath: '/vaults/old',
+      createdAt: '2020-01-01T00:00:00.000Z',
+    });
+    fs_.written.set(markerFile, staleContent);
+
+    const calls: Array<{ file: string; recorded: string; actual: string }> = [];
+    const result = await resolveLocalStateDir(
+      '/vaults/mine',
+      deps({ fs: fs_, onVaultMismatch: (info) => calls.push(info) }),
+    );
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([{ file: markerFile, recorded: '/vaults/old', actual: '/vaults/mine' }]);
+    // Left exactly as it was: never rewritten to the vault actually being served.
+    expect(fs_.written.get(markerFile)).toBe(staleContent);
+  });
+
+  it('F7: no callback when vault.json already names the vault being resolved', async () => {
+    const fs_ = fakeFs();
+    const calls: unknown[] = [];
+    await resolveLocalStateDir('/vaults/mine', deps({ fs: fs_ }));
+    await resolveLocalStateDir(
+      '/vaults/mine',
+      deps({ fs: fs_, onVaultMismatch: (info) => calls.push(info) }),
+    );
+    expect(calls).toEqual([]);
+  });
 });
 
 describe('resolveLocalStateDir against the real filesystem', () => {
@@ -199,6 +236,7 @@ describe('resolveLocalStateDir against the real filesystem', () => {
         mkdir: (p, opts) => fs.mkdir(p, opts),
         realpath: (p) => fs.realpath(p),
         stat: (p) => fs.stat(p),
+        readFile: (p) => fs.readFile(p, 'utf8'),
         writeFile: (p, data, opts) => fs.writeFile(p, data, opts),
         rename: (a, b) => fs.rename(a, b),
       },
@@ -230,5 +268,60 @@ describe('resolveLocalStateDir against the real filesystem', () => {
     if (process.platform !== 'win32') expect(stat.mode & 0o777).toBe(0o700);
     const marker = JSON.parse(await fs.readFile(path.join(result.dir, 'vault.json'), 'utf8'));
     expect(marker.vaultPath).toBe(await fs.realpath(vault));
+  });
+
+  it('F1: refuses a state base that resolves inside the vault, and creates nothing there', async () => {
+    const vault = path.join(tmp, 'vault');
+    await fs.mkdir(vault);
+    // BRAINSTEM_STATE_HOME pointed at a folder under the vault — the base directory itself does
+    // not exist yet, so the containment check must walk up to the nearest existing ancestor.
+    const base = path.join(vault, 'not-yet-created', 'state-home');
+    const result = await resolveLocalStateDir(vault, realDeps(base));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('BRAINSTEM_STATE_HOME');
+    expect(result.error).toContain('inside');
+    // Nothing was created under the vault at all.
+    await expect(fs.readdir(vault)).resolves.toEqual([]);
+  });
+
+  it('F1: refuses a state base equal to the vault itself', async () => {
+    const vault = path.join(tmp, 'vault');
+    await fs.mkdir(vault);
+    const result = await resolveLocalStateDir(vault, realDeps(vault));
+    expect(result.ok).toBe(false);
+  });
+
+  it('F1 (reverse): refuses when the vault resolves inside the state base', async () => {
+    const base = path.join(tmp, 'state-home');
+    await fs.mkdir(base, { recursive: true });
+    const vault = path.join(base, 'some-vault');
+    await fs.mkdir(vault);
+    const result = await resolveLocalStateDir(vault, realDeps(base));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('BRAINSTEM_STATE_HOME');
+  });
+
+  it('F1: a state base outside the vault, sharing only a name prefix, is still allowed', async () => {
+    // Regression guard for a naive startsWith(parent) check without the separator: "vault-2"
+    // must not be treated as "inside" "vault".
+    const vault = path.join(tmp, 'vault');
+    const sibling = path.join(tmp, 'vault-2-state-home');
+    await fs.mkdir(vault);
+    const result = await resolveLocalStateDir(vault, realDeps(sibling));
+    expect(result.ok).toBe(true);
+  });
+
+  it('F7: no callback when vault.json already names the same vault', async () => {
+    const vault = path.join(tmp, 'vault');
+    await fs.mkdir(vault);
+    const base = path.join(tmp, 'state-home');
+    await resolveLocalStateDir(vault, realDeps(base));
+    const calls: unknown[] = [];
+    const again = realDeps(base);
+    again.onVaultMismatch = (info) => calls.push(info);
+    await resolveLocalStateDir(vault, again);
+    expect(calls).toEqual([]);
   });
 });

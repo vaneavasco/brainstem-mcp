@@ -18,18 +18,33 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   with `BRAINSTEM_CACHE_HOME`), holding one file (`index-v<N>.ndjson`, one JSON entry per line,
   written atomically). **The cache is a hint, never a source**: an entry is used only when the
   file's size and modification time, in the current boot's own listing, exactly match what was
-  cached; everything else is read from disk exactly as before. The one known blind spot — a file
-  rewritten with the same size and the same modification time — is the same one the index's own
-  background reconcile pass already accepts. Saved once after the index becomes ready (when the
-  cache was absent, invalid, or more than 1% of notes had to be re-read), at most once an hour
-  while a session runs with unsaved changes, and once more on a clean shutdown if anything
-  changed — a shutdown triggered by the client simply vanishing skips that last save above a
-  size where it would no longer reliably fit in the shutdown window. Unlike the state folder, a
-  cache that cannot be created or written is never fatal: the server runs without one and logs a
-  single warning line. `BRAINSTEM_INDEX_CACHE=off` disables it outright. `brainstem_ping`'s
-  `index.cache` field (stdio only) reports this boot's own `used`/`entriesFromCache`/
-  `entriesRead`/`rejected`. Only the stdio server uses it; the HTTP server's blocking boot has no
-  need of it.
+  cached; everything else is read from disk exactly as before. At save time an entry is left out
+  of the cache — always simply read from disk again at the next boot, never written stale — in
+  three cases: its frontmatter holds a number JSON cannot round-trip (`NaN`, `±Infinity`, `-0`,
+  anywhere, even nested); its `modifiedAt` is not comfortably older than the save itself (git's
+  own "racily clean" rule, adapted — a file can be rewritten, same size and same coarse mtime, in
+  the instant around a save); or its serialized line would exceed the 4 MiB per-line cap the
+  reader also enforces. The one known blind spot — a file rewritten with the same size and the
+  same modification time comfortably before the save that cached it — is the same one the
+  index's own background reconcile pass already accepts (a tool that *restores* an old mtime onto
+  a same-size file, e.g. `cp -p`/`touch -d`, is indistinguishable from an untouched one to either).
+  The reader never uses `readline` (it also breaks a JSON line on U+2028/U+2029, which a note's
+  own path or frontmatter can legitimately contain): its own byte-level splitter enforces the
+  same 4 MiB line cap, dropping an oversized line's bytes as they arrive rather than buffering
+  them, and tolerates CRLF. Saved once after the index becomes ready (when the cache was absent,
+  invalid, or more than 1% of notes had to be re-read), at most once an hour while a session runs
+  with unsaved changes, and once more on a clean shutdown if anything changed — a shutdown
+  triggered by the client simply vanishing skips that last save above a size where it would no
+  longer reliably fit in the shutdown window. Never resolves inside the vault, or the vault
+  inside it, either: a `BRAINSTEM_CACHE_HOME` that would land the cache folder inside the vault
+  (or the vault inside the cache base) just means running without a cache, logged as a single
+  warning line — like any other cache folder that cannot be created or written, this is never
+  fatal. A leftover tmp file from a save that never finished is removed once its writer's pid is
+  no longer alive (any age) or, for a still-alive writer, once it's a day old. `BRAINSTEM_INDEX_CACHE=off`
+  disables the cache outright. `brainstem_ping`'s `index.cache` field (stdio only) reports this
+  boot's own `used`/`entriesFromCache`/`entriesRead`/`skipped` (lines dropped while loading, any
+  reason)/`rejected`. Only the stdio server uses it; the HTTP server's blocking boot has no need
+  of it.
 - `./brainstem setup` asks first how Claude will reach the vault: locally on this machine
   (`--mode local`) or from claude.ai through a tunnel (`--mode tunnel`, today's flow — the
   default when the flag is absent and the run is non-interactive, so no existing script needs
@@ -37,7 +52,15 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   leaves every other key untouched (an install can be switched between modes, or used as both:
   the HTTP settings survive), needs no Docker and generates no owner secret. It prints the
   ready-to-paste `claude mcp add brainstem -- <abs path>/brainstem stdio` line, with the
-  absolute path of the launcher for this platform (`brainstem.cmd` on Windows).
+  absolute path of the launcher for this platform (`brainstem.cmd` on Windows) — quoted (POSIX
+  single quotes, Windows double quotes) whenever that path holds anything a shell would otherwise
+  split on, such as a space.
+- `.env` heals a duplicated key on the next write instead of quietly drifting from what it reads
+  back: `setup`, `./brainstem vault set` and `./brainstem secret rotate` all write the new value
+  at the *last* occurrence of a repeated key and remove every earlier line defining the same key,
+  printing `removed a duplicate <KEY> line` for each (key names only — never a value, so a
+  duplicated `OWNER_SECRET`/`TUNNEL_TOKEN` line never leaks one into the output). An
+  `export KEY=value` line is read and rewritten the same as `KEY=value`.
 - The launchers (`brainstem`, `brainstem.cmd`) no longer require Docker for `setup` either — it
   asks first, and local mode needs none. The tunnel branch of `setup` itself now checks for
   Docker, with the same message the launcher used to print.
@@ -48,13 +71,21 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   vault's real path) under the OS's state directory (`~/.local/state/brainstem` on Linux,
   `~/Library/Application Support/brainstem` on macOS, `%LOCALAPPDATA%\brainstem\State` on
   Windows), overridable with `BRAINSTEM_STATE_HOME`; `_brainstem/instructions.md` is vault
-  content and keeps travelling with the vault as before. `src/storage/transaction.ts` already
-  moved every byte across the journal↔vault boundary with `fs.copyFile` (never `fs.rename`, which
-  fails `EXDEV` across filesystems), so the journal now living on a different filesystem than the
-  vault needed no change there — proven by a test that runs it against a tmpfs (`/dev/shm`) when
-  one is available. Several stdio sessions on one vault, on one machine, are recorded at
-  `<local folder>/instances/<pid>.json` (`src/storage/local-peers.ts`): a stale entry from a dead
-  pid is pruned, a new session logs one line when others are already running, and
+  content and keeps travelling with the vault as before. Neither `BRAINSTEM_STATE_HOME` nor the
+  test/dev-only `STATE_DIR` may resolve inside the vault, or the vault inside them — refused at
+  boot (exit 1, one stderr line naming the offending setting) before anything is created there;
+  the sole exception is `STATE_DIR` set to exactly `<vault>/_brainstem`, already vault content. A
+  `vault.json` found naming a different vault than the one now being served is logged once (both
+  paths) and left untouched. `src/storage/transaction.ts` already moved every byte across the
+  journal↔vault boundary with `fs.copyFile` (never `fs.rename`, which fails `EXDEV` across
+  filesystems), so the journal now living on a different filesystem than the vault needed no
+  change there — proven by a test that runs it against a tmpfs (`/dev/shm`) when one is
+  available. Several stdio sessions on one vault, on one machine, are recorded at
+  `<local folder>/instances/<pid>.json` (`src/storage/local-peers.ts`), written atomically and
+  re-written (heartbeated) every 60 s: an entry counts as a live peer only when its pid is alive
+  *and* its file's mtime is under three heartbeats old (the portable defence against a crashed
+  server's pid being reused later); a dead pid's entry, or one that's simply gone quiet that
+  long, is pruned, a new session logs one line when others are already running, and
   `brainstem_ping` gains `localPeers` (stdio only, counted at call time — absent on the HTTP
   server).
 

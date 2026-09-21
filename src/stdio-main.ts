@@ -14,7 +14,13 @@ import {
   resolveLocalCacheDir,
 } from './storage/local-cache.ts';
 import { listOtherLivePeers, registerInstance, unregisterInstance } from './storage/local-peers.ts';
-import { type LocalStateDeps, resolveLocalStateDir } from './storage/local-state.ts';
+import {
+  type LocalStateDeps,
+  pathsAreRelated,
+  pathsEqual,
+  realpathOrClosestAncestor,
+  resolveLocalStateDir,
+} from './storage/local-state.ts';
 import { scanLeftoverJournals } from './storage/transaction.ts';
 import {
   createInstructionsProvider,
@@ -27,7 +33,10 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 /** `LocalStateDeps` built from the real filesystem and OS — the only place `src/storage/
  *  local-state.ts`'s pure logic is wired to real I/O, so tests can inject their own instead. */
-function localStateDeps(env: Record<string, string | undefined>): LocalStateDeps {
+function localStateDeps(
+  env: Record<string, string | undefined>,
+  onVaultMismatch?: LocalStateDeps['onVaultMismatch'],
+): LocalStateDeps {
   return {
     env,
     platform: process.platform,
@@ -36,9 +45,11 @@ function localStateDeps(env: Record<string, string | undefined>): LocalStateDeps
       mkdir: (p, opts) => fs.mkdir(p, opts),
       realpath: (p) => fs.realpath(p),
       stat: (p) => fs.stat(p),
+      readFile: (p) => fs.readFile(p, 'utf8'),
       writeFile: (p, data, opts) => fs.writeFile(p, data, opts),
       rename: (a, b) => fs.rename(a, b),
     },
+    onVaultMismatch,
   };
 }
 
@@ -52,7 +63,7 @@ function localCacheDeps(
     env,
     platform: process.platform,
     homedir: () => os.homedir(),
-    fs: { mkdir: (p, opts) => fs.mkdir(p, opts) },
+    fs: { mkdir: (p, opts) => fs.mkdir(p, opts), realpath: (p) => fs.realpath(p) },
   };
 }
 
@@ -203,6 +214,21 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
 
   const logger: Logger = createLogger(vaultConfig.logLevel, stderr);
 
+  // Resolved once, real I/O, and reused everywhere below that needs to compare a machine-local
+  // folder against the vault (F1) — already known to exist and be a directory (validateVaultPath
+  // just confirmed it), so this should not fail; if it somehow does, that is itself reason to
+  // stop before anything is created.
+  let vaultRealPath: string;
+  try {
+    vaultRealPath = await fs.realpath(vaultConfig.vaultPath);
+  } catch (error) {
+    return fail(
+      `Unusable vault folder: could not resolve its real path: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   // Two different folders, on purpose (ADR 0008 amendment, phase 3): `instructionsDir` is vault
   // content (the owner's `_brainstem/instructions.md`) and always travels with the vault, exactly
   // like the HTTP server's state dir. `stateDir` is this *process's* working state — the
@@ -213,9 +239,36 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   const instructionsDir = path.join(vaultConfig.vaultPath, '_brainstem');
   let stateDir: string;
   if (vaultConfig.stateDir) {
+    // F1: machine-local working state must never live inside the vault (every tool would then
+    // list, read and search the server's own files) — except the one grandfathered spot,
+    // `<vault>/_brainstem`, which IS vault content (see the comment above) and is how STATE_DIR
+    // has always been used for local dev/tests. Any other STATE_DIR inside the vault is refused
+    // exactly like an out-of-bounds BRAINSTEM_STATE_HOME below, before anything is created there.
+    const stateDirReal = await realpathOrClosestAncestor(
+      vaultConfig.stateDir,
+      (p) => fs.realpath(p),
+      path,
+    );
+    const reservedStateDir = path.join(vaultRealPath, '_brainstem');
+    const reservedException = pathsEqual(stateDirReal, reservedStateDir, path, process.platform);
+    if (
+      !reservedException &&
+      pathsAreRelated(stateDirReal, vaultRealPath, path, process.platform)
+    ) {
+      return fail(
+        `Unusable STATE_DIR: "${vaultConfig.stateDir}" is inside (or equal to) the vault "${vaultRealPath}" ` +
+          '— tools would list, read and search the server’s own working state. The only exception ' +
+          `is STATE_DIR set to exactly "${reservedStateDir}".`,
+      );
+    }
     stateDir = vaultConfig.stateDir;
   } else {
-    const resolved = await resolveLocalStateDir(vaultConfig.vaultPath, localStateDeps(env));
+    const resolved = await resolveLocalStateDir(
+      vaultConfig.vaultPath,
+      localStateDeps(env, (info) =>
+        logger.warn(info, 'vault.json in the local state folder names a different vault'),
+      ),
+    );
     if (!resolved.ok) {
       return fail(`Could not set up the local state folder: ${resolved.error}`);
     }
@@ -226,11 +279,12 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   // write it too — it lives outside the vault, so it writes nothing a read-only boot must avoid.
   // Disabled outright by BRAINSTEM_INDEX_CACHE=off; otherwise a folder that cannot be created or
   // written just means running without one, logged as a single warning line — unlike stateDir
-  // above, this is never a reason to exit (the cache is a hint, never a source).
+  // above, this is never a reason to exit (the cache is a hint, never a source). F1's containment
+  // check (never inside the vault, and never the vault inside the cache base — no exception here)
+  // lives inside resolveLocalCacheDir itself; a refusal there is just another `ok:false`.
   let indexCacheHandle: ReturnType<typeof createIndexCacheHandle> | undefined;
   if (env.BRAINSTEM_INDEX_CACHE !== 'off') {
     try {
-      const vaultRealPath = await fs.realpath(vaultConfig.vaultPath);
       const resolvedCache = await resolveLocalCacheDir(vaultRealPath, localCacheDeps(env));
       if (resolvedCache.ok) {
         indexCacheHandle = createIndexCacheHandle(
@@ -257,7 +311,13 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       reconcileMs: vaultConfig.reconcileMs,
       deferIndex: true,
       indexCache: indexCacheHandle,
-      onIndexCacheSaved: (info) => logger.info(info, 'index cache saved'),
+      onIndexCacheSaved: (info) => {
+        logger.info(info, 'index cache saved');
+        // F3: a debug-level line, not a warning — those paths just get read from disk next boot.
+        if (info.racySkipped > 0) {
+          logger.debug({ racySkipped: info.racySkipped }, 'index cache save: skipped racy entries');
+        }
+      },
       onIndexCacheSaveError: (reason) => logger.warn({ reason }, 'index cache save failed'),
       onIndexError: (error) => logger.error({ err: error }, 'background index build failed'),
       onReconcileError: () => logger.warn('index reconcile failed; the next pass will retry'),
@@ -312,8 +372,10 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   // Several stdio processes on one vault, on this machine, are normal (every Claude Code session
   // starts its own) — recorded here regardless of read-only mode, since this writes into the
   // machine-local stateDir, never into the vault. `registerInstance` runs before the scan below
-  // so two processes booting at nearly the same moment still see each other.
-  await registerInstance(stateDir, {
+  // so two processes booting at nearly the same moment still see each other; its heartbeat (F5)
+  // keeps this process's own instance file from ever looking stale to another one's scan, and is
+  // stopped on the way out, in `shutdown` below.
+  const registered = await registerInstance(stateDir, {
     pid: process.pid,
     startedAt: new Date().toISOString(),
     version: SERVER_INFO.version,
@@ -361,6 +423,10 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     const closeReason = DEAD_CLIENT_SHUTDOWN_REASONS.has(signal) ? 'client-dead' : 'normal';
+    // Stopped up front, synchronously: once shutdown has started, nothing should touch the
+    // instance file again behind unregisterInstance's back (a heartbeat tick racing the removal
+    // below could otherwise re-create it a moment after it was deleted).
+    registered.stopHeartbeat();
     // Order matters: the calls already running finish and are answered while the transport is
     // still open (a burst of writes followed by a disconnect used to leave nothing on disk);
     // only then is the transport closed, and the runtime last. The instance file is removed
