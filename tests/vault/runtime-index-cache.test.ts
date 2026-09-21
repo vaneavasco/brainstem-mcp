@@ -199,6 +199,69 @@ describe('createLocalRuntime({ deferIndex: true, indexCache })', () => {
     }
   });
 
+  it('a save that had to leave racy entries out is repeated once their window has passed', async () => {
+    // A fresh import: every note was modified "now", so the first save can keep none of them.
+    let racyLeft = NOTES;
+    const saves: number[] = [];
+    const cache: IndexCacheOption = {
+      async load() {
+        return { entries: null, skipped: 0 };
+      },
+      async save() {
+        saves.push(racyLeft);
+        const racySkipped = racyLeft;
+        racyLeft = 0; // by the second save the notes have been quiet long enough
+        return { ok: true, durationMs: 1, racySkipped };
+      },
+    };
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      deferIndex: true,
+      indexCache: cache,
+      indexCacheSaveIntervalMs: 0,
+      indexCacheRacyResaveMs: 40,
+    });
+    try {
+      await runtime.indexReady;
+      expect(saves).toEqual([NOTES]);
+      await waitFor(() => saves.length === 2);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(saves).toEqual([NOTES, 0]); // complete now: no third save
+    } finally {
+      await runtime.close();
+    }
+    expect(saves).toHaveLength(2); // and close() has nothing left to write
+  });
+
+  it('close() cancels a pending racy re-save instead of waiting for it', async () => {
+    const saves: number[] = [];
+    const cache: IndexCacheOption = {
+      async load() {
+        return { entries: null, skipped: 0 };
+      },
+      async save() {
+        saves.push(1);
+        return { ok: true, durationMs: 1, racySkipped: 5 };
+      },
+    };
+    const runtime = await createLocalRuntime({
+      vaultPath: root,
+      ripgrepPath: null,
+      reconcileMs: 0,
+      deferIndex: true,
+      indexCache: cache,
+      indexCacheSaveIntervalMs: 0,
+      indexCacheRacyResaveMs: 60_000,
+    });
+    await runtime.indexReady;
+    const started = performance.now();
+    await runtime.close();
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(saves).toHaveLength(1); // still inside the window: a save now would skip them again
+  });
+
   it('never saves when the build fails', async () => {
     const brokenAdapter: Parameters<typeof createLocalRuntime>[0]['createAdapter'] = async (
       ...args

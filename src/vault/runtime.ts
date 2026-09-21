@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTLE_RETRY_MS,
   INDEX_CACHE_DEAD_CLIENT_SKIP_NOTES,
   INDEX_CACHE_HOURLY_SAVE_MS,
+  INDEX_CACHE_RACY_RESAVE_MS,
   INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS,
   INDEX_CACHE_STALE_FRACTION,
   INDEX_WAIT_MS,
@@ -198,6 +199,9 @@ export interface LocalRuntimeOptions {
   indexCacheStaleFraction?: number;
   /** Overrides INDEX_CACHE_HOURLY_SAVE_MS; tests shorten it. 0 disables the hourly timer. */
   indexCacheSaveIntervalMs?: number;
+  /** Overrides INDEX_CACHE_RACY_RESAVE_MS: how long after a save that left racy entries out the
+   *  one follow-up save runs; tests shorten it. */
+  indexCacheRacyResaveMs?: number;
   /** Overrides INDEX_CACHE_SHUTDOWN_SAVE_BUDGET_MS for the save `close()` attempts; tests
    *  shorten it to exercise abandonment without a real 5 s wait. */
   indexCacheShutdownBudgetMs?: number;
@@ -239,6 +243,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   let cacheRejected: string | undefined;
   let lastSavedCacheVersion = 0;
   let cacheHourlyTimer: ReturnType<typeof setInterval> | null = null;
+  let racyResaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const runIndexCacheSave = async (
     budgetMs?: number,
@@ -248,6 +253,19 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     const result = await opts.indexCache.save(index.all(), index.size(), { budgetMs });
     if (result.ok) {
       lastSavedCacheVersion = versionAtStart;
+      // Entries modified just before the save are left out of the cache on purpose (the "racily
+      // clean" rule in local-cache.ts). After a fresh import that is EVERY entry: measured, each
+      // restart inside the window re-read the whole vault and saved an empty cache again. So a
+      // save that left some out is repeated, once, when their window has passed.
+      if (racyResaveTimer) clearTimeout(racyResaveTimer);
+      racyResaveTimer = null;
+      if ((result.racySkipped ?? 0) > 0 && !closed) {
+        racyResaveTimer = setTimeout(() => {
+          racyResaveTimer = null;
+          if (!closed) void runIndexCacheSave();
+        }, opts.indexCacheRacyResaveMs ?? INDEX_CACHE_RACY_RESAVE_MS);
+        racyResaveTimer.unref();
+      }
       try {
         opts.onIndexCacheSaved?.({
           durationMs: result.durationMs,
@@ -500,6 +518,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
       if (reconcileTimer) clearInterval(reconcileTimer);
       if (trailing) clearTimeout(trailing);
       if (cacheHourlyTimer) clearInterval(cacheHourlyTimer);
+      if (racyResaveTimer) clearTimeout(racyResaveTimer);
       detach();
       await inFlight; // a reconcile pass in flight finishes before the caller tears the vault down
 

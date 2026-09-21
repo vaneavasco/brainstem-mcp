@@ -24,7 +24,9 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   anywhere, even nested); its `modifiedAt` is not comfortably older than the save itself (git's
   own "racily clean" rule, adapted — a file can be rewritten, same size and same coarse mtime, in
   the instant around a save); or its serialized line would exceed the 4 MiB per-line cap the
-  reader also enforces. The one known blind spot — a file rewritten with the same size and the
+  reader also enforces. A save that had to leave just-modified entries out (after a fresh import
+  that is every entry) is repeated once, four seconds later, so a server that stays up leaves a
+  complete cache behind. The one known blind spot — a file rewritten with the same size and the
   same modification time comfortably before the save that cached it — is the same one the
   index's own background reconcile pass already accepts (a tool that *restores* an old mtime onto
   a same-size file, e.g. `cp -p`/`touch -d`, is indistinguishable from an untouched one to either).

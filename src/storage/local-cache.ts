@@ -205,6 +205,8 @@ export interface CacheHeader {
   server: string;
   vaultKey: string;
   writtenAt: string;
+  /** The size of the index when the save began: NOT the number of lines that follow (entries
+   *  left out as racy, oversized or not JSON-safe are counted here too). Informational only. */
   entries: number;
 }
 

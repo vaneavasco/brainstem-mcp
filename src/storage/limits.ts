@@ -82,6 +82,9 @@ export const INDEX_CACHE_STALE_FRACTION = 0.01;
 /** How often a warm, still-running stdio server rewrites its index cache if anything changed
  *  since the last save — an unref'd timer, so it never keeps the process alive on its own. */
 export const INDEX_CACHE_HOURLY_SAVE_MS = 60 * 60 * 1000;
+/** A save that had to leave just-modified entries out (the 3 s racy window in local-cache.ts) is
+ *  repeated once, this long after it: the window plus a margin. */
+export const INDEX_CACHE_RACY_RESAVE_MS = 4_000;
 /** Time budget for the index-cache save attempted during shutdown (`VaultRuntime.close()`):
  *  shorter than the background default (`DEFAULT_SAVE_BUDGET_MS` in local-cache.ts, 30 s) because
  *  `src/stdio-main.ts` gives the whole shutdown sequence only SHUTDOWN_TIMEOUT_MS (10 s) — this
