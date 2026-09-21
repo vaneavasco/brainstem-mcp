@@ -17,7 +17,10 @@ interface StdioSession {
   close(): Promise<void>;
 }
 
-async function startStdioSession(root?: string): Promise<StdioSession> {
+async function startStdioSession(
+  root?: string,
+  env?: Record<string, string>,
+): Promise<StdioSession> {
   const vaultRoot = root ?? (await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-')));
   const client = new Client(
     { name: 'stdio-test', version: '0' },
@@ -27,6 +30,7 @@ async function startStdioSession(root?: string): Promise<StdioSession> {
     new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_MAIN, '--vault', vaultRoot],
+      ...(env ? { env: { ...(process.env as Record<string, string>), ...env } } : {}),
       // Piped (not the default 'inherit'): the server's own log lines go to its stderr, which
       // would otherwise print straight into the test run's own console.
       stderr: 'pipe',
@@ -207,6 +211,45 @@ describe('stdio lifecycle (real child process)', () => {
     expect(lines[0]).toContain('VAULT_PATH');
   }, 10_000);
 
+  it('a vault folder that does not exist is refused and NOT created', async () => {
+    // Found by hand: a mistyped --vault made the server create the folder, seed _brainstem/ in it
+    // and serve an empty vault without a word. A person who mistypes the path must be told.
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-missing-'));
+    const missing = path.join(parent, 'no-such-vault');
+    try {
+      const child = spawn(process.execPath, [STDIO_MAIN, '--vault', missing], { stdio: 'pipe' });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (d: Buffer) => {
+        out += d.toString();
+      });
+      child.stderr.on('data', (d: Buffer) => {
+        err += d.toString();
+      });
+      const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toContain('no-such-vault');
+      expect(err.trim().split('\n')).toHaveLength(1);
+      await expect(fs.stat(missing)).rejects.toThrow(); // nothing was created
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a relative path, the filesystem root and the home directory as a vault', async () => {
+    for (const bad of ['relative/vault', path.parse(os.tmpdir()).root, os.homedir()]) {
+      const child = spawn(process.execPath, [STDIO_MAIN, '--vault', bad], { stdio: 'pipe' });
+      let out = '';
+      child.stdout.on('data', (d: Buffer) => {
+        out += d.toString();
+      });
+      const code = await new Promise<number | null>((resolve) => child.on('exit', resolve));
+      expect(code, bad).toBe(1);
+      expect(out, bad).toBe('');
+    }
+  });
+
   it('an unusable vault path (a file, not a directory) exits 1 with one line on stderr, before any stdout byte', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-unusable-'));
     const filePath = path.join(dir, 'not-a-directory');
@@ -327,4 +370,26 @@ describe('a boot that does not make the client wait (deferIndex end to end)', ()
       await fs.rm(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it('honours the vault settings it is given: a daily note goes to its folder, not to the root', async () => {
+    const session = await startStdioSession(undefined, {
+      DAILY_NOTES_FOLDER: 'Daily',
+      VAULT_TIMEZONE: 'Europe/Bucharest',
+    });
+    try {
+      const where = await session.client.callTool({ name: 'vault_daily_note_path', arguments: {} });
+      expect((where.structuredContent as { path: string }).path).toMatch(
+        /^Daily\/\d{4}-\d{2}-\d{2}\.md$/,
+      );
+      const appended = await session.client.callTool({
+        name: 'vault_daily_note_append',
+        arguments: { content: '- alpha' },
+      });
+      expect(appended.isError).toBeFalsy();
+      expect(await fs.readdir(path.join(session.root, 'Daily'))).toHaveLength(1);
+      expect((await fs.readdir(session.root)).filter((f) => f.endsWith('.md'))).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  });
 });

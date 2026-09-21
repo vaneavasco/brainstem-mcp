@@ -150,15 +150,20 @@ describe.skipIf(process.platform === 'win32')(
       }
     }, 30_000);
 
-    it('stdio never reaches the Docker check: it fails on the vault config instead', async () => {
+    it('stdio never reaches the Docker check: it fails on the vault it was given instead', async () => {
       const dir = nodeOnlyPath();
       try {
-        const { code, stderr } = await run(resolveBash(), ['./brainstem', 'stdio'], {
-          env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1', VAULT_PATH: '' },
-        });
+        // `--vault` wins over any `.env` next to the launcher, so this never starts a server on
+        // the developer's own vault (the command reads the install's `.env` for vault settings).
+        const missing = path.join(dir, 'no-such-vault');
+        const { code, stderr } = await run(
+          resolveBash(),
+          ['./brainstem', 'stdio', '--vault', missing],
+          { env: { ...process.env, PATH: dir, BRAINSTEM_SKIP_INSTALL: '1' } },
+        );
         expect(code).toBe(1);
         expect(stderr).not.toContain('Docker is required');
-        expect(stderr).toContain('VAULT_PATH');
+        expect(stderr).toContain('no-such-vault');
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

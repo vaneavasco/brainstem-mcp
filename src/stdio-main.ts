@@ -1,6 +1,9 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { type VaultPathContext, validateVaultPath } from './cli/vault-path.ts';
 import { ConfigError, loadVaultConfig } from './config.ts';
 import { createLogger, type Logger } from './logger.ts';
 import { createVaultServer } from './mcp/factory.ts';
@@ -14,13 +17,46 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 /** `--vault <path>` from an argv array (e.g. `process.argv.slice(2)`); `undefined` when absent. */
 export function parseVaultArg(argv: readonly string[]): string | undefined {
+  const inline = argv.find((arg) => arg.startsWith('--vault='));
+  if (inline !== undefined) {
+    const value = inline.slice('--vault='.length);
+    if (value === '') throw new Error('--vault requires a path');
+    return value;
+  }
   const i = argv.indexOf('--vault');
   if (i === -1) return undefined;
   const value = argv[i + 1];
-  if (value === undefined || value === '') {
-    throw new Error('--vault requires a path');
-  }
+  // `--vault --foo` must not become a folder named "--foo"
+  if (value === undefined || value.startsWith('-')) throw new Error('--vault requires a path');
   return value;
+}
+
+/** What `validateVaultPath` needs from the machine; the code's own folder stands in for "the
+ *  repository" (a vault that contains the running server is wrong whichever way it was installed). */
+function vaultPathContext(): VaultPathContext {
+  return {
+    home: os.homedir(),
+    repoDir: path.resolve(import.meta.dirname, '..'),
+    platform: process.platform,
+    async stat(p) {
+      try {
+        const s = await fs.stat(p);
+        return { isDirectory: () => s.isDirectory() };
+      } catch {
+        return null;
+      }
+    },
+    async probeWrite(p) {
+      const probe = path.join(p, `.brainstem-write-test-${process.pid}-${Date.now()}`);
+      try {
+        await fs.writeFile(probe, '');
+        await fs.rm(probe, { force: true });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 export interface StdioMainOptions {
@@ -69,6 +105,15 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   } catch (error) {
     if (error instanceof ConfigError) return fail(error.message);
     throw error;
+  }
+
+  // Before anything is created: a mistyped folder must be an error, not an empty vault that the
+  // server quietly makes and then serves. Same rules as `./brainstem setup` (absolute, exists,
+  // a folder, writable, not the filesystem root, not the home directory, not around this code).
+  const verdict = await validateVaultPath(vaultConfig.vaultPath, vaultPathContext());
+  if (!verdict.ok) return fail(`Unusable vault folder: ${verdict.error}`);
+  if (vaultConfig.vaultPath.split(/[\\/]/).includes('_brainstem')) {
+    return fail(`Unusable vault folder: "${vaultConfig.vaultPath}" is inside a _brainstem folder`);
   }
 
   const logger: Logger = createLogger(vaultConfig.logLevel, stderr);

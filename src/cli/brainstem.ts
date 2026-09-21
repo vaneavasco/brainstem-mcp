@@ -25,6 +25,7 @@ import { runVaultSet, runVaultShow } from './commands/vault.ts';
 import { createComposeRunner } from './docker.ts';
 import { parseEnv } from './env-file.ts';
 import { resolveImageTag } from './image-tag.ts';
+import { stdioEnv } from './stdio-env.ts';
 import { createSystemProbe } from './system.ts';
 import { tunnelUrlReader } from './tunnel-url.ts';
 import type { VaultPathContext } from './vault-path.ts';
@@ -385,7 +386,12 @@ export function buildProgram(
       // No Docker, no tunnel, no OAuth: runStdioServer manages its own exit code (0 on a clean
       // shutdown, 1 on a config/vault error or a failed one) — unlike every other command here,
       // it never returns a number for runAction to translate into process.exitCode.
-      await runStdioServer({ vaultOverride: opts.vault });
+      // The install's .env carries the vault settings the owner already chose (time zone, daily
+      // notes); without it a daily note lands at the vault root instead of its folder.
+      await runStdioServer({
+        vaultOverride: opts.vault,
+        env: stdioEnv(await loadEnvMapOrNull(repoDir), process.env),
+      });
     });
 
   program
