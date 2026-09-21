@@ -5,6 +5,7 @@ import {
   CLIENT_SAFE_RESULT_CHARS,
   MAX_FRONTMATTER_HITS,
   MAX_GLOB_CHARS,
+  MAX_PATH_ARG_CHARS,
   MAX_QUERY_FIELD_CHARS,
   MAX_QUERY_ROWS,
   MAX_SEARCH_PATHS,
@@ -342,22 +343,29 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
     'vault_search_frontmatter',
     {
       title: 'Search by frontmatter',
-      description: `Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported. Returns at most ${MAX_FRONTMATTER_HITS} hits; narrow the query if truncated.`,
+      description: `Find markdown notes by a frontmatter field using the in-memory index. Provide at least one of equals (exact value or array membership), contains (case-insensitive substring) or exists. Dot paths like "meta.owner" are supported; pathPrefix keeps the hits under one folder. Returns at most ${MAX_FRONTMATTER_HITS} hits and "total"; narrow the query if truncated.`,
       inputSchema: z.strictObject({
         field: z.string().min(1).max(MAX_QUERY_FIELD_CHARS),
         equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
         contains: z.string().optional(),
         exists: z.boolean().optional(),
+        pathPrefix: z
+          .string()
+          .max(MAX_PATH_ARG_CHARS)
+          .optional()
+          .describe('Only notes under this folder (vault-relative), e.g. "notes/2026".'),
       }),
       outputSchema: z.looseObject({
         field: z.string(),
+        /** Every hit under the prefix, before the result's own cap and budget. */
+        total: z.number().optional(),
         hits: z.array(z.looseObject({ path: z.string(), value: z.unknown() })),
         truncated: z.boolean(),
         hint: z.string().optional(),
       }),
       annotations: READ_ONLY,
     },
-    ({ field, equals, contains, exists }) =>
+    ({ field, equals, contains, exists, pathPrefix }) =>
       guarded(tc.log, async () => {
         if (equals === undefined && contains === undefined && exists === undefined) {
           throw new VaultError(
@@ -365,24 +373,32 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
             'Provide at least one of equals, contains or exists.',
           );
         }
-        const hits = index.query({
-          field,
-          ...(equals !== undefined ? { equals } : {}),
-          ...(contains !== undefined ? { contains } : {}),
-          ...(exists !== undefined ? { exists } : {}),
-        });
+        // A folder boundary, as in vault_query: "notes/2026" is not a prefix of "notes/2026-drafts".
+        const prefix =
+          pathPrefix === undefined || pathPrefix === '' || pathPrefix === '/'
+            ? ''
+            : `${normalizeVaultPath(pathPrefix).replace(/\/+$/, '')}/`;
+        const hits = index
+          .query({
+            field,
+            ...(equals !== undefined ? { equals } : {}),
+            ...(contains !== undefined ? { contains } : {}),
+            ...(exists !== undefined ? { exists } : {}),
+          })
+          .filter((hit) => prefix === '' || hit.path.startsWith(prefix));
         const hintFor = (shown: number) =>
           `${shown} of ${hits.length} hits shown: narrow the condition, or use vault_query, which pages by sort and counts with countOnly.`;
         const fitted = fitWithinBudget(
           hits.slice(0, MAX_FRONTMATTER_HITS),
           roomBeside(
-            { field, hits: [], truncated: true, hint: hintFor(hits.length) },
+            { field, total: hits.length, hits: [], truncated: true, hint: hintFor(hits.length) },
             CLIENT_SAFE_RESULT_CHARS,
           ),
         );
         const truncated = fitted.cut || hits.length > MAX_FRONTMATTER_HITS;
         return okJson({
           field,
+          total: hits.length,
           hits: fitted.kept,
           truncated,
           ...(truncated ? { hint: hintFor(fitted.kept.length) } : {}),

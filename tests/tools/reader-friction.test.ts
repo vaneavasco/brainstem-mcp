@@ -453,3 +453,51 @@ describe('fourth review of the listing hint', () => {
     expect(out.hint).not.toMatch(/for the paths themselves/);
   });
 });
+
+describe('vault_search_frontmatter can be scoped to a folder', () => {
+  // A reader asked for one year and got 417 of 678 vault-wide hits (42,000 characters) before
+  // switching tools: this tool had no way to say "only under this folder".
+  it('pathPrefix keeps the hits under that folder, at a folder boundary, and total says how many', async () => {
+    for (const [dir, n] of [
+      ['notes/2025', 3],
+      ['notes/2026', 2],
+      ['notes/2026-drafts', 4],
+    ] as const) {
+      await fs.mkdir(path.join(h.root, dir), { recursive: true });
+      for (let i = 0; i < n; i += 1) {
+        await fs.writeFile(path.join(h.root, dir, `n${i}.md`), '---\nstate: open\n---\nx');
+      }
+    }
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    type Out = { hits: { path: string }[]; total: number; truncated: boolean };
+    const all = (await h.call('vault_search_frontmatter', { field: 'state', equals: 'open' }))
+      .structuredContent as Out;
+    expect(all.total).toBe(9);
+    const scoped = (
+      await h.call('vault_search_frontmatter', {
+        field: 'state',
+        equals: 'open',
+        pathPrefix: 'notes/2026',
+      })
+    ).structuredContent as Out;
+    expect(scoped.total).toBe(2);
+    expect(scoped.hits.map((x) => x.path).sort()).toEqual(['notes/2026/n0.md', 'notes/2026/n1.md']);
+    const slash = (
+      await h.call('vault_search_frontmatter', {
+        field: 'state',
+        exists: true,
+        pathPrefix: 'notes/2026/',
+      })
+    ).structuredContent as Out;
+    expect(slash.total).toBe(2);
+  });
+
+  it('refuses an unknown argument as before', async () => {
+    const r = await h.call('vault_search_frontmatter', {
+      field: 'state',
+      exists: true,
+      folder: 'x',
+    });
+    expect(r.isError).toBe(true);
+  });
+});
