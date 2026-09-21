@@ -104,7 +104,23 @@ interface AppCtx {
   config: Config;
 }
 
+/**
+ * The port has to be chosen before the app exists (PUBLIC_URL carries it), so there is a window
+ * between freeing it and listening on it, long enough under a loaded suite for another test file
+ * to take it. A port that turned out to be taken is not a failure of this test: try another.
+ */
 async function startApp(): Promise<AppCtx> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startAppOnce();
+    } catch (error) {
+      const taken = (error as NodeJS.ErrnoException).code === 'EADDRINUSE';
+      if (!taken || attempt === 5) throw error;
+    }
+  }
+}
+
+async function startAppOnce(): Promise<AppCtx> {
   // Pick the port first, then build PUBLIC_URL from it (mirrors TUNNEL_MODE=none)
   // so the app's issuer/resource — http://127.0.0.1:<port> — is exactly the
   // origin the SDK reaches it at. That makes the SDK's issuer check (RFC 8414
@@ -140,6 +156,11 @@ async function startApp(): Promise<AppCtx> {
   const server = await new Promise<Server>((resolve, reject) => {
     const s = app.listen(port, '127.0.0.1', () => resolve(s));
     s.once('error', reject);
+  }).catch(async (error: unknown) => {
+    // a failed attempt must not leave a watcher and a temp vault behind for the retry
+    await runtime.close();
+    await fs.rm(root, { recursive: true, force: true });
+    throw error;
   });
   return { server, handler, base: `http://127.0.0.1:${port}`, root, runtime, store, config };
 }
