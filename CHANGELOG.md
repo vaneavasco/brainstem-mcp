@@ -35,11 +35,19 @@ All notable changes to brainstem-mcp are recorded here. The format follows
   waited for and answered before the transport closes, and calls read together with the
   disconnect are still run (the door closes after 250 ms in which nothing new started): a client
   that sent 30 writes and closed the pipe used to find none of them on disk. A call still
-  waiting for the index gets two more seconds, then the answer `SHUTTING_DOWN`. A broken stderr
+  waiting for the index gets two more seconds, then the answer `SHUTTING_DOWN`. The intake
+  closes one second after the stop began at the latest, however busy the client: later calls
+  are answered `SHUTTING_DOWN` (`brainstem_ping` and `brainstem_guide` included), never started. A broken stderr
   pipe no longer turns a clean stop into an uncaught `EPIPE` (exit code 1).
 - One file the operating system refuses to read (no permission, a lock held by another program)
   no longer stops the whole index from being built, or the HTTP server from starting: the read
   fails for that note alone, the note is counted in `unreadable`, and the rest is indexed.
+- A FIFO, socket or device inside the vault is refused by every read (`INVALID_INPUT: … is not a
+  regular file`) instead of being opened: reading one never ends, and two such reads used to
+  starve every other file read in the process.
+- `brainstem_ping`'s `unreadable` follows the disk: it falls when a note becomes readable again
+  and rises when one stops being, at the next reconcile pass or read; `total` counts the vault's
+  notes, readable or not, before and after the index is ready.
 - `brainstem.cmd` writes its messages to stderr (stdout belongs to the protocol under `stdio`) and
   compares its first argument unquoted.
 

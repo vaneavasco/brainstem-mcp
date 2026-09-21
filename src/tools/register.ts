@@ -101,7 +101,10 @@ function shuttingDownResult(): CallToolResult {
 /** Runs a tool — its wait for the index included — inside the runtime's call tracker, so a
  *  stopping server waits for it and answers it; refuses to start one once the server is
  *  stopping (the client that asked is, as a rule, already gone). */
-function tracked(tc: ToolContext, fn: () => unknown): unknown {
+export async function tracked<T>(
+  tc: Pick<ToolContext, 'runtime'>,
+  fn: () => T | Promise<T>,
+): Promise<T | CallToolResult> {
   const calls = tc.runtime.calls;
   return calls.closed ? shuttingDownResult() : calls.run(fn);
 }

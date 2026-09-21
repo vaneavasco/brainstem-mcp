@@ -161,7 +161,6 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
   let fillTotal = 0;
   let built = !deferIndex;
   let buildFailed = false;
-  let fillUnreadable = 0;
   let lastPassOk = false;
 
   // One reconcile at a time. The timer simply skips a tick while a pass runs (the next tick is
@@ -274,7 +273,6 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
           },
           () => closed,
         );
-        fillUnreadable = filled.unreadable;
         // close() ran mid-fill: the fill stopped between batches; stopping is not failing, and a
         // watcher is never started behind a closed runtime's back.
         if (closed || filled.stopped) return;
@@ -324,11 +322,13 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
     paths: { vaultRoot: adapter.root, stateDir },
     indexState(): IndexState {
       if (built) {
+        // live figures: a note that becomes readable again stops being counted at the next pass
+        const unreadable = index.unreadableCount();
         return {
           ready: true,
           done: index.size(),
-          total: index.size(),
-          ...(fillUnreadable > 0 ? { unreadable: fillUnreadable } : {}),
+          total: index.knownNoteCount(),
+          ...(unreadable > 0 ? { unreadable } : {}),
         };
       }
       return {
@@ -336,7 +336,7 @@ export async function createLocalRuntime(opts: LocalRuntimeOptions): Promise<Vau
         done: fillDone,
         total: fillTotal,
         ...(buildFailed ? { error: true } : {}),
-        ...(fillUnreadable > 0 ? { unreadable: fillUnreadable } : {}),
+        ...(index.unreadableCount() > 0 ? { unreadable: index.unreadableCount() } : {}),
       };
     },
     indexReady: fillPromise,

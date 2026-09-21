@@ -214,6 +214,9 @@ export class LocalFSAdapter implements StorageAdapter {
     const stat = await this.statOrNull(abs);
     if (!stat) throw new VaultError('NOT_FOUND', `${p} does not exist.`);
     if (stat.isDirectory()) throw new VaultError('INVALID_INPUT', `${p} is a folder, not a file.`);
+    // A FIFO, a socket or a device has no end to read up to: readFile would hold a thread of
+    // the pool for ever (measured: two such reads starved every other file read in the process).
+    if (!stat.isFile()) throw new VaultError('INVALID_INPUT', `${p} is not a regular file.`);
     let bytes: Buffer;
     try {
       bytes = await fs.readFile(abs);
@@ -312,7 +315,7 @@ export class LocalFSAdapter implements StorageAdapter {
     const abs = this.abs(p);
     await this.assertInsideRoot(abs);
     const stat = await this.statOrNull(abs);
-    if (!stat || stat.isDirectory()) return null;
+    if (!stat?.isFile()) return null; // a folder, or a FIFO/socket/device that would never end
     const bytes = await fs.readFile(abs);
     return this.hashForBytes(p, bytes);
   }

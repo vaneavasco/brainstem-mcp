@@ -297,3 +297,41 @@ describe('a note the operating system refuses to read', () => {
     },
   );
 });
+
+describe('the unreadable count follows the disk', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'drops back once the note can be read, and total counts the note either way',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-eacces-heal-'));
+      try {
+        for (const name of ['a', 'b', 'c']) {
+          await fs.writeFile(path.join(root, `${name}.md`), `---\nk: ${name}\n---\n`);
+        }
+        await fs.chmod(path.join(root, 'b.md'), 0o000);
+        const runtime = await createLocalRuntime({
+          vaultPath: root,
+          deferIndex: true,
+          reconcileMs: 0,
+        });
+        try {
+          await runtime.indexReady;
+          expect(runtime.indexState()).toEqual({ ready: true, done: 2, total: 3, unreadable: 1 });
+          await fs.chmod(path.join(root, 'b.md'), 0o644);
+          await runtime.index.reconcile(runtime.adapter);
+          expect(runtime.indexState()).toEqual({ ready: true, done: 3, total: 3 });
+          // and the other way: a note that stops being readable is counted from the next pass
+          await fs.chmod(path.join(root, 'a.md'), 0o000);
+          await fs.utimes(path.join(root, 'a.md'), new Date(), new Date(Date.now() + 5_000));
+          await runtime.index.reconcile(runtime.adapter);
+          expect(runtime.indexState().unreadable).toBe(1);
+        } finally {
+          await runtime.close();
+        }
+      } finally {
+        for (const name of ['a', 'b'])
+          await fs.chmod(path.join(root, `${name}.md`), 0o644).catch(() => {});
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});

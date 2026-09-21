@@ -46,3 +46,25 @@ describe('CallTracker', () => {
     expect(ran).toBe(true);
   });
 });
+
+describe('CallTracker under a client that never pauses', () => {
+  it('stops admitting calls a bounded time after the drain began, however busy the client', async () => {
+    const calls = new CallTracker();
+    let stop = false;
+    // a call every 20 ms: far inside the quiet period, so quiet alone would never close the door
+    const pump = (async () => {
+      while (!stop) {
+        if (!calls.closed) await calls.run(() => new Promise((r) => setTimeout(r, 5)));
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    })();
+    const started = performance.now();
+    await calls.drain(100, 400);
+    const took = performance.now() - started;
+    stop = true;
+    await pump;
+    expect(calls.closed).toBe(true);
+    expect(took).toBeLessThan(1_500);
+    expect(took).toBeGreaterThanOrEqual(380);
+  });
+});

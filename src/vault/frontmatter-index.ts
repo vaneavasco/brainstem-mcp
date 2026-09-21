@@ -135,6 +135,8 @@ export class FrontmatterIndex {
   private _reconciledAt: Date | null = null;
   /** Markdown paths a reconcile could not index, with the size:mtime they had then. */
   private readonly unindexable = new Map<string, string>();
+  /** Notes whose last read failed; see `unreadableCount`. */
+  private readonly unreadablePaths = new Set<string>();
 
   private constructor() {
     this.builtAt = new Date();
@@ -236,20 +238,19 @@ export class FrontmatterIndex {
     }
     const total = mdPaths.length;
     let done = 0;
-    let unreadable = 0;
     onProgress?.({ done, total });
     for (let i = 0; i < mdPaths.length; i += MAX_BATCH) {
-      if (shouldStop()) return { unreadable, stopped: true };
+      if (shouldStop()) return { unreadable: this.unreadablePaths.size, stopped: true };
       const chunk = mdPaths.slice(i, i + MAX_BATCH);
-      const { notes } = await adapter.batchRead(chunk);
+      const { notes, failed } = await adapter.batchRead(chunk);
       for (const note of notes) this.upsert(FrontmatterIndex.fromNote(note));
-      // A note that vanished or could not be read is not "done": it is counted apart, and the
+      for (const { path } of failed) this.unreadablePaths.add(path);
+      // A note that vanished or could not be read is not "done": the unreadable ones are kept apart, and the
       // reconcile pass that follows the fill is what picks it up once it can be read.
       done += notes.length;
-      unreadable += chunk.length - notes.length;
       onProgress?.({ done, total });
     }
-    return { unreadable, stopped: false };
+    return { unreadable: this.unreadablePaths.size, stopped: false };
   }
 
   static async build(adapter: StorageAdapter): Promise<FrontmatterIndex> {
@@ -269,6 +270,7 @@ export class FrontmatterIndex {
     const existing = this.entries.get(entry.path);
     if (existing) this.bytes -= this.entrySize(existing);
     this.entries.set(entry.path, entry);
+    this.unreadablePaths.delete(entry.path); // it was just read
     this.bytes += this.entrySize(entry);
     this.bumpVersion();
     this.checkByteBudget();
@@ -309,6 +311,19 @@ export class FrontmatterIndex {
 
   size(): number {
     return this.entries.size;
+  }
+
+  /** Notes on disk whose last read failed (no permission, not UTF-8, too large): kept current by
+   *  the fill, every reconcile pass and every successful read, so it falls when a note heals. */
+  unreadableCount(): number {
+    return this.unreadablePaths.size;
+  }
+
+  /** Notes the vault holds: the indexed ones, and the unreadable ones the index has no entry for. */
+  knownNoteCount(): number {
+    let missing = 0;
+    for (const path of this.unreadablePaths) if (!this.entries.has(path)) missing += 1;
+    return this.entries.size + missing;
   }
 
   byteSize(): number {
@@ -366,10 +381,13 @@ export class FrontmatterIndex {
     try {
       this.upsert(FrontmatterIndex.fromNote(await adapter.read(path)));
     } catch (error) {
-      if (
-        error instanceof VaultError &&
-        (error.code === 'NOT_FOUND' || error.code === 'ENCODING')
-      ) {
+      if (error instanceof VaultError && error.code === 'NOT_FOUND') {
+        this.remove(path);
+        this.unreadablePaths.delete(path);
+        return;
+      }
+      this.unreadablePaths.add(path);
+      if (error instanceof VaultError && error.code === 'ENCODING') {
         this.remove(path);
         return;
       }
@@ -422,6 +440,7 @@ export class FrontmatterIndex {
       try {
         await this.refreshPath(adapter, file.path);
       } catch {
+        this.unreadablePaths.add(file.path);
         continue; // one unreadable file must never abort the whole reconcile pass
       }
       if (this.entries.has(file.path)) {
@@ -430,7 +449,11 @@ export class FrontmatterIndex {
         else added += 1;
       } else {
         this.unindexable.set(file.path, stamp);
+        this.unreadablePaths.add(file.path);
       }
+    }
+    for (const path of this.unreadablePaths) {
+      if (!seenNotes.has(path)) this.unreadablePaths.delete(path); // gone from the disk
     }
 
     // The listing is a snapshot. A note a tool wrote, or moved, after it was taken is in the index
