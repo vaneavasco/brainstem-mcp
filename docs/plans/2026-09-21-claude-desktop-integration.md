@@ -105,6 +105,16 @@ A stdio bridge to the HTTP server; any change under `src/auth/`; SQLite; multi-u
 2. Signing: confirm the proposal in phase 5 (project certificate, self-signed, plus checksums and build attestation), or choose otherwise.
 3. After phase 2, should the HTTP server also boot in the background (no 27 s gap at every deploy), with `/health` reporting "building"?
 
+## Versioning: one version for everything
+
+The bundle is not a second product: it is the same code and the same tools, built by the same factory, in another wrapper. So there is **one version, in `package.json`**, and everything a tag produces carries it: the Docker images (`vX.Y.Z`, `latest`), `brainstem-mcp-X.Y.Z.mcpb` (and the fixed-name copy), and `manifest.json`'s `version`, which `tests/release/version-consistency.test.ts` checks like the changelog and the README. A running server reports `X.Y.Z+<commit>` from the bundle too (the commit is written at build time, as in the image). A change to the packaging alone (a new field in the install form) is still a release of the repository, with a patch bump.
+
+Two version lines were considered and rejected: "0.7.2" would mean different things to someone on Docker and someone on Desktop, and a second number is a second thing that can fall behind unnoticed, which is the failure fixed in 0.4.0. A monorepo with independently versioned packages pays off when different teams ship at different paces; here everything comes from one tree and one maintainer.
+
+What differs between the two ways in is how often someone must act: a file-installed extension does not update itself. That is answered in the changelog, not in the version: each entry says what it touches (the HTTP server and tunnel; stdio and the bundle; the tools, which are common to both), so a person on Desktop can tell from the release notes whether reinstalling is worth it.
+
+`1.0.0` is proposed for when this project has shipped and the tool contract has stood unchanged for a while; from then on a change that breaks clients is a major version.
+
 ## Order and releases
 
 Phase 0 runs beside phase 1. **0.5.0** = phases 1 + 2 (usable at once from Claude Code on Linux). **0.6.0** = phases 3 + 4. **0.7.0** = phases 5 + 6, with the bundle on the release page. Phase 7 gates 0.7.0.
