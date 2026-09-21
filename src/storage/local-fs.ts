@@ -567,7 +567,11 @@ export class LocalFSAdapter implements StorageAdapter {
     const tmp = path.join(dir, `.${path.basename(abs)}.${randomBytes(6).toString('hex')}.tmp`);
     try {
       await fs.writeFile(tmp, bytes, { flag: 'wx' });
-      await fs.rename(tmp, abs);
+      // Every write goes through this rename — the same transient EPERM/EBUSY/EACCES a folder
+      // delete can hit on Windows (a held handle, most often the watcher's) can just as well land
+      // on an ordinary write's tmp-to-real rename; observed on CI as an occasional `IO` on a plain
+      // vault_write/canvas update with nothing else wrong.
+      await renameWithRetry(tmp, abs);
     } catch {
       await fs.rm(tmp, { force: true });
       throw new VaultError('IO', `Failed to write ${p}.`);

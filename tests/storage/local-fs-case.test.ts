@@ -12,14 +12,20 @@ import { VaultError } from '../../src/storage/types.ts';
 // to. The comparison itself (`compareCaseSpelling`) is a pure function, tested directly below.
 //
 // The adapter-level tests fake `realpath.native` (the one call the new check makes) so the check
-// is exercised on this case-sensitive CI runner too; the real end-to-end proof is the
-// macOS/Windows CI legs. A wrinkle: the *pre-existing* existence check every mutating/reading
-// method already had (a plain `fs.stat`) is real, not faked, and ext4 does not fold case — so for
-// a method whose own pre-existing stat already gates the new check (read, exists, hashOf, list, a
-// softDelete or a move's source), exercising the new logic here needs BOTH spellings to genuinely
-// exist as two distinct real files (impossible on an actually case-insensitive filesystem: there
-// they would be one file). For a write-type method (write, writeBinary, append, a move's target)
-// the new check runs unconditionally, before any pre-existing stat, so one real file is enough.
+// is exercised on any CI runner, whatever the real underlying filesystem does — but this file
+// itself still runs on all three (Linux, macOS, Windows), and two things below stay tied to what
+// the MACHINE actually running the test does, not to the block's forced `caseInsensitive: true`:
+//   - The *pre-existing* existence check every mutating/reading method already had (a plain
+//     `fs.stat`) is real, not faked. For a method whose own pre-existing stat already gates the
+//     new check (read, exists, hashOf, list, a softDelete or a move's source), the wrongly-cased
+//     query needs to genuinely stat-succeed first: on a real case-INSENSITIVE filesystem the OS
+//     already does that on its own; on a case-SENSITIVE one (Linux) `seedDualCase` below writes a
+//     second, truly distinct real file so it does. For a write-type method (write, writeBinary,
+//     append, a move's target) the new check runs unconditionally, before any pre-existing stat,
+//     so one real file is always enough.
+//   - `LocalFSAdapter.create`'s own detection (no override) reflects the real machine, so the
+//     "case detection" describe block below asserts against the platform's own known default
+//     rather than a single hardcoded answer.
 
 describe('compareCaseSpelling', () => {
   it('the exact same spelling: exact', () => {
@@ -120,13 +126,24 @@ async function code(promise: Promise<unknown>): Promise<string> {
   throw new Error('expected a VaultError');
 }
 
-/** Two real files existing under both spellings — the only way to reach a read-type method's new
- *  case check on this (case-sensitive) machine: its own pre-existing `fs.stat` gate needs the
- *  wrongly-cased query to genuinely exist too, exactly as it would on a real folding filesystem. */
+/**
+ * Writes `real`, and — ONLY on a genuinely case-SENSITIVE filesystem — also writes `impostor` as a
+ * second, truly distinct file: a read-type method's new case check is reached only once its own
+ * pre-existing `fs.stat` gate already found something at the wrongly-cased query, and on this
+ * (case-sensitive) machine that needs the impostor spelling to genuinely exist too. On a genuinely
+ * case-INSENSITIVE filesystem (Windows, macOS by default — this describe block's forced
+ * `caseInsensitive: true` says nothing about what the machine actually running the test is)
+ * `real` and `impostor` are ALREADY the same file: writing `impostor` here would not create a
+ * second entry, it would silently overwrite the content just written above (confirmed by CI:
+ * exactly this clobbering was the first shape this bug took) — and nothing more is needed there,
+ * because the OS's own case folding already makes the wrongly-cased query stat-succeed on its own.
+ */
 async function seedDualCase(real: string, impostor: string, content = 'real\n'): Promise<void> {
   await fs.mkdir(path.dirname(path.join(root, real)), { recursive: true });
   await fs.writeFile(path.join(root, real), content);
-  await fs.writeFile(path.join(root, impostor), 'impostor — must never be read as such\n');
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    await fs.writeFile(path.join(root, impostor), 'impostor — must never be read as such\n');
+  }
 }
 
 describe('LocalFSAdapter on a filesystem faked as case-insensitive', () => {
