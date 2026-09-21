@@ -492,6 +492,30 @@ describe('vault_search_frontmatter can be scoped to a folder', () => {
     expect(slash.total).toBe(2);
   });
 
+  it('a prefix that names the vault root is no prefix: ".", "./", spaces, "/" and "" all list everything', async () => {
+    await fs.mkdir(path.join(h.root, 'notes'), { recursive: true });
+    await fs.writeFile(path.join(h.root, 'notes', 'a.md'), '---\nstate: open\n---\nx');
+    await fs.writeFile(path.join(h.root, 'b.md'), '---\nstate: open\n---\nx');
+    await h.runtime.index.reconcile(h.runtime.adapter);
+    for (const pathPrefix of ['', '/', '.', './', '   ']) {
+      const out = (
+        await h.call('vault_search_frontmatter', { field: 'state', exists: true, pathPrefix })
+      ).structuredContent as { total: number };
+      expect(out.total, JSON.stringify(pathPrefix)).toBe(2);
+    }
+  });
+
+  it('still refuses a prefix that leaves the vault or names a reserved folder', async () => {
+    for (const pathPrefix of ['..', '../x', '_brainstem', '_brainstem/tx', '.obsidian']) {
+      const r = await h.call('vault_search_frontmatter', {
+        field: 'state',
+        exists: true,
+        pathPrefix,
+      });
+      expect(r.isError, pathPrefix).toBe(true);
+    }
+  });
+
   it('refuses an unknown argument as before', async () => {
     const r = await h.call('vault_search_frontmatter', {
       field: 'state',

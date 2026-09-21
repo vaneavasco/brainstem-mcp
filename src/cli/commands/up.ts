@@ -22,8 +22,9 @@ export interface UpDeps {
   tunnelUrl?(): Promise<string | null>;
 }
 
-/** `https://host/` and `https://host` are the same place. */
-const sameUrl = (a: string, b: string): boolean => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+/** `https://host/` and `https://HOST` are the same place: host names are case-insensitive. */
+const sameUrl = (a: string, b: string): boolean =>
+  a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase();
 
 /** Tag compose uses for a locally built image (`compose.yaml` default). */
 export const LOCAL_IMAGE_TAG = 'dev';
@@ -132,7 +133,10 @@ export async function runUp(args: UpArgs, deps: UpDeps): Promise<number> {
   // carry the previous run's URL. Print only a URL two polls a few seconds
   // apart agree on, otherwise the owner pastes a dead connector URL into
   // Claude while the app is already booting on a different one.
+  let settled = true;
+  let tunnelSays: string | null | undefined;
   if (health.tunnelMode === 'quick') {
+    settled = false;
     for (let i = 0; i < URL_SETTLE_ATTEMPTS; i++) {
       await deps.sleep(URL_SETTLE_DELAY_MS);
       const again = await waitForHealth(
@@ -149,13 +153,24 @@ export async function runUp(args: UpArgs, deps: UpDeps): Promise<number> {
       // Two polls agreeing is not enough: when this `up` recreated the tunnel, the app stays
       // healthy on the PREVIOUS hostname for the seconds the new tunnel needs to get one. What
       // the app serves must also be what the tunnel itself says it has.
-      const current = deps.tunnelUrl ? await deps.tunnelUrl() : undefined;
+      // A reader that fails is "no URL yet", never a crash of `up`.
+      tunnelSays = deps.tunnelUrl ? await deps.tunnelUrl().catch(() => null) : undefined;
       const matchesTunnel =
-        current === undefined || (current !== null && sameUrl(current, again.publicUrl));
-      const settled = again.publicUrl === health.publicUrl && matchesTunnel;
+        tunnelSays === undefined || (tunnelSays !== null && sameUrl(tunnelSays, again.publicUrl));
+      settled = sameUrl(again.publicUrl, health.publicUrl) && matchesTunnel;
       health = again;
       if (settled) break;
     }
+  }
+
+  if (!settled) {
+    // Never hand the owner a connector URL that was not confirmed: that is a dead URL pasted
+    // into Claude. Say what each side reports and let them ask again.
+    deps.print(
+      `The tunnel URL did not settle: the app serves ${health.publicUrl}, the tunnel reports ` +
+        `${tunnelSays ?? 'nothing yet'}. Run ./brainstem url in a minute.`,
+    );
+    return 1;
   }
 
   for (const line of upSummary(health, {

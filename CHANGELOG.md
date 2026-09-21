@@ -19,7 +19,8 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 - `./brainstem up` could print a quick-tunnel URL that was already dead: when the same `up`
   recreated the tunnel, the app stayed healthy on the previous hostname for a few seconds and
   two agreeing health polls were taken for a settled URL. `up` now also requires the URL the app
-  serves to be the one the tunnel itself reports.
+  serves to be the one the tunnel itself reports, and when the two never agree it says what each
+  side reports and exits 1 instead of printing a connector URL it could not confirm.
 - `qs` 6.16.0 (two moderate advisories, reached through Express). CI now stops at a moderate
   advisory in a runtime dependency; it stopped only at high, so this one went unnoticed.
 

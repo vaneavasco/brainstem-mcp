@@ -15,12 +15,18 @@ export function tunnelUrlReader(
   readFile: (p: string) => Promise<string> = (p) => fs.readFile(p, 'utf8'),
 ): () => Promise<string | null> {
   return async () => {
+    if (env.get('TUNNEL_MODE') !== 'quick') return null; // only a quick tunnel writes this file
     const vault = env.get('VAULT_PATH') ?? '';
     const file = env.get('PUBLIC_URL_FILE') ?? '';
     if (vault === '' || !file.startsWith(CONTAINER_VAULT)) return null;
+    // `..` in the configured path must not walk out of the vault
+    const root = path.resolve(vault);
+    const target = path.resolve(root, file.slice(CONTAINER_VAULT.length));
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) return null;
     try {
-      const text = (await readFile(path.join(vault, file.slice(CONTAINER_VAULT.length)))).trim();
-      return /^https:\/\/[^\s/]+\/?$/.test(text) ? text : null;
+      const text = (await readFile(target)).replace(/^\ufeff/, '').trim();
+      // one bare https origin: no credentials, no path, no second line
+      return /^https:\/\/[^\s/@]+\/?$/.test(text) ? text : null;
     } catch {
       return null;
     }

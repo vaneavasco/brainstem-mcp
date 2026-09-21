@@ -374,10 +374,14 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
           );
         }
         // A folder boundary, as in vault_query: "notes/2026" is not a prefix of "notes/2026-drafts".
-        const prefix =
-          pathPrefix === undefined || pathPrefix === '' || pathPrefix === '/'
-            ? ''
-            : `${normalizeVaultPath(pathPrefix).replace(/\/+$/, '')}/`;
+        // ".", "./", "/" and blanks all name the vault root, which is no prefix. Anything else goes
+        // through the path policy, so ".." or a reserved folder is still refused, not emptied.
+        const isRoot = (pathPrefix ?? '')
+          .trim()
+          .split(/[\\/]/)
+          .every((segment) => segment === '' || segment === '.');
+        const folder = isRoot ? '' : normalizeVaultPath(pathPrefix ?? '').replace(/\/+$/, '');
+        const prefix = folder === '' ? '' : `${folder}/`;
         const hits = index
           .query({
             field,

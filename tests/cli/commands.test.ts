@@ -166,6 +166,55 @@ describe('runUp', () => {
     expect(lines.join('\n')).not.toContain('https://old.trycloudflare.com');
   });
 
+  it('says so, and fails, when the URL never settles on what the tunnel reports', async () => {
+    const compose = new FakeCompose();
+    const lines: string[] = [];
+    const sleeps: number[] = [];
+    const code = await runUp(
+      {},
+      upDeps(compose, {
+        print: (l) => lines.push(l),
+        fetchImpl: healthOk('https://old.trycloudflare.com'),
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        tunnelUrl: async () => 'https://new.trycloudflare.com',
+      }),
+    );
+    expect(code).toBe(1);
+    const out = lines.join('\n');
+    expect(out).toMatch(/did not settle/);
+    expect(out).toContain('https://new.trycloudflare.com');
+    expect(out).not.toMatch(/^Connector URL: https:\/\/old/m);
+    expect(sleeps.length).toBeLessThanOrEqual(10);
+  });
+
+  it('treats host names that differ only by case as the same, and survives a reader that throws', async () => {
+    const lines: string[] = [];
+    const ok = await runUp(
+      {},
+      upDeps(new FakeCompose(), {
+        print: (l) => lines.push(l),
+        fetchImpl: healthOk('https://Alpha.trycloudflare.com'),
+        sleep: async () => {},
+        tunnelUrl: async () => 'https://alpha.trycloudflare.com/',
+      }),
+    );
+    expect(ok).toBe(0);
+    const thrown = await runUp(
+      {},
+      upDeps(new FakeCompose(), {
+        print: () => {},
+        fetchImpl: healthOk('https://alpha.trycloudflare.com'),
+        sleep: async () => {},
+        tunnelUrl: async () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    expect(thrown).toBe(1); // an unreadable tunnel file is "no URL yet", not a crash
+  });
+
   it('without a tunnel skips the profile and does not warn about rotation', async () => {
     const compose = new FakeCompose();
     const lines: string[] = [];
