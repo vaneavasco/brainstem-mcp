@@ -6,6 +6,11 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-22
+
+What the first real install of the bundle, on Windows 11, taught: a typed setting must never
+stop the server.
+
 ### Fixed (stdio)
 
 - **A wrong optional setting in the install form no longer stops the server.** The first
@@ -766,6 +771,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.7.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.1...v0.5.0
