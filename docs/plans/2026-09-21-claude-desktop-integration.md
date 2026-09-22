@@ -197,6 +197,19 @@ Left open by phase 6, to be checked on a real Mac in phase 7: GitHub's macOS run
 
 The five costliest prompts of the reader test, run through stdio in Claude Code on the large vault and compared with the HTTP runs (calls, characters, errors), then one session by a person on macOS or Windows with the installed bundle. Findings are fixed or listed.
 
+**What only a live install can show (2026-09-22, for the Windows 11 and macOS colleagues; the owner is on Linux).** Each item is a yes/no to report back, with the Claude Desktop version:
+
+1. Download `…/releases/latest/download/brainstem-mcp.mcpb`; Settings → Extensions → Advanced settings → Install Extension… accepts it. What the unsigned-extension warning says, word for word.
+2. The install form shows the four fields (vault folder, read-only, timezone, daily-notes folder) with the descriptions from the manifest; the folder picker works; `read_only` is a checkbox.
+3. The server starts: `brainstem_ping` answers, `version` is `0.7.0+<sha>`, `search.regexEngine` says `builtin` unless ripgrep is installed, `readOnly` matches the checkbox. This proves `command: "node"` resolves to the app's own Node (nothing else is installed).
+4. Turn the read-only checkbox on and off in the extension's settings: the tool list changes (17 vs 32) on the next conversation.
+5. Install a newer `.mcpb` over the old one: the four settings survive; the version changes.
+6. Where the log is (Settings → Extensions → the extension → logs, or the app's log folder): the one info line about ripgrep is there; nothing at `warn` or above on a clean start.
+7. macOS only: edit a note in Obsidian while Desktop is open, then ask Claude for it within a few seconds — proves native watch events on a real Mac (GitHub's runners had none). Also `vault_delete` twice in a row on two notes, then a search for their titles: nothing found (the watcher-vs-tool race fixed in 0.7.0).
+8. macOS only: a FIFO in the vault would once have frozen the server; not worth reproducing by hand — covered by the suite on the macOS runner.
+9. Windows only: a vault under OneDrive or another synced folder: writes succeed (rename retries), and `brainstem_ping` reports `localPeers: 0` with one Desktop window open.
+10. Both: the vault on an external or network drive if anyone has one; a vault path with spaces and non-ASCII letters.
+
 ## Out of scope
 
 A stdio bridge to the HTTP server; any change under `src/auth/`; SQLite; multi-user; a setup UI; bundling a Node runtime of our own.
