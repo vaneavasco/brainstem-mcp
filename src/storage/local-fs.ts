@@ -1027,7 +1027,9 @@ export class LocalFSAdapter implements StorageAdapter {
         const hit = regexMatcher
           ? regexMatcher.find(line) !== null
           : (caseSensitive ? line : line.toLowerCase()).includes(needle);
-        if (hit) out.push({ path: candidate, line: i + 1, text: clampMatchText(line.trimEnd()) });
+        // the line as it is, trailing whitespace included: ripgrep mode returns the same bytes, and
+        // an agent may hand this text back to vault_edit as the exact string to replace
+        if (hit) out.push({ path: candidate, line: i + 1, text: clampMatchText(line) });
       }
       if (out.length >= limit) break;
     }

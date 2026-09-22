@@ -214,6 +214,14 @@ function parsePattern(pattern: string): Ast {
       advance();
       negated = true;
     }
+    // "[[:alpha:]]" is a POSIX bracket expression, which ripgrep understands and this engine does
+    // not: refused by name, because parsed as a plain class it silently meant "one of [:alph".
+    if (peek() === '[' && at(1) === ':') {
+      throw invalid(
+        'POSIX character classes such as "[[:alpha:]]" are not supported here; ' +
+          'use "[a-zA-Z]", "\\d", "\\s" or "\\w" instead.',
+      );
+    }
     const items: SetItem[] = [];
     for (;;) {
       const c = peek();
@@ -294,6 +302,8 @@ function parsePattern(pattern: string): Ast {
             : { negated: false, items: [{ type: 'range', from: atom.cp, to: atom.cp }] },
       };
     }
+    if (peek() === ']')
+      throw invalid('unexpected "]" outside a character class: escape it as "\\]".');
     return { kind: 'set', set: literalSet(advance()) };
   }
 

@@ -224,6 +224,20 @@ describe.each(regexToolBackends)('vault_search regex ($name)', ({ ripgrepPath })
       await regexHarness.close();
     }
   });
+
+  it('returns the line as it is, trailing whitespace included, whichever engine ran', async () => {
+    // an agent hands this text back to vault_edit as the exact string to replace: the two
+    // engines must return the same bytes (the JS one used to trim the end)
+    const regexHarness = await startHarness(undefined, ripgrepPath);
+    try {
+      await regexHarness.call('vault_write', { path: 'w.md', content: 'keep me   \nplain\n' });
+      const r = await regexHarness.call('vault_search', { query: 'keep', regex: true });
+      const sc = r.structuredContent as { matches: { text: string }[] };
+      expect(sc.matches[0]?.text).toBe('keep me   ');
+    } finally {
+      await regexHarness.close();
+    }
+  });
 });
 
 describe('vault_search regex — INVALID_INPUT when ripgrep is absent', () => {

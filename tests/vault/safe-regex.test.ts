@@ -462,3 +462,15 @@ describe('compileSafeSearch — cannotMatch is sound (fuzz)', () => {
     expect(realMatchesSeen).toBeGreaterThan(50);
   });
 });
+
+describe('constructs the engine does not support are refused, never reinterpreted', () => {
+  it('a POSIX bracket expression is INVALID_INPUT naming it (it used to parse as junk)', () => {
+    for (const p of ['[[:alpha:]]+', '[[:digit:]]', '[^[:space:]]', 'x[[:upper:]]y']) {
+      expect(() => compileSafeSearch(p), p).toThrow(/POSIX/);
+    }
+  });
+
+  it('a stray "]" is INVALID_INPUT, not a literal', () => {
+    expect(() => compileSafeSearch('a]b')).toThrow(/"\]"/);
+  });
+});

@@ -134,7 +134,9 @@ jobs:
             release/*.mcpb
             release/SHA256SUMS
           if-no-files-found: error
+      # a pull request from a fork runs with read-only permissions whatever the block above says
       - name: attest build provenance
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: release/*.mcpb
