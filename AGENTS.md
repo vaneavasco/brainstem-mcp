@@ -32,15 +32,23 @@ src/vault/            runtime, frontmatter index, note-parse, graph, link-rewrit
                       daily notes, canvas, connection note, instructions
 src/tunnel/           cloudflared supervisor (quick + named modes), public-url file
 src/cli/              commander CLI; one file per command in commands/, deps injected
+src/vault/safe-regex.ts  the linear-time engine both vault_query's `regex` op and vault_search's
+                      JS fallback build on (compileSafeSearch: unanchored, a required-literal
+                      prefilter, cannotMatch) — see the module's own doc comment for the syntax
 tests/                mirrors src/; tests/tools/harness.ts boots a real server + MCP client
-scripts/              docker-smoke.sh, mcp-call.ts (headless OAuth + tool calls)
+scripts/              docker-smoke.sh, mcp-call.ts (headless OAuth + tool calls),
+                      bundle-build.ts/bundle-manifest.ts/bundle-icon.ts/bundle-pack.ts (the
+                      Claude Desktop .mcpb — esbuild bundle, generated manifest, packed release)
+bundle/, release/     gitignored output of `npm run bundle`: bundle/ is the unpacked extension
+                      (dist/stdio-main.js + manifest.json + icon + LICENSE/README excerpt),
+                      release/ the packed .mcpb files and SHA256SUMS
 ```
 
 ## Commands
 
 ```bash
 npm ci                      # dev install (the ./brainstem launcher installs runtime-only)
-npm test                    # vitest; 15 ripgrep tests skip when `rg` is not installed
+npm test                    # vitest; 10 ripgrep-only tests skip when `rg` is not installed (regex-result tests run either way, against the builtin engine)
 npm run test:scale          # 40,000-note run: memory, build time, bounded results (about a minute)
 npm run typecheck           # tsc --noEmit
 npm run lint                # biome check .   (npm run lint:fix to apply)
@@ -48,9 +56,13 @@ npm run dev                 # server without Docker, reads .env
 npm run stdio -- --vault <path>  # local stdio server without Docker, a tunnel or OAuth
 npm run docker:smoke        # end-to-end against the Docker image (needs Docker)
 npm run mcp:call -- --list  # authenticate headlessly and call tools on a running instance
+npm run bundle:build        # esbuild src/stdio-main.ts -> bundle/dist/stdio-main.js (one file)
+npm run bundle:manifest     # generate bundle/manifest.json + icon.png from package.json + the tool registry
+npm run bundle              # build + manifest + LICENSE/README + `mcpb validate`/`pack` -> release/*.mcpb, SHA256SUMS
+npm run test:bundle         # bundle:build + tests/stdio/** run against the BUNDLED file (vitest.bundle.config.ts)
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note scale run, `npm audit --omit=dev --audit-level=moderate`, build, the Docker smoke, then publishes images. A change is not done until CI is green.
+CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests, the 40,000-note scale run, `npm audit --omit=dev --audit-level=moderate`, build, the Docker smoke, the Claude Desktop bundle (build + `test:bundle`, uploaded as an artifact, attested and attached to the release on a tag), then publishes images. A change is not done until CI is green.
 
 ## Conventions that will bite you
 

@@ -20,7 +20,7 @@ Handing this to someone non-technical — a manager, a marketer, anyone who just
 
 ## Status
 
-**v0.6.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
+**v0.7.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
 
 Verified end-to-end: Linux host · Claude Code · claude.ai web (all tools, via a live quick tunnel) · Docker smoke test in CI.
 Implemented but not yet verified by a real run: Claude mobile app · `cloudflare` (token) tunnel mode · Windows and macOS launchers · reconnect after a tunnel restart.
@@ -84,7 +84,15 @@ On your own machine, Claude Code and Claude Desktop can start the server themsel
 claude mcp add brainstem -- /path/to/brainstem stdio
 ```
 
-A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. Claude Desktop will use an installable bundle for this instead — coming soon. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
+A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
+
+**Recommended: install ripgrep.** `vault_search` works either way: with ripgrep on `PATH` it has the full regular-expression syntax and reads the vault in parallel; without it, a builtin linear-time engine runs instead, with a reduced syntax (the tool's description lists it) on a single thread. Measured on a real vault of 37,707 notes: about 30 ms per search with ripgrep, about 1 s without (a literal search costs the same second: it is the reading of the files, not the matching), and up to 6 s for a pattern with alternation and counted repeats. On a vault of a few thousand notes the difference is not noticeable. The server detects ripgrep at start and `brainstem_ping` reports which engine is in use (`search.regexEngine`).
+
+```bash
+brew install ripgrep                          # macOS
+winget install BurntSushi.ripgrep.MSVC        # Windows
+sudo apt install ripgrep                      # Debian/Ubuntu
+```
 
 ### Where stdio keeps its state
 
@@ -106,6 +114,34 @@ It lives next to the state folder above but is a **separate** machine-local fold
 ### Read-only mode
 
 `./brainstem stdio --read-only` (or `VAULT_READ_ONLY=true` in `.env`, either way in) registers only the tools whose own annotations mark them `readOnlyHint: true` — reading, searching, listing, querying — so nothing that could change a note, a canvas or a file is even offered to the client; `tools/list` doesn't show the rest, and calling one fails as an unknown tool. It's the right default for a connection that should only ever be asked questions, and a safety net for a vault synced between people. `brainstem_ping`'s `readOnly` field and one extra sentence in the connection instructions say when it's on; `/health`'s `vault.readOnly` shows it for the HTTP server too. A read-only boot also writes nothing into the vault on its own (no seeded instructions template, no connection note): the OAuth token store is the one exception, since it isn't vault content.
+
+## Claude Desktop
+
+On macOS and Windows, Claude Desktop can install this server as an extension — an `.mcpb` bundle: the same stdio server as above (no Docker, no tunnel, no Node to install, since Desktop carries its own), packaged as one file.
+
+1. Download `brainstem-mcp-X.Y.Z.mcpb` (or the fixed-name `brainstem-mcp.mcpb`, which always points at the latest release) from the [releases page](https://github.com/vaneavasco/brainstem-mcp/releases).
+2. In Claude Desktop: **Settings → Extensions → Advanced settings → Install Extension…**, and pick the downloaded file. (A double-click or a drag onto the Extensions page works too, where Desktop offers it.)
+3. The install form asks for the **vault folder** (required — any folder works, including an empty one), whether it should be **read-only**, a **timezone** for daily notes (defaults to UTC), and a **daily notes folder** (defaults to the vault root). These match `--vault`, `--read-only`, `VAULT_TIMEZONE` and `DAILY_NOTES_FOLDER` above — the bundle is a wrapper around the same server, not a separate one.
+4. Grant the extension's permissions when asked, and it's ready — no restart needed.
+
+**One vault per install.** A second vault means installing the extension again (Desktop treats each install as its own instance) or, on Linux — not a supported Desktop platform, so no bundle — using `claude mcp add` as described above instead.
+
+**Updating** is installing the newer `.mcpb` file; the extension does not update itself.
+
+**Unsigned, at first.** Desktop logs "Installing unsigned extension" and installs anyway; nothing here asks for a password or a secret. To check what you downloaded actually came from this repository's CI, verify the SHA-256 against `SHA256SUMS` in the same release:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing   # Linux
+shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
+```
+
+and, for the stronger check (that it was built by GitHub Actions from this exact commit, not hand-assembled and uploaded), verify the build attestation with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify brainstem-mcp-X.Y.Z.mcpb --repo vaneavasco/brainstem-mcp
+```
+
+**Recommended: install ripgrep** (see above): the full regex syntax, and searches in tens of milliseconds instead of about a second on a large vault — the same either way, whether Claude reaches the server through the bundle or through `claude mcp add`.
 
 ## Commands
 

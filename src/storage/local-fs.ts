@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { watch as chokidarWatch } from 'chokidar';
 import picomatch from 'picomatch';
 import { sha256hex } from '../auth/hash.ts';
+import { compileSafeSearch, type SafeSearchMatcher } from '../vault/safe-regex.ts';
 import {
   applyFrontmatterUpdate,
   joinFrontmatter,
@@ -930,11 +931,25 @@ export class LocalFSAdapter implements StorageAdapter {
         `regex pattern exceeds ${MAX_SEARCH_PATTERN_CHARS} characters (got ${query.length}).`,
       );
     }
+    // Ripgrep validates its own (much larger) regex syntax itself, on the spawned process; the JS
+    // fallback's reduced syntax is validated up front, here, by compiling before any file is
+    // read — so a malformed pattern fails the same way (INVALID_INPUT, before any I/O) whether or
+    // not ripgrep happens to be installed.
+    let safeSearchMatcher: SafeSearchMatcher | null = null;
     if (regex && !this.rg) {
-      throw new VaultError(
-        'UNSUPPORTED',
-        'regex search needs ripgrep (the Docker image has it); use a literal query here',
-      );
+      try {
+        safeSearchMatcher = compileSafeSearch(query, { caseSensitive: opts.caseSensitive });
+      } catch (error) {
+        if (error instanceof VaultError && error.code === 'INVALID_INPUT') {
+          throw new VaultError(
+            'INVALID_INPUT',
+            `${error.message} ripgrep is not installed, so only this reduced regex syntax is ` +
+              'available (literals, ., character classes, * + ? {m,n}, alternation, grouping); ' +
+              'install ripgrep for the full syntax.',
+          );
+        }
+        throw error;
+      }
     }
     if (opts.paths !== undefined && opts.paths.length > MAX_SEARCH_PATHS) {
       throw new VaultError(
@@ -970,7 +985,7 @@ export class LocalFSAdapter implements StorageAdapter {
 
     const matches = this.rg
       ? await this.searchRipgrep(query, prefix, limit, caseSensitive, regex, paths)
-      : await this.searchJs(query, prefix, limit, caseSensitive, paths);
+      : await this.searchJs(query, prefix, limit, caseSensitive, paths, safeSearchMatcher);
     return matches.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
   }
 
@@ -980,6 +995,10 @@ export class LocalFSAdapter implements StorageAdapter {
     limit: number,
     caseSensitive: boolean,
     paths?: string[],
+    /** Compiled once by `search()` and reused across every candidate file/line — never recompiled
+     *  per line — when `regex: true` was requested and ripgrep is not available (see
+     *  `src/vault/safe-regex.ts`). `null` for a literal (non-regex) search. */
+    regexMatcher?: SafeSearchMatcher | null,
   ): Promise<Match[]> {
     const candidates = paths
       ? paths
@@ -996,12 +1015,21 @@ export class LocalFSAdapter implements StorageAdapter {
       } catch {
         continue;
       }
+      // The required-literal prefilter (src/vault/safe-regex.ts) rules out a whole file with one
+      // pass over its raw text, before ever splitting it into lines: `find()` below already runs
+      // the same check per LINE, but a file that fails it can never have a matching line, so this
+      // skips the split (and every per-line NFA run `find()` would otherwise have to reject one
+      // at a time) entirely for a file the required literal doesn't appear in anywhere.
+      if (regexMatcher?.cannotMatch(text)) continue;
       const lines = text.split('\n');
       for (let i = 0; i < lines.length && out.length < limit; i += 1) {
         const line = lines[i] ?? '';
-        const haystack = caseSensitive ? line : line.toLowerCase();
-        if (haystack.includes(needle))
-          out.push({ path: candidate, line: i + 1, text: clampMatchText(line.trimEnd()) });
+        const hit = regexMatcher
+          ? regexMatcher.find(line) !== null
+          : (caseSensitive ? line : line.toLowerCase()).includes(needle);
+        // the line as it is, trailing whitespace included: ripgrep mode returns the same bytes, and
+        // an agent may hand this text back to vault_edit as the exact string to replace
+        if (hit) out.push({ path: candidate, line: i + 1, text: clampMatchText(line) });
       }
       if (out.length >= limit) break;
     }

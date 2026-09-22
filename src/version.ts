@@ -5,10 +5,23 @@ interface PackageJson {
   version: string;
 }
 
-// Works from both src/ (dev) and dist/ (prod): package.json is one level above either directory.
-const pkg = JSON.parse(
-  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-) as PackageJson;
+/**
+ * `../package.json` relative to THIS file works from `src/` (dev), `dist/` (the Docker image's
+ * `tsc` build — one directory under the package root either way) and would still work from
+ * `bundle/dist/` if it ever needed to (one directory under `bundle/`, which is where a
+ * `bundle:build`-produced `bundle/package.json` would have to live) — but the bundle never
+ * reaches this call in practice, because `process.env.BRAINSTEM_BUNDLE_VERSION` (below) is
+ * defined at build time instead: esbuild's `packages: 'bundle'` inlines everything reachable
+ * from `import.meta.url`-relative reads too, so a bundled `readFileSync(new URL('../package.json',
+ * import.meta.url))` would look for a `package.json` the bundle doesn't ship — resolving the
+ * version at BUILD time, not at import time, sidesteps that entirely.
+ */
+function readPackageVersion(): string {
+  const pkg = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as PackageJson;
+  return pkg.version;
+}
 
 /**
  * The version a server reports: the package version, plus the commit the image was built from as
@@ -21,7 +34,13 @@ export function serverVersion(packageVersion: string, buildSha: string | undefin
   return sha === '' ? packageVersion : `${packageVersion}+${sha}`;
 }
 
+// scripts/bundle-build.ts sets this with esbuild's `define`, so the version a bundled
+// dist/stdio-main.js reports is fixed at build time, from package.json at that moment — the
+// bundle carries no package.json of its own to read at runtime. Everywhere else (dev, the Docker
+// image's tsc build, tests) this is unset, and the version is read from package.json as before.
+const packageVersion = process.env.BRAINSTEM_BUNDLE_VERSION || readPackageVersion();
+
 export const SERVER_INFO = {
   name: 'brainstem-mcp' as const,
-  version: serverVersion(pkg.version, process.env.BRAINSTEM_BUILD_SHA),
+  version: serverVersion(packageVersion, process.env.BRAINSTEM_BUILD_SHA),
 };

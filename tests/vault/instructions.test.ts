@@ -9,6 +9,7 @@ import {
   MAX_OWNER_INSTRUCTIONS_CHARS,
   OWNER_INSTRUCTIONS_HEADING,
   renderInstructionsTemplate,
+  ripgrepAbsentInstructionsNote,
   writeInstructionsTemplateIfMissing,
 } from '../../src/vault/instructions.ts';
 import { startHarness } from '../tools/harness.ts';
@@ -148,5 +149,18 @@ describe('renderInstructionsTemplate', () => {
     expect(t.startsWith('---\ntype: brainstem-instructions\n')).toBe(true);
     expect(t).toContain('<!--');
     expect(t).toContain('-->');
+  });
+});
+
+describe('ripgrepAbsentInstructionsNote', () => {
+  it('is empty when ripgrep was found (nativeSearch: true) — nothing to say', () => {
+    expect(ripgrepAbsentInstructionsNote(true)).toBe('');
+  });
+
+  it('names the reduced syntax when ripgrep was not found, so the model does not have to guess', () => {
+    const note = ripgrepAbsentInstructionsNote(false);
+    expect(note).toContain('ripgrep is not installed');
+    expect(note).toContain('vault_search');
+    expect(note.startsWith('\n\n')).toBe(true); // appended after existing instructions text
   });
 });

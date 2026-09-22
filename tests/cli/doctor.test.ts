@@ -45,12 +45,13 @@ describe('parseMajor', () => {
 
 describe('runDoctorChecks', () => {
   it('passes on a healthy machine with a valid .env', async () => {
-    // All nine checks only appear when docker is present — the daemon and
+    // All ten checks only appear when docker is present — the daemon and
     // compose checks cascade off it (see the docker-missing test below).
     const checks = await runDoctorChecks({ probe: probe(), env: goodEnv(), vaultCtx, print() {} });
     expect(checks.every((c) => c.ok)).toBe(true);
     expect(checks.map((c) => c.name)).toEqual([
       'node',
+      'ripgrep',
       'docker',
       'docker-daemon',
       'compose',
@@ -85,6 +86,7 @@ describe('runDoctorChecks', () => {
     // remedy read like three problems. Skip them and let the docker check speak.
     expect(missing.map((c) => c.name)).toEqual([
       'node',
+      'ripgrep',
       'docker',
       'env',
       'owner-secret',
@@ -99,7 +101,7 @@ describe('runDoctorChecks', () => {
       print() {},
       prerequisitesOnly: true,
     });
-    expect(missingPrereqs.map((c) => c.name)).toEqual(['node', 'docker']);
+    expect(missingPrereqs.map((c) => c.name)).toEqual(['node', 'ripgrep', 'docker']);
     const stopped = await runDoctorChecks({
       probe: probe({ results: { 'docker info': { code: 1 } } }),
       env: goodEnv(),
@@ -152,6 +154,26 @@ describe('runDoctorChecks', () => {
       print() {},
       prerequisitesOnly: true,
     });
-    expect(checks.map((c) => c.name)).toEqual(['node', 'docker', 'docker-daemon', 'compose']);
+    expect(checks.map((c) => c.name)).toEqual([
+      'node',
+      'ripgrep',
+      'docker',
+      'docker-daemon',
+      'compose',
+    ]);
+  });
+
+  it('the ripgrep check is informational: absent never fails doctor, but names the install remedy', async () => {
+    const checks = await runDoctorChecks({
+      probe: probe({ results: { 'rg --version': { code: 127 } } }),
+      env: goodEnv(),
+      vaultCtx,
+      print() {},
+    });
+    const ripgrep = checks.find((c) => c.name === 'ripgrep');
+    expect(ripgrep?.ok).toBe(true);
+    expect(ripgrep?.detail).toMatch(/not found/);
+    expect(ripgrep?.remedy).toBeTruthy();
+    expect(checks.every((c) => c.ok)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,9 +8,17 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SERVER_INFO } from '../../src/version.ts';
 import { testMachineHomeEnv } from '../helpers/state-home.ts';
+import { STDIO_ENTRY as STDIO_MAIN } from '../helpers/stdio-entry.ts';
 import { startHarness } from '../tools/harness.ts';
 
-const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
+function hasRipgrep(): boolean {
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface StdioSession {
   client: Client;
@@ -135,6 +143,20 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
     expect(ping.isError).toBeFalsy();
     expect(structured(ping).version).toBe(SERVER_INFO.version);
     expect(structured(ping).server).toBe(SERVER_INFO.name);
+  });
+
+  it('brainstem_ping.search.regexEngine and the initialize instructions agree on whether ripgrep is available', async () => {
+    const stdio = await startStdioSession();
+    cleanups.push(() => stdio.close());
+    const ping = await stdio.client.callTool({ name: 'brainstem_ping', arguments: {} });
+    const engine = (structured(ping).search as { regexEngine: string }).regexEngine;
+    expect(engine).toBe(hasRipgrep() ? 'ripgrep' : 'builtin');
+    const instructions = stdio.client.getInstructions() ?? '';
+    if (engine === 'builtin') {
+      expect(instructions).toContain('ripgrep is not installed');
+    } else {
+      expect(instructions).not.toContain('ripgrep is not installed');
+    }
   });
 });
 

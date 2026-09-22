@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+/bundle/
+/release/
 .env
 .env.*
 !.env.example

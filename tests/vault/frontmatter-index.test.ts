@@ -633,3 +633,33 @@ describe('what a hostile or odd note cannot do to the index', () => {
     expect(() => index.watchBudget(Number.NaN)).toThrow(RangeError);
   });
 });
+
+describe('a refresh started by a watcher event never resurrects a note a tool removed meanwhile', () => {
+  it('remove() during a slow read wins over the read', async () => {
+    // macOS reports a rename as a change: the watcher's refreshPath had stat'ed the note before
+    // vault_delete moved it to .trash, and its upsert landed after the tool's index.remove
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-index-race-'));
+    try {
+      await fs.writeFile(path.join(root, 'a.md'), '---\nk: 1\n---\n');
+      const adapter = await LocalFSAdapter.create(root, { ripgrepPath: null });
+      const index = await FrontmatterIndex.build(adapter);
+      let release: () => void = () => {};
+      const held = new Promise<void>((r) => {
+        release = r;
+      });
+      const read = adapter.read.bind(adapter);
+      adapter.read = async (p) => {
+        const note = await read(p);
+        await held; // the read finished before the removal; its result arrives after
+        return note;
+      };
+      const refresh = index.refreshPath(adapter, 'a.md');
+      index.remove('a.md');
+      release();
+      await refresh;
+      expect(index.get('a.md')).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

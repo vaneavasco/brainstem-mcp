@@ -103,11 +103,61 @@ jobs:
       - if: always()
         run: docker compose down
 
+  # The Claude Desktop bundle (.mcpb): esbuild-bundles the stdio server, generates and validates
+  # the manifest, packs it into release/, then proves the PACKED file (not just the sources) with
+  # the same tests/stdio/** suite the `verify`/`platforms` jobs already ran against the source —
+  # see vitest.bundle.config.ts. Runs on every push and PR (the artifact is useful for review even
+  # without a tag); a v* tag additionally attaches the bundle to that tag's GitHub release (created
+  # as a draft if the human hasn't made one yet — they publish it) and attests its build
+  # provenance, so `gh attestation verify` can tie a downloaded .mcpb back to this exact commit
+  # and workflow run.
+  bundle:
+    needs: [verify, platforms]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run bundle
+      - run: npm run test:bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brainstem-mcp-bundle
+          path: |
+            release/*.mcpb
+            release/SHA256SUMS
+          if-no-files-found: error
+      # a pull request from a fork runs with read-only permissions whatever the block above says
+      - name: attest build provenance
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: release/*.mcpb
+      - name: attach to the GitHub release for this tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --title "$tag" \
+              --notes "Draft release for $tag — edit and publish by hand (see AGENTS.md's Releasing section)."
+          fi
+          gh release upload "$tag" release/*.mcpb release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
   # The prebuilt images `./brainstem up` pulls (see compose.yaml): sha-<7> for
   # every commit on main, plus vX.Y.Z and latest for release tags. Both images
   # build from the repo root; multi-arch so Apple-silicon/ARM hosts pull too.
   publish-images:
-    needs: [verify, docker-smoke, platforms]
+    needs: [verify, docker-smoke, platforms, bundle]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

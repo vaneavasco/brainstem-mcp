@@ -80,6 +80,13 @@ const PingOutput = z.looseObject({
   /** Other live stdio processes on this vault, on this machine, counted at call time — see
    *  `FactoryDeps.localPeers`. Absent on the HTTP server. */
   localPeers: z.number().optional(),
+  search: z.looseObject({
+    /** Which engine `vault_search({ regex: true })` runs on: ripgrep (full syntax, faster) when
+     *  `rg` was found on PATH at boot, otherwise the builtin linear-time engine (a reduced
+     *  syntax — see `src/vault/safe-regex.ts`). Detected once, at adapter creation; installing or
+     *  removing ripgrep takes effect on the next boot, not the next call. */
+    regexEngine: z.enum(['ripgrep', 'builtin']),
+  }),
 });
 
 /** Builds a fresh McpServer for one request (stateless per MCP 2026-07-28). */
@@ -145,6 +152,9 @@ export async function createVaultServer(
           },
           readOnly,
           ...(deps.localPeers ? { localPeers: await deps.localPeers() } : {}),
+          search: {
+            regexEngine: runtime.adapter.capabilities().nativeSearch ? 'ripgrep' : 'builtin',
+          },
         };
         return { content: [{ type: 'text', text: JSON.stringify(out) }], structuredContent: out };
       }),

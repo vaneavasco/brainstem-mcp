@@ -6,6 +6,14 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-22
+
+The Claude Desktop bundle: `brainstem-mcp-0.7.0.mcpb` on the release page, one file that
+installs the stdio server on macOS and Windows 11 with no Docker, no tunnel and no secret.
+Regex search works without ripgrep. The whole suite now runs on Linux, macOS and Windows, which
+found and fixed platform defects in the vault paths, the file watcher and the file renames.
+Phases 5 and 6 of the Claude Desktop integration plan.
+
 Phase 6 of the Claude Desktop integration plan: the whole test suite now runs on Linux, macOS
 and Windows 11 in CI (`platforms` in `.github/workflows/ci.yml`), which found the two defects
 below — both apply everywhere, not only on the platforms that surfaced them.
@@ -29,11 +37,74 @@ below — both apply everywhere, not only on the platforms that surfaced them.
   can't rename falls back to a verified copy-then-remove (copy everything, verify the copy, only
   then remove the original — never the other order). `src/storage/local-fs.ts`.
 
+- **A FIFO, socket or device named like a note no longer freezes the server on macOS.** There,
+  unlike on Linux, resolving or watching such a path opens it, and opening a FIFO blocks until a
+  writer comes: the containment check every operation runs, the case check above, and the file
+  watcher each did so. None of the three touches anything that is not a plain file or a folder
+  now. (Found by the macOS leg of the suite, three runs in a row.)
+- **A note deleted or moved by a tool can no longer be put back into the index by the file
+  watcher.** On macOS a rename reaches the watcher as a change; its refresh had read the note
+  before the move and wrote it back after the tool's own removal. A refresh that began before
+  such a removal now discards its result. (Found by the macOS leg of the suite, once.)
+- **`VAULT_READ_ONLY` is read in every usual spelling** (`true`/`false`, `1`/`0`, `yes`/`no`,
+  `on`/`off`, any case; empty means not set), because an install form substitutes a boolean into
+  the environment in a spelling nothing documents, and a server that refuses to start over `True`
+  would be the installer's first experience of it.
+
 ### Changed
 
 - `platforms` (the three-OS suite above) is now required for `publish-images`: an image is never
   published from a commit whose tests didn't pass on Windows and macOS, not only Linux.
   `.github/workflows/ci.yml`.
+
+### Added (stdio)
+
+- **Regex search no longer needs ripgrep.** `vault_search({ regex: true })` used to throw
+  `UNSUPPORTED` ("the Docker image has it") when `rg` wasn't on `PATH` — wrong for a bundle or a
+  bare `stdio` install. It now falls back to a builtin linear-time regex engine
+  (`compileSafeSearch` in `src/vault/safe-regex.ts`, the same Thompson-NFA machinery `vault_query`'s
+  `regex` condition already used, extended with unanchored search and a `caseSensitive` option) —
+  a reduced syntax (literals, `.`, character classes, `* + ? {m,n}`, alternation, grouping; no
+  anchors, lookaround or backreferences), rejecting anything else with `INVALID_INPUT` naming the
+  construct. Ripgrep is recommended, not required: installed, it's still used (full syntax,
+  faster); either way, `brainstem_ping` gains `search.regexEngine: 'ripgrep' | 'builtin'`, the
+  `vault_search` description says which syntax applies, and the `initialize` instructions gain one
+  sentence when ripgrep is absent. `src/storage/local-fs.ts`, `src/vault/safe-regex.ts`,
+  `src/vault/instructions.ts`, `src/mcp/factory.ts`, `src/tools/search.ts`; `./brainstem doctor`
+  and the README name the install line per platform.
+- **The builtin regex engine got a required-literal prefilter and a faster hot path.**
+  `compileSafeSearch` now derives, from the pattern's own AST, a set of literal substrings of
+  which at least one must appear in any matching line — ripgrep's own trick, in miniature (a run
+  of adjacent literal characters anywhere in the pattern, or the union of every branch of a
+  top-level alternation whose branches all have their own requirement; `null`, safely, when
+  neither applies). `LocalFSAdapter.searchJs` uses it to reject a whole file with one
+  `String.includes` scan before ever splitting it into lines, and `find()` uses it on each line
+  before running the NFA at all. A ~400-pattern fuzz test
+  (`tests/vault/safe-regex.test.ts`) proves the prefilter is sound (never rejects a line the NFA
+  would actually match). Separately, `find()`'s thread lists are now two reusable pairs of
+  parallel `Int32Array`s (state index, start offset), ping-ponged by swapping which is "current"
+  instead of allocating a new array every character, and `variantsOf` (case-fold lookup) is
+  memoized. Measured on a generated 40,000-note vault
+  (`tests/scale/regex-search.scale.ts`, a new scale test): well-filtered patterns (a literal, an
+  email-like pattern, the invoice/receipt example) went from ~10–12 s to ~4.5 s, now dominated by
+  this machine's raw file-read I/O for 40,000 files (~3.5 s of that alone) rather than by the
+  regex engine; a pattern with no derivable literal (`(a+)+b`, deliberately chosen to stay
+  catastrophic for a backtracking engine) is unaffected by the prefilter, as expected, and stays
+  linear. `src/vault/safe-regex.ts`.
+- **A Claude Desktop bundle.** `npm run bundle` esbuild-bundles `src/stdio-main.ts` into one file
+  (`bundle/dist/stdio-main.js`, ~2.0 MB unpacked; no Express, tunnel supervisor, CLI or
+  authorization-server code — `tests/bundle/build.test.ts` proves it), generates
+  `bundle/manifest.json` (MCPB 0.3) and an icon, and packs
+  `release/brainstem-mcp-X.Y.Z.mcpb` (plus a fixed-name copy and `SHA256SUMS`) with `mcpb
+  pack` — about 0.40 MiB packed. The install form asks for the vault folder (required), read-only,
+  timezone and a daily-notes folder; the manifest's `tools` list is generated from the real tool
+  registry so it cannot drift. `npm run test:bundle` runs the same `tests/stdio/**` suite that
+  proves the source against the packed file. New CI job `bundle` (needs `verify`, `platforms`)
+  builds and tests it on every push and PR, uploads it as an artifact, and — on a `v*` tag —
+  attaches it to that tag's GitHub release (created as a draft if needed) with a build-provenance
+  attestation. README gains a "Claude Desktop" section with install and verification steps.
+  `scripts/bundle-build.ts`, `scripts/bundle-manifest.ts`, `scripts/bundle-icon.ts`,
+  `scripts/bundle-pack.ts`, `vitest.bundle.config.ts`, `.github/workflows/ci.yml`.
 
 ## [0.6.0] — 2026-09-21
 
@@ -683,6 +754,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.7.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.0...v0.4.1

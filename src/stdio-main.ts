@@ -24,6 +24,7 @@ import {
 import { scanLeftoverJournals } from './storage/transaction.ts';
 import {
   createInstructionsProvider,
+  ripgrepAbsentInstructionsNote,
   writeInstructionsTemplateIfMissing,
 } from './vault/instructions.ts';
 import { createLocalRuntime, type VaultRuntime } from './vault/runtime.ts';
@@ -328,6 +329,19 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     return fail(error instanceof Error ? error.message : String(error));
   }
 
+  // Detected once at adapter creation (src/storage/local-fs.ts's detectRipgrep); ripgrep is
+  // recommended, not required — regex search still works either way (see safe-regex.ts) — so
+  // this is one info line, not a warning, said exactly once regardless of how many connections
+  // follow. The same fact reaches the model itself via ripgrepAbsentInstructionsNote below and
+  // `brainstem_ping`'s `search.regexEngine`.
+  const nativeSearch = runtime.adapter.capabilities().nativeSearch;
+  if (!nativeSearch) {
+    logger.info(
+      'ripgrep not found on PATH: regex search uses the built-in engine (a subset of the ' +
+        'syntax); installing ripgrep is recommended',
+    );
+  }
+
   // Seeded once, from the same code the HTTP server uses (src/vault/instructions.ts), into the
   // vault-local instructionsDir (never stateDir — that folder now lives outside the vault) so a
   // reader who only ever uses stdio still gets the note explaining the feature in Obsidian —
@@ -345,6 +359,7 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
     }
   }
   const instructions = createInstructionsProvider(instructionsDir);
+  const regexNote = ripgrepAbsentInstructionsNote(nativeSearch);
 
   // A journal outlives its transaction only after a crash mid-apply or a failed cleanup (see
   // src/main.ts, which the HTTP server runs at boot the same way, sharing scanLeftoverJournals
@@ -398,7 +413,7 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
       createVaultServer(ctx, {
         resolveRuntime: async () => runtime,
         logger,
-        instructions: () => instructions.get(),
+        instructions: () => instructions.get().then((text) => `${text}${regexNote}`),
         readOnly: vaultConfig.readOnly,
         localPeers: () => listOtherLivePeers(stateDir, process.pid).then((peers) => peers.length),
       }),

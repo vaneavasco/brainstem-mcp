@@ -113,6 +113,65 @@ What installing it looks like, which is the point of the phase: download `brains
 - **Signing (proposed, to be confirmed by the owner).** Facts from the MCPB CLI docs: `mcpb sign --cert … --key …` takes an X.509 certificate and key in PEM, self-signed or CA-issued ("should have Code Signing extended key usage"); the signature is a detached PKCS#7 appended to the zip; `mcpb verify` shows subject, fingerprint and a warning when self-signed. What Claude Desktop shows for an unsigned, a self-signed and a CA-signed bundle is **not documented: measure it here** before spending money. Proposal: (1) a project certificate, self-signed, Code Signing EKU, long-lived; its private key is a GitHub Actions secret in a protected environment that only release tags reach (the owner generates and stores it; it is never in the repository or in a log); its fingerprint is published in README and SECURITY.md so anyone can run `mcpb verify` and compare; (2) `SHA256SUMS` and a GitHub build-provenance attestation on every release asset (`gh attestation verify`), which for an open-source project says more than the certificate does: exactly which commit and workflow produced the file; (3) a CA-issued certificate only if the measurement shows Desktop treats it materially differently or the directory requires it, and only after checking that such a key can be used at all: CA code-signing keys now live on hardware or in a cloud HSM and cannot be exported, while `mcpb sign` wants a PEM key file.
 - **Who should install it.** The bundle needs the vault on the machine. For a personal vault that is the point. For a vault shared by a team it means a copy of the data on every laptop, which is an access decision, not a packaging one: there the HTTP server with a connector (one copy, controlled access) stays the right path, and the bundle is for whoever holds the data anyway.
 
+**Done (2026-09-22).** Regex search without ripgrep first, since the bundle would otherwise ship
+with a functionality gap (`docs/plans/…` Phase 0's own finding): `compileSafeSearch` in
+`src/vault/safe-regex.ts` extends the existing Thompson-NFA engine (already used for
+`vault_query`'s `regex` op) to unanchored, `caseSensitive`-aware search, and `LocalFSAdapter`
+falls back to it when `rg` is not on `PATH` instead of throwing `UNSUPPORTED`. Measured on a
+generated 40,000-note vault (`tests/scale/regex-search.scale.ts`): a required-literal prefilter
+(ripgrep's own trick — derive a substring at least one of which must appear in any match, from a
+literal run in a `concat` or the union of a top-level alternation's branches; a ~400-pattern fuzz
+test proves it never rejects a real match) plus a hot-path rewrite (two reusable `Int32Array`
+thread-list pairs instead of per-character object allocation, a memoized case-fold lookup) took
+well-filtered patterns (a literal, an email-like pattern, the real
+`(invoice|receipt)[- ]?(number|no\.?)\s*[0-9]{3,}` example) from ~10–12 s to ~4.5 s on this
+machine — now dominated by this environment's raw file-read time for 40,000 files (~3.5 s of
+that alone), not by the NFA; `(a+)+b`, with no derivable required literal, is unaffected, as
+expected, and stays linear rather than exponential.
+
+The bundle itself: `scripts/bundle-build.ts` (esbuild, `platform: node`, `target: node24`,
+`format: esm`, `packages: 'bundle'`, external sourcemap, a version banner) produces
+`bundle/dist/stdio-main.js` in well under 150 ms; unpacked it is about 2.0 MB (the whole stdio
+graph — the MCP SDK, zod, pino, chokidar, picomatch, yaml, date-fns, diff — inlined; a
+`tests/bundle/build.test.ts` grep proves Express, `cloudflared`, `OWNER_SECRET`'s VALUE (the
+field name is present, unused, in the one `EnvSchema` both `loadConfig` and `loadVaultConfig`
+parse — documented, not a leak) and the actual authorization-server/tunnel/CLI source files never
+come along). One shim was needed: pino's CJS internals `require('node:os')` in a way esbuild
+cannot statically resolve into an ESM import, which throws "Dynamic require of … is not
+supported" under `format: 'esm'` without it — the banner injects a real `require` via
+`createRequire(import.meta.url)`, the documented fix. The version is fixed at build time
+(`process.env.BRAINSTEM_BUNDLE_VERSION`, `esbuild`'s `define`) since the bundle carries no
+`package.json` of its own for `src/version.ts` to read at import time.
+
+`scripts/bundle-manifest.ts` generates `manifest.json` (0.3) and a small PNG icon (rendered at
+build time — raw pixel buffer, `node:zlib` deflate, no image library or binary asset committed);
+the `tools` array comes from `registerVaultTools` on a throwaway in-memory-transport `McpServer`
+(30 tools, `brainstem_ping`/`brainstem_guide` deliberately excluded — server plumbing, not vault
+tools), so it cannot drift from the registry. `env.VAULT_TIMEZONE` (not `TZ`, which does nothing
+useful here — `src/config.ts` reads `VAULT_TIMEZONE` for `dailyNotes.timezone`) and
+`env.DAILY_NOTES_FOLDER` carry the optional settings, each with a `default` (`"UTC"`, `""`) equal
+to `src/config.ts`'s own default, so an untouched field substitutes to exactly what stdio would
+already assume — `loadVaultConfig` already treats an empty env value as unset, so an empty
+substitution is harmless either way. `npm run bundle` (build + manifest + icon + LICENSE/README
+excerpt + `mcpb validate` + `mcpb pack` + `SHA256SUMS`) takes well under a second end to end;
+`release/brainstem-mcp-X.Y.Z.mcpb` (and the fixed-name copy) is about 0.40 MiB packed. `npm run
+test:bundle` (`vitest.bundle.config.ts` running `tests/stdio/**` — the exact suite that proves
+the source — against the bundled file via `BRAINSTEM_STDIO_ENTRY`, read by one shared
+`tests/helpers/stdio-entry.ts`) passes in about 17 s. Found along the way: the bundled process
+boots fast enough that `tests/stdio/index-cache.test.ts`'s freshly written fixture files were
+still inside the index cache's 3 s "racily clean" window when the first boot's save ran, flaking
+the second boot's cache-hit assertion deterministically against the bundle (it had passed against
+the source, whose slower cold start happened to land outside the window) — fixed by backdating
+the fixture files' mtime past the window, removing the race regardless of boot speed rather than
+papering over it with a sleep.
+
+Left as documented, not built: signing (the proposal above stands; `SHA256SUMS` plus a GitHub
+build-provenance attestation, `actions/attest-build-provenance@v3` in the new `bundle` CI job,
+ship from the first release instead) and a bundled ripgrep binary (still a later, measured
+decision — the fallback above means it is no longer required for parity).
+
+Measured on the real 37,707-note vault (read-only, ripgrep 15.2 against the builtin engine, identical hit counts on all six patterns): ripgrep 17–58 ms per search; builtin 1.0–1.4 s for ordinary patterns — a literal search costs the same 1.4 s, so that second is the single-threaded reading of the files, not the matching — and 5.7 s (32 s before the prefilter and the faster hot path) for `(invoice|receipt)[- ]?(number|no\.?)\s*[0-9]{3,}`. RSS 112 MB vs 267 MB. Decision: ripgrep is recommended everywhere a user can read it, not bundled (four platform binaries, and Gatekeeper on macOS would refuse an unsigned one); the generated-vault figures in the scale test are far lower because its notes are short.
+
 ### Phase 6 — three operating systems
 
 - CI matrix `ubuntu | macos | windows` for unit tests (Docker smoke stays on Linux). Expected trouble, to be found by tests rather than by users: backslashes reaching the path policy, case-insensitive file systems (two notes that differ only by case; near-miss suggestions), atomic rename over an open file on Windows, watcher behaviour (FSEvents, ReadDirectoryChangesW), `\r\n` in notes, long paths.
@@ -134,9 +193,24 @@ All three legs green: `platforms` is now in `publish-images`'s `needs`, so an im
 
 Left open by phase 6, to be checked on a real Mac in phase 7: GitHub's macOS runners delivered no native file-watch event at all (polling mode worked on the same runner), so the native watcher test is skipped there, on `CI` only. If a real Mac showed the same, the index would heal only through the reconcile pass (5 minutes on the HTTP server; the settling pass at every stdio start): usable, but to be known. Also to be checked there: the drain window at HTTP shutdown, which one macOS run cut short without a reproducible cause.
 
+Known at the 0.7.0 release: the macOS leg failed twice (in nine runs, before the watcher-vs-tool race fix) on `vault_outline`'s link count — an index entry with no links, never reproduced on Linux (60 of 60 clean, native and polling watcher). The test now carries every watcher event and the index entry in its failure message; the next macOS failure explains itself. Not a release blocker: one assertion, no data path, three green macOS runs since the fix.
+
 ### Phase 7 — proof with readers
 
 The five costliest prompts of the reader test, run through stdio in Claude Code on the large vault and compared with the HTTP runs (calls, characters, errors), then one session by a person on macOS or Windows with the installed bundle. Findings are fixed or listed.
+
+**What only a live install can show (2026-09-22, for the Windows 11 and macOS colleagues; the owner is on Linux).** Each item is a yes/no to report back, with the Claude Desktop version:
+
+1. Download `…/releases/latest/download/brainstem-mcp.mcpb`; Settings → Extensions → Advanced settings → Install Extension… accepts it. What the unsigned-extension warning says, word for word.
+2. The install form shows the four fields (vault folder, read-only, timezone, daily-notes folder) with the descriptions from the manifest; the folder picker works; `read_only` is a checkbox.
+3. The server starts: `brainstem_ping` answers, `version` is `0.7.0+<sha>`, `search.regexEngine` says `builtin` unless ripgrep is installed, `readOnly` matches the checkbox. This proves `command: "node"` resolves to the app's own Node (nothing else is installed).
+4. Turn the read-only checkbox on and off in the extension's settings: the tool list changes (17 vs 32) on the next conversation.
+5. Install a newer `.mcpb` over the old one: the four settings survive; the version changes.
+6. Where the log is (Settings → Extensions → the extension → logs, or the app's log folder): the one info line about ripgrep is there; nothing at `warn` or above on a clean start.
+7. macOS only: edit a note in Obsidian while Desktop is open, then ask Claude for it within a few seconds — proves native watch events on a real Mac (GitHub's runners had none). Also `vault_delete` twice in a row on two notes, then a search for their titles: nothing found (the watcher-vs-tool race fixed in 0.7.0).
+8. macOS only: a FIFO in the vault would once have frozen the server; not worth reproducing by hand — covered by the suite on the macOS runner.
+9. Windows only: a vault under OneDrive or another synced folder: writes succeed (rename retries), and `brainstem_ping` reports `localPeers: 0` with one Desktop window open.
+10. Both: the vault on an external or network drive if anyone has one; a vault path with spaces and non-ASCII letters.
 
 ## Out of scope
 

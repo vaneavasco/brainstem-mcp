@@ -132,10 +132,20 @@ describe('v2 variables', () => {
   it('VAULT_RECONCILE_MS=0 disables the background reconcile timer', () => {
     expect(loadConfig(baseEnv({ VAULT_RECONCILE_MS: '0' })).reconcileMs).toBe(0);
   });
+  it('reads VAULT_READ_ONLY in every spelling an install form may substitute', () => {
+    // Claude Desktop puts a boolean from the install form into env; its spelling is undocumented
+    for (const v of ['true', 'True', 'TRUE', '1', 'yes', 'on', ' true ']) {
+      expect(loadConfig(baseEnv({ VAULT_READ_ONLY: v })).readOnly, v).toBe(true);
+    }
+    for (const v of ['false', 'False', '0', 'no', 'off', '']) {
+      expect(loadConfig(baseEnv({ VAULT_READ_ONLY: v })).readOnly, v).toBe(false);
+    }
+  });
+
   it('parses VAULT_READ_ONLY and rejects a nonsense value', () => {
     expect(loadConfig(baseEnv({ VAULT_READ_ONLY: 'true' })).readOnly).toBe(true);
     expect(loadConfig(baseEnv({ VAULT_READ_ONLY: 'false' })).readOnly).toBe(false);
-    expect(() => loadConfig(baseEnv({ VAULT_READ_ONLY: 'yes' }))).toThrow(/VAULT_READ_ONLY/);
+    expect(() => loadConfig(baseEnv({ VAULT_READ_ONLY: 'maybe' }))).toThrow(/VAULT_READ_ONLY/);
   });
   it('rejects nonsense knobs by name', () => {
     expect(() => loadConfig(baseEnv({ VAULT_WATCH_POLL_MS: '-5' }))).toThrow(/VAULT_WATCH_POLL_MS/);

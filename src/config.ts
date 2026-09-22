@@ -98,7 +98,20 @@ const EnvSchema = z.object({
   VAULT_TIMEZONE: z.string().min(1).default('UTC'),
   REQUIRED_FRONTMATTER: z.string().default(''),
   MAX_BINARY_BYTES: z.coerce.number().int().min(1).optional(),
-  VAULT_READ_ONLY: z.enum(['true', 'false']).default('false'),
+  // Claude Desktop substitutes a boolean from the install form into env, and nothing documents
+  // its spelling: every usual one is read (true/false, 1/0, yes/no, on/off, any case); an empty
+  // string is "not set". A server that refuses to start over "True" would be the installer's
+  // first experience of it.
+  VAULT_READ_ONLY: z
+    .string()
+    .default('false')
+    .transform((raw, ctx) => {
+      const v = raw.trim().toLowerCase();
+      if (v === '' || v === 'false' || v === '0' || v === 'no' || v === 'off') return false;
+      if (v === 'true' || v === '1' || v === 'yes' || v === 'on') return true;
+      ctx.addIssue({ code: 'custom', message: 'VAULT_READ_ONLY must be true or false' });
+      return z.NEVER;
+    }),
 });
 
 const REQUIRED = ['PUBLIC_URL', 'OWNER_SECRET'] as const;
@@ -127,7 +140,7 @@ function buildVaultSettings(d: VaultSettingsFields): VaultSettingsConfig {
     throw new ConfigError(
       [],
       ['VAULT_TIMEZONE'],
-      'VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Chisinau)',
+      'VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Berlin)',
     );
   }
   const vaultSettings: VaultSettingsConfig = {
@@ -259,7 +272,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     storage,
     vaultSettings,
     maxBinaryBytes: d.MAX_BINARY_BYTES ?? MAX_BINARY_BYTES,
-    readOnly: d.VAULT_READ_ONLY === 'true',
+    readOnly: d.VAULT_READ_ONLY,
   };
 }
 
@@ -332,6 +345,6 @@ export function loadVaultConfig(
     reconcileMs: d.VAULT_RECONCILE_MS,
     logLevel: d.LOG_LEVEL,
     stateDir: d.STATE_DIR ?? null,
-    readOnly: d.VAULT_READ_ONLY === 'true',
+    readOnly: d.VAULT_READ_ONLY,
   };
 }

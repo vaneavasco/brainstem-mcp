@@ -10,8 +10,7 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sha256hex } from '../../src/auth/hash.ts';
 import { removeMachineHomes, testMachineHomeEnv } from '../helpers/state-home.ts';
-
-const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
+import { STDIO_ENTRY as STDIO_MAIN } from '../helpers/stdio-entry.ts';
 
 function structured(result: CallToolResult): Record<string, unknown> {
   return result.structuredContent as Record<string, unknown>;

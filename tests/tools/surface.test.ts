@@ -1,5 +1,15 @@
+import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Harness, startHarness } from './harness.ts';
+
+function hasRipgrep(): boolean {
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const EXPECTED = [
   'vault_read',
@@ -127,5 +137,31 @@ describe('tool surface parity', () => {
     const a = await h.client.listTools();
     const b = await h.client.listTools();
     expect(JSON.stringify(a.tools)).toBe(JSON.stringify(b.tools));
+  });
+});
+
+describe('brainstem_ping search.regexEngine', () => {
+  it('reports "builtin" when the adapter was created without ripgrep', async () => {
+    const builtin = await startHarness(undefined, null);
+    try {
+      const ping = await builtin.call('brainstem_ping');
+      expect((ping.structuredContent as { search: { regexEngine: string } }).search).toEqual({
+        regexEngine: 'builtin',
+      });
+    } finally {
+      await builtin.close();
+    }
+  });
+
+  it.skipIf(!hasRipgrep())('reports "ripgrep" when a real binary is available', async () => {
+    const rg = await startHarness(undefined, 'rg');
+    try {
+      const ping = await rg.call('brainstem_ping');
+      expect((ping.structuredContent as { search: { regexEngine: string } }).search).toEqual({
+        regexEngine: 'ripgrep',
+      });
+    } finally {
+      await rg.close();
+    }
   });
 });
