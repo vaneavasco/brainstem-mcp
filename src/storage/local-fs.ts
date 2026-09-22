@@ -351,16 +351,32 @@ export class LocalFSAdapter implements StorageAdapter {
    */
   protected async assertInsideRoot(absPath: string): Promise<void> {
     let probe = absPath;
+    // realpath OPENS what it resolves on macOS: on a FIFO it never returns (measured: the suite
+    // hung there for hours, on the very test that guards reads against FIFOs — a guard that runs
+    // after this check). A leaf that is neither a folder nor a symlink cannot change where the
+    // path leads, so only its parent is resolved; the leaf's own name is appended unchanged.
+    let leaf: string | null = null;
+    try {
+      const probed = await fs.lstat(absPath);
+      if (!probed.isDirectory() && !probed.isSymbolicLink()) {
+        leaf = path.basename(absPath);
+        probe = path.dirname(absPath);
+      }
+    } catch {
+      /* missing, or unreadable: the loop below says which */
+    }
     for (;;) {
       try {
         const real = await fs.realpath(probe);
-        if (real !== this.root && !real.startsWith(this.root + path.sep)) {
+        const resolved = leaf === null ? real : path.join(real, leaf);
+        if (resolved !== this.root && !resolved.startsWith(this.root + path.sep)) {
           throw new VaultError('INVALID_PATH', 'Path resolves outside the vault root.');
         }
         return;
       } catch (error) {
         if (error instanceof VaultError) throw error;
         if (!isEnoent(error)) throw new VaultError('IO', 'Could not resolve path.');
+        leaf = null;
         const parent = path.dirname(probe);
         if (parent === probe) throw new VaultError('IO', 'Could not resolve vault root.');
         probe = parent;

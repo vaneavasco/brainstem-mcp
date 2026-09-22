@@ -283,6 +283,10 @@ describe.skipIf(process.platform === 'win32')('the case check never resolves a F
   // must not resolve anything that is not a file, a folder or a symlink — proven here with a
   // realpath that would hang if it were reached.
   it('read, hashOf and write on a FIFO answer at once, whatever realpath would do', async () => {
+    // fs.realpath itself is the other caller (assertInsideRoot, every operation): watched here
+    // through fs.promises so a call on the FIFO is a failure, not a hang, on every platform.
+    const { vi } = await import('vitest');
+    const realpathSpy = vi.spyOn(fs, 'realpath');
     const { execFileSync } = await import('node:child_process');
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-fifo-case-')));
     try {
@@ -305,7 +309,10 @@ describe.skipIf(process.platform === 'win32')('the case check never resolves a F
       await adapter.write('pipe.md', 'x'); // replaces the FIFO by tmp+rename, never opens it
       expect(reached).toBe(false);
       expect(performance.now() - started).toBeLessThan(2_000);
+      const onFifo = realpathSpy.mock.calls.filter(([p]) => String(p).endsWith('pipe.md'));
+      expect(onFifo).toEqual([]);
     } finally {
+      realpathSpy.mockRestore();
       await fs.rm(dir, { recursive: true, force: true });
     }
   }, 10_000);
