@@ -193,6 +193,8 @@ All three legs green: `platforms` is now in `publish-images`'s `needs`, so an im
 
 Left open by phase 6, to be checked on a real Mac in phase 7: GitHub's macOS runners delivered no native file-watch event at all (polling mode worked on the same runner), so the native watcher test is skipped there, on `CI` only. If a real Mac showed the same, the index would heal only through the reconcile pass (5 minutes on the HTTP server; the settling pass at every stdio start): usable, but to be known. Also to be checked there: the drain window at HTTP shutdown, which one macOS run cut short without a reproducible cause.
 
+Known at the 0.7.0 release: the macOS leg failed twice (in nine runs, before the watcher-vs-tool race fix) on `vault_outline`'s link count — an index entry with no links, never reproduced on Linux (60 of 60 clean, native and polling watcher). The test now carries every watcher event and the index entry in its failure message; the next macOS failure explains itself. Not a release blocker: one assertion, no data path, three green macOS runs since the fix.
+
 ### Phase 7 — proof with readers
 
 The five costliest prompts of the reader test, run through stdio in Claude Code on the large vault and compared with the HTTP runs (calls, characters, errors), then one session by a person on macOS or Windows with the installed bundle. Findings are fixed or listed.
