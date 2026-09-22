@@ -235,22 +235,31 @@ describe('stopping while the index is still being built', () => {
   }
 
   for (const how of ['SIGTERM', 'stdin end'] as const) {
-    it(`${how} during the fill exits 0 within 3 s`, async () => {
-      const { child, root, homes, err } = await startSlow();
-      try {
-        const started = Date.now();
-        const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
-        if (how === 'SIGTERM') child.kill('SIGTERM');
-        else child.stdin?.end();
-        const code = await exited;
-        expect(code, err()).toBe(0);
-        expect(Date.now() - started).toBeLessThan(3_000);
-        expect(err()).not.toContain('shutdown did not finish in time');
-      } finally {
-        child.kill('SIGKILL');
-        await fs.rm(root, { recursive: true, force: true });
-        await removeMachineHomes(homes);
-      }
-    }, 30_000);
+    // Signals don't exist on Windows the way this test needs them to: SIGTERM terminates the
+    // process at once there instead of asking it to stop gracefully, so this variant would be
+    // testing Node's own default signal handling, not ours. The graceful stop on Windows is the
+    // client closing stdin — the 'stdin end' variant below, which does run there.
+    const runsHere = how !== 'SIGTERM' || process.platform !== 'win32';
+    it.skipIf(!runsHere)(
+      `${how} during the fill exits 0 within 3 s`,
+      async () => {
+        const { child, root, homes, err } = await startSlow();
+        try {
+          const started = Date.now();
+          const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+          if (how === 'SIGTERM') child.kill('SIGTERM');
+          else child.stdin?.end();
+          const code = await exited;
+          expect(code, err()).toBe(0);
+          expect(Date.now() - started).toBeLessThan(3_000);
+          expect(err()).not.toContain('shutdown did not finish in time');
+        } finally {
+          child.kill('SIGKILL');
+          await fs.rm(root, { recursive: true, force: true });
+          await removeMachineHomes(homes);
+        }
+      },
+      30_000,
+    );
   }
 });

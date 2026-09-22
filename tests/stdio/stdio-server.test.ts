@@ -139,6 +139,9 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
 });
 
 describe('read-only mode (--read-only and VAULT_READ_ONLY=true, over a real stdio child)', () => {
+  // Three real child processes, each a full spawn + MCP handshake: honest 60s rather than raising
+  // the suite's default 15s, which a loaded (or just slower — the Windows CI runner) machine can
+  // clear on its own.
   it('--read-only and VAULT_READ_ONLY=true both produce the same reduced tool list', async () => {
     const full = await startStdioSession();
     cleanups.push(() => full.close());
@@ -159,7 +162,7 @@ describe('read-only mode (--read-only and VAULT_READ_ONLY=true, over a real stdi
     cleanups.push(() => viaFlag.close());
     const { tools: flagTools } = await viaFlag.client.listTools();
     expect(flagTools.map((t) => t.name).sort()).toEqual(expectedNames);
-  });
+  }, 60_000);
 
   it('the CLI flag wins over the env: --read-only alongside VAULT_READ_ONLY=false still reduces the list', async () => {
     const session = await startStdioSession(undefined, { VAULT_READ_ONLY: 'false' }, [
@@ -323,22 +326,30 @@ describe('stdio lifecycle (real child process)', () => {
     }
   }, 10_000);
 
-  it('SIGTERM makes the process exit 0', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-lifecycle-'));
-    try {
-      const child = spawnRaw(['--vault', root]);
-      const err = collect(child.stderr);
-      const exited = new Promise<number | null>((resolve) =>
-        child.on('exit', (code) => resolve(code)),
-      );
-      await waitForText(err, (t) => t.includes(READY_MARKER));
-      child.kill('SIGTERM');
-      const code = await exited;
-      expect(code).toBe(0);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  }, 10_000);
+  // Signals don't exist on Windows the way this test needs them to: SIGTERM terminates the
+  // process at once there instead of asking it to stop gracefully, so this would be testing
+  // Node's own default signal handling, not ours. The graceful stop on Windows is the client
+  // closing stdin — the "closing stdin…" test right above, which does run there.
+  it.skipIf(process.platform === 'win32')(
+    'SIGTERM makes the process exit 0',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-stdio-lifecycle-'));
+      try {
+        const child = spawnRaw(['--vault', root]);
+        const err = collect(child.stderr);
+        const exited = new Promise<number | null>((resolve) =>
+          child.on('exit', (code) => resolve(code)),
+        );
+        await waitForText(err, (t) => t.includes(READY_MARKER));
+        child.kill('SIGTERM');
+        const code = await exited;
+        expect(code).toBe(0);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
 
   it('a missing vault (no --vault, no VAULT_PATH) exits 1 with a one-line stderr message and empty stdout', async () => {
     const { VAULT_PATH: _unused, ...envWithoutVault } = process.env;

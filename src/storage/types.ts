@@ -168,4 +168,9 @@ export interface StorageAdapter {
    *  optional so adapters/tests that don't wire it stay valid. */
   watch?(onChange: (e: ChangeEvent) => void, onError?: (error: unknown) => void): Unsubscribe;
   capabilities(): Caps;
+  /** True when the adapter detected (or was told) that the filesystem holding the vault folds
+   *  letter case — a vault path is exact on every platform, so an adapter that sets this refuses
+   *  a caller-supplied path that differs from an existing one only by case instead of silently
+   *  resolving to it. Optional so a fake adapter used only in tests need not provide it. */
+  readonly caseInsensitive?: boolean;
 }

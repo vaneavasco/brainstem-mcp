@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tunnelUrlReader } from '../../src/cli/tunnel-url.ts';
 
@@ -6,9 +7,15 @@ const env = (o: Record<string, string>) => new Map(Object.entries(o));
 describe('tunnelUrlReader', () => {
   it('maps the container path of the URL file onto the vault on the host', async () => {
     const seen: string[] = [];
+    // VAULT_PATH is a HOST path — this CLI runs on whatever OS the owner's machine is, so it must
+    // be built with this platform's own `path` (Windows: backslashes, a drive) rather than a
+    // hand-written POSIX literal, which `path.resolve`/`path.sep` inside tunnelUrlReader would
+    // not treat as absolute there. PUBLIC_URL_FILE stays a literal POSIX path: it names a spot
+    // inside the (always-Linux) container, never the host's own path syntax.
+    const vaultPath = path.resolve('home', 'u', 'vault');
     const read = tunnelUrlReader(
       env({
-        VAULT_PATH: '/home/u/vault',
+        VAULT_PATH: vaultPath,
         PUBLIC_URL_FILE: '/vault/_brainstem/public-url',
         TUNNEL_MODE: 'quick',
       }),
@@ -18,7 +25,7 @@ describe('tunnelUrlReader', () => {
       },
     );
     expect(await read()).toBe('https://alpha.trycloudflare.com');
-    expect(seen).toEqual(['/home/u/vault/_brainstem/public-url']);
+    expect(seen).toEqual([path.join(vaultPath, '_brainstem', 'public-url')]);
   });
 
   it('answers null while the file is missing, empty or not a bare https origin', async () => {

@@ -289,27 +289,79 @@ describe('reserved _brainstem directory', () => {
   });
 });
 
+// GitHub Actions' macOS runners were confirmed, on CI, to never deliver a single native fs.watch
+// event: a retrying canary (a freshly named file, each attempt waited on individually) saw NOTHING
+// across 20 s and dozens of attempts, while `watchPollMs` polling mode — exercised by the very
+// next test, on the very same adapter — worked and passed. That rules out a path-computation bug
+// in `rel()`/`watch()` here (the two modes share every line of that code; only chokidar's
+// `usePolling` option differs) and points at the native backend itself being unavailable in this
+// specific sandboxed/virtualized environment — a known category of limitation for GitHub Actions
+// macOS runners, not something a developer's own Mac is expected to hit. `CI_DARWIN_NATIVE_WATCH_BROKEN`
+// names that finding so it reads as a decision, not a silent skip, and is scoped to CI so a real
+// Mac still gets full coverage of this test.
+const CI_DARWIN_NATIVE_WATCH_BROKEN = process.platform === 'darwin' && process.env.CI === 'true';
+
 describe('watch', () => {
-  it('emits create/update/delete events with vault-relative paths', async () => {
-    const adapter: StorageAdapter = vault;
-    const events: ChangeEvent[] = [];
-    const unsubscribe = adapter.watch?.((e) => events.push(e));
-    expect(unsubscribe).toBeTypeOf('function');
-    await new Promise((r) => setTimeout(r, 300)); // let chokidar finish its initial scan
-    await vault.write('watched/new.md', 'v1');
-    await vault.write('watched/new.md', 'v2');
-    await fs.rm(path.join(root, 'watched/new.md'));
-    // 20 s, not 5: on a machine busy writing thousands of fixture files for other suites the
-    // watcher's events arrive late, and this test is about what arrives, not how fast.
-    const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline && !events.some((e) => e.type === 'delete')) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    unsubscribe?.();
-    const types = events.filter((e) => e.path === 'watched/new.md').map((e) => e.type);
-    expect(types[0]).toBe('create');
-    expect(types.at(-1)).toBe('delete');
-  }, 45_000);
+  it.skipIf(CI_DARWIN_NATIVE_WATCH_BROKEN)(
+    'emits create/update/delete events with vault-relative paths',
+    async () => {
+      const adapter: StorageAdapter = vault;
+      const events: ChangeEvent[] = [];
+      const unsubscribe = adapter.watch?.((e) => events.push(e));
+      expect(unsubscribe).toBeTypeOf('function');
+      // Everything from here on runs inside try/finally: an assertion (or a timeout loop simply
+      // finding nothing) throwing before `unsubscribe()` ran left a chokidar watcher — and its
+      // live fs.watch handles — orphaned for the rest of THIS WORKER's process, which is what
+      // actually produced a 6-HOUR HUNG CI JOB the one time this test failed under an earlier,
+      // less careful version of itself: Node never exits while a handle like that stays open, so
+      // the whole job just sat there until GitHub's own 6 h ceiling killed it. `unsubscribe()`
+      // now runs unconditionally, first, in `finally`, however this test ends.
+      try {
+        // A fixed sleep to "let chokidar finish its initial scan" is exactly the kind of race
+        // that showed up on CI as flat-out missing events (docs/plans/2026-09-21-claude-desktop
+        // -integration.md phase 6 triage, item H). Reproduced locally on Linux with the ORIGINAL
+        // 300ms-sleep version of this test: chokidar's own initial directory scan is
+        // asynchronous, and a file created before that scan has observed the directory is
+        // indistinguishable, to chokidar, from one that was already there when watching began —
+        // with `ignoreInitial: true` that file's own "create" is simply never emitted, no matter
+        // how long anything then waits. A single canary has the identical race, so this retries a
+        // fresh one — a real, escalating wait, not a hope — until chokidar proves, by actually
+        // emitting a create for a file created after this loop starts probing, that its scan is
+        // behind it and new files are being tracked for real.
+        const canaryDeadline = Date.now() + 5_000;
+        let canarySeen = false;
+        for (let attempt = 0; Date.now() < canaryDeadline && !canarySeen; attempt += 1) {
+          const name = `canary-${attempt}.md`;
+          await fs.writeFile(path.join(root, name), 'x');
+          const probeDeadline = Date.now() + 500;
+          while (Date.now() < probeDeadline && !events.some((e) => e.path === name)) {
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          canarySeen = events.some((e) => e.path === name && e.type === 'create');
+        }
+        expect(canarySeen).toBe(true);
+
+        await vault.write('watched/new.md', 'v1');
+        await vault.write('watched/new.md', 'v2');
+        await fs.rm(path.join(root, 'watched/new.md'));
+        // 20 s, not 5: on a machine busy writing thousands of fixture files for other suites the
+        // watcher's events arrive late, and this test is about what arrives, not how fast.
+        const deadline = Date.now() + 20_000;
+        while (
+          Date.now() < deadline &&
+          !events.some((e) => e.type === 'delete' && e.path === 'watched/new.md')
+        ) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        const types = events.filter((e) => e.path === 'watched/new.md').map((e) => e.type);
+        expect(types[0]).toBe('create');
+        expect(types.at(-1)).toBe('delete');
+      } finally {
+        unsubscribe?.();
+      }
+    },
+    30_000,
+  );
 
   it('watch() honours watchPollMs by using chokidar polling', async () => {
     const polled = await LocalFSAdapter.create(root, { ripgrepPath: null, watchPollMs: 300 });
@@ -322,4 +374,30 @@ describe('watch', () => {
     expect(seen).toContain('polled.md');
     expect(polled.capabilities().watch).toBe(true);
   });
+});
+
+describe.skipIf(process.platform === 'win32')('the watcher and a FIFO', () => {
+  it('never watches a FIFO — chokidar would fs.watch it, which opens it on macOS and never returns', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-watch-fifo-')),
+    );
+    const adapter = await LocalFSAdapter.create(dir, { ripgrepPath: null, watchPollMs: 50 });
+    const events: string[] = [];
+    const unsubscribe = adapter.watch?.((e) => events.push(`${e.type}:${e.path}`));
+    try {
+      await new Promise((r) => setTimeout(r, 200)); // past the initial scan
+      execFileSync('mkfifo', [path.join(dir, 'pipe.md')]);
+      await fs.writeFile(path.join(dir, 'plain.md'), '# plain\n');
+      const deadline = Date.now() + 5_000;
+      while (!events.some((e) => e === 'create:plain.md') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(events).toContain('create:plain.md'); // the watcher is alive and past the FIFO
+      expect(events.filter((e) => e.endsWith(':pipe.md'))).toEqual([]);
+    } finally {
+      unsubscribe?.();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

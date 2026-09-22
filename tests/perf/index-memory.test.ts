@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -30,9 +31,12 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+// node -e --input-type=module resolves a bare absolute path as an ESM import specifier, and on
+// Windows an absolute path ("D:\\...") is not a valid file:// URL — pathToFileURL is what turns
+// either platform's path into one Node's loader accepts.
 const SCRIPT = `
-import { LocalFSAdapter } from ${JSON.stringify(path.resolve('src/storage/local-fs.ts'))};
-import { FrontmatterIndex } from ${JSON.stringify(path.resolve('src/vault/frontmatter-index.ts'))};
+import { LocalFSAdapter } from ${JSON.stringify(pathToFileURL(path.resolve('src/storage/local-fs.ts')).href)};
+import { FrontmatterIndex } from ${JSON.stringify(pathToFileURL(path.resolve('src/vault/frontmatter-index.ts')).href)};
 const heap = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed; };
 const before = heap();
 const adapter = await LocalFSAdapter.create(process.argv[1], { ripgrepPath: null });

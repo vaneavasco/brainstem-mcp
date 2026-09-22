@@ -1,4 +1,3 @@
-import path from 'node:path';
 import pathPosix from 'node:path/posix';
 import pathWin32 from 'node:path/win32';
 
@@ -85,13 +84,18 @@ export async function validateVaultPath(
   return { ok: true, path: candidate, warnings };
 }
 
-/** Suggests likely vault folders under `~/Obsidian*` and `~/Documents/Obsidian*`. */
+/** Suggests likely vault folders under `~/Obsidian*` and `~/Documents/Obsidian*`. `home` is a
+ *  path on whatever machine this runs on, so it is joined with that platform's own `path` module
+ *  (posix or win32) rather than the ambient one, which on a Windows host would treat a POSIX-style
+ *  `home` (as every non-Windows test here uses) as drive-relative instead of absolute. */
 export async function suggestVaultPaths(
   home: string,
   readdir: (p: string) => Promise<string[]>,
+  platform: NodeJS.Platform,
 ): Promise<string[]> {
+  const mod = pathModule(platform);
   const suggestions: string[] = [];
-  for (const dir of [home, path.join(home, 'Documents')]) {
+  for (const dir of [home, mod.join(home, 'Documents')]) {
     let entries: string[];
     try {
       entries = await readdir(dir);
@@ -99,7 +103,7 @@ export async function suggestVaultPaths(
       continue;
     }
     for (const entry of entries) {
-      if (/^Obsidian/i.test(entry)) suggestions.push(path.join(dir, entry));
+      if (/^Obsidian/i.test(entry)) suggestions.push(mod.join(dir, entry));
     }
   }
   return suggestions;

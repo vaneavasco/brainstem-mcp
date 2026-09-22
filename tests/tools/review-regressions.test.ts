@@ -14,14 +14,20 @@ afterEach(async () => {
 });
 
 describe('filtered search never loses a candidate to the presentation budget', () => {
+  // 480 files written (in parallel — a sequential loop was needlessly re-running mkdir on every
+  // iteration too) plus one full-vault reconcile and a search over every candidate: an honest 60s
+  // rather than the suite's default 15s, which the slower Windows CI runner in particular can miss
+  // even though nothing here is algorithmically worse than linear in the file count.
   it('finds the one matching note among hundreds of long-path candidates', async () => {
     const folder = `threads/${'a-long-folder-name-for-many-notes-'.repeat(3)}`;
-    for (let i = 0; i < 480; i += 1) {
-      const name = `${String(i).padStart(4, '0')}-${'subject-words-'.repeat(5)}.md`;
-      const body = i === 479 ? 'the NEEDLE-XYZ is here' : 'nothing to see';
-      await fs.mkdir(path.join(h.root, folder), { recursive: true });
-      await fs.writeFile(path.join(h.root, folder, name), `---\nstatus: open\n---\n${body}\n`);
-    }
+    await fs.mkdir(path.join(h.root, folder), { recursive: true });
+    await Promise.all(
+      Array.from({ length: 480 }, (_, i) => {
+        const name = `${String(i).padStart(4, '0')}-${'subject-words-'.repeat(5)}.md`;
+        const body = i === 479 ? 'the NEEDLE-XYZ is here' : 'nothing to see';
+        return fs.writeFile(path.join(h.root, folder, name), `---\nstatus: open\n---\n${body}\n`);
+      }),
+    );
     await h.runtime.index.reconcile(h.runtime.adapter);
     const r = await h.call('vault_search', {
       query: 'NEEDLE-XYZ',
@@ -29,7 +35,7 @@ describe('filtered search never loses a candidate to the presentation budget', (
     });
     expect(r.isError).toBeFalsy();
     expect((r.structuredContent as { total: number }).total).toBe(1);
-  });
+  }, 60_000);
 });
 
 describe('vault_links filter is strict like every other input', () => {

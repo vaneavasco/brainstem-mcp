@@ -98,7 +98,7 @@ describe('suggestVaultPaths', () => {
       if (p === '/home/u/Documents') return ['Obsidian', 'Not Obsidian'];
       return [];
     };
-    const suggestions = await suggestVaultPaths('/home/u', readdir);
+    const suggestions = await suggestVaultPaths('/home/u', readdir, 'linux');
     expect(suggestions).toEqual(['/home/u/Obsidian Vault', '/home/u/Documents/Obsidian']);
   });
 
@@ -106,6 +106,13 @@ describe('suggestVaultPaths', () => {
     const readdir = async () => {
       throw new Error('ENOENT');
     };
-    expect(await suggestVaultPaths('/home/u', readdir)).toEqual([]);
+    expect(await suggestVaultPaths('/home/u', readdir, 'linux')).toEqual([]);
+  });
+
+  it('joins with the given platform\u2019s own path syntax, not the one this test runs under', async () => {
+    const readdir = async (p: string) => (p === 'C:\\Users\\u' ? ['Obsidian Vault'] : []);
+    expect(await suggestVaultPaths('C:\\Users\\u', readdir, 'win32')).toEqual([
+      'C:\\Users\\u\\Obsidian Vault',
+    ]);
   });
 });

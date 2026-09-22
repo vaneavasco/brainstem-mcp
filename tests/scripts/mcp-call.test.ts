@@ -131,7 +131,8 @@ describe('npm run mcp:call', () => {
 
   it('persists the tokens to a 0600 file, keyed by the issuer that minted them', async () => {
     const stat = await fs.stat(tokenFile);
-    expect(stat.mode & 0o777).toBe(0o600);
+    // File modes don't exist on Windows the way POSIX permission bits do.
+    if (process.platform !== 'win32') expect(stat.mode & 0o777).toBe(0o600);
     const saved = JSON.parse(await fs.readFile(tokenFile, 'utf8')) as {
       issuer: string;
       tokens: Record<string, unknown>;

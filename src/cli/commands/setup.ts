@@ -119,10 +119,14 @@ async function resolveVaultPath(args: SetupArgs, deps: SetupDeps): Promise<strin
     return verdict.path;
   }
 
-  const suggestions = await suggestVaultPaths(deps.vaultCtx.home, async (p) => {
-    const { promises: fs } = await import('node:fs');
-    return fs.readdir(p);
-  }).catch(() => [] as string[]);
+  const suggestions = await suggestVaultPaths(
+    deps.vaultCtx.home,
+    async (p) => {
+      const { promises: fs } = await import('node:fs');
+      return fs.readdir(p);
+    },
+    deps.vaultCtx.platform,
+  ).catch(() => [] as string[]);
 
   const answer = await deps.io.prompt('Path to your Obsidian vault', {
     default: suggestions[0],

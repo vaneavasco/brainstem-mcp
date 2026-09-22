@@ -1,4 +1,9 @@
-import path from 'node:path';
+// This suite forces `vaultCtx.platform: 'linux'` throughout (see `harness()` below), and
+// `runVaultSet` itself joins with `pathPosix`/`pathWin32` picked from that injected platform, not
+// the ambient one — so every path built here, including the fake-fs Map's keys, must use
+// `node:path/posix` too, whatever OS is actually running the test (CI runs this suite on Windows
+// and macOS as well as Linux).
+import path from 'node:path/posix';
 import { describe, expect, it } from 'vitest';
 import { runVaultSet, runVaultShow, type VaultSetDeps } from '../../src/cli/commands/vault.ts';
 import type { ComposeRunner } from '../../src/cli/docker.ts';
