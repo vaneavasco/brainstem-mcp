@@ -170,6 +170,8 @@ build-provenance attestation, `actions/attest-build-provenance@v3` in the new `b
 ship from the first release instead) and a bundled ripgrep binary (still a later, measured
 decision — the fallback above means it is no longer required for parity).
 
+Measured on the real 37,707-note vault (read-only, ripgrep 15.2 against the builtin engine, identical hit counts on all six patterns): ripgrep 17–58 ms per search; builtin 1.0–1.4 s for ordinary patterns — a literal search costs the same 1.4 s, so that second is the single-threaded reading of the files, not the matching — and 5.7 s (32 s before the prefilter and the faster hot path) for `(invoice|receipt)[- ]?(number|no\.?)\s*[0-9]{3,}`. RSS 112 MB vs 267 MB. Decision: ripgrep is recommended everywhere a user can read it, not bundled (four platform binaries, and Gatekeeper on macOS would refuse an unsigned one); the generated-vault figures in the scale test are far lower because its notes are short.
+
 ### Phase 6 — three operating systems
 
 - CI matrix `ubuntu | macos | windows` for unit tests (Docker smoke stays on Linux). Expected trouble, to be found by tests rather than by users: backslashes reaching the path policy, case-insensitive file systems (two notes that differ only by case; near-miss suggestions), atomic rename over an open file on Windows, watcher behaviour (FSEvents, ReadDirectoryChangesW), `\r\n` in notes, long paths.

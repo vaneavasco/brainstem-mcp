@@ -86,7 +86,7 @@ claude mcp add brainstem -- /path/to/brainstem stdio
 
 A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
 
-**Recommended: install ripgrep.** `vault_search({ regex: true })` works either way: ripgrep, when installed, gives it the full regular-expression syntax; without it, a builtin linear-time engine runs instead, with a reduced syntax (see the tool's own description for the exact list) and a required-literal prefilter that keeps an ordinary full-vault search fast — measured on a 37,707-note vault, well under 200 ms for typical patterns, competitive with (and for some patterns faster than) shelling out to ripgrep once subprocess and JSON-parsing overhead are counted. Install ripgrep mainly for the fuller syntax, not for speed alone. The server detects ripgrep once, at startup, by looking for `rg` on `PATH` — `brainstem_ping`'s `search.regexEngine` says which one is active (`"ripgrep"` or `"builtin"`).
+**Recommended: install ripgrep.** `vault_search` works either way: with ripgrep on `PATH` it has the full regular-expression syntax and reads the vault in parallel; without it, a builtin linear-time engine runs instead, with a reduced syntax (the tool's description lists it) on a single thread. Measured on a real vault of 37,707 notes: about 30 ms per search with ripgrep, about 1 s without (a literal search costs the same second: it is the reading of the files, not the matching), and up to 6 s for a pattern with alternation and counted repeats. On a vault of a few thousand notes the difference is not noticeable. The server detects ripgrep at start and `brainstem_ping` reports which engine is in use (`search.regexEngine`).
 
 ```bash
 brew install ripgrep                          # macOS
@@ -141,7 +141,7 @@ and, for the stronger check (that it was built by GitHub Actions from this exact
 gh attestation verify brainstem-mcp-X.Y.Z.mcpb --repo vaneavasco/brainstem-mcp
 ```
 
-**Recommended: install ripgrep** (see above) for the fuller regex syntax and, on some patterns, faster search — the same either way, whether Claude reaches the server through the bundle or through `claude mcp add`.
+**Recommended: install ripgrep** (see above): the full regex syntax, and searches in tens of milliseconds instead of about a second on a large vault — the same either way, whether Claude reaches the server through the bundle or through `claude mcp add`.
 
 ## Commands
 
