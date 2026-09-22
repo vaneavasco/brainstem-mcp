@@ -50,6 +50,25 @@ below — both apply everywhere, not only on the platforms that surfaced them.
   sentence when ripgrep is absent. `src/storage/local-fs.ts`, `src/vault/safe-regex.ts`,
   `src/vault/instructions.ts`, `src/mcp/factory.ts`, `src/tools/search.ts`; `./brainstem doctor`
   and the README name the install line per platform.
+- **The builtin regex engine got a required-literal prefilter and a faster hot path.**
+  `compileSafeSearch` now derives, from the pattern's own AST, a set of literal substrings of
+  which at least one must appear in any matching line — ripgrep's own trick, in miniature (a run
+  of adjacent literal characters anywhere in the pattern, or the union of every branch of a
+  top-level alternation whose branches all have their own requirement; `null`, safely, when
+  neither applies). `LocalFSAdapter.searchJs` uses it to reject a whole file with one
+  `String.includes` scan before ever splitting it into lines, and `find()` uses it on each line
+  before running the NFA at all. A ~400-pattern fuzz test
+  (`tests/vault/safe-regex.test.ts`) proves the prefilter is sound (never rejects a line the NFA
+  would actually match). Separately, `find()`'s thread lists are now two reusable pairs of
+  parallel `Int32Array`s (state index, start offset), ping-ponged by swapping which is "current"
+  instead of allocating a new array every character, and `variantsOf` (case-fold lookup) is
+  memoized. Measured on a generated 40,000-note vault
+  (`tests/scale/regex-search.scale.ts`, a new scale test): well-filtered patterns (a literal, an
+  email-like pattern, the invoice/receipt example) went from ~10–12 s to ~4.5 s, now dominated by
+  this machine's raw file-read I/O for 40,000 files (~3.5 s of that alone) rather than by the
+  regex engine; a pattern with no derivable literal (`(a+)+b`, deliberately chosen to stay
+  catastrophic for a backtracking engine) is unaffected by the prefilter, as expected, and stays
+  linear. `src/vault/safe-regex.ts`.
 
 ## [0.6.0] — 2026-09-21
 

@@ -121,13 +121,36 @@ function setMatches(set: CharSet, variants: string[]): boolean {
 }
 
 /** The character plus its single-character case variants ('ß'.toUpperCase() is 'SS' — dropped). */
-function variantsOf(ch: string): string[] {
+function variantsOfUncached(ch: string): string[] {
   const out = [ch];
   const lower = ch.toLowerCase();
   if (lower !== ch && [...lower].length === 1) out.push(lower);
   const upper = ch.toUpperCase();
   if (upper !== ch && [...upper].length === 1) out.push(upper);
   return out;
+}
+
+/** Ceiling on `VARIANTS_CACHE` below: a real vault's alphabet is a few hundred code points at
+ *  most, so this is never reached in practice — it exists only so a search fed a long run of
+ *  distinct, never-repeating characters (an adversarial input, or one pathologically diverse
+ *  line) can't grow the cache without bound over a long-running server's lifetime. Reached: the
+ *  cache is simply cleared and rebuilt, which only costs a little recomputation, never
+ *  correctness (`variantsOfUncached` is pure). */
+const VARIANTS_CACHE_MAX = 4096;
+const VARIANTS_CACHE = new Map<string, string[]>();
+
+/** `variantsOfUncached`, memoized — every character of every line, in `compileSafePattern.test()`
+ *  and `compileSafeSearch.find()` alike, calls this once per NFA step; a vault search re-scans
+ *  the same handful of dozens of common characters across thousands of lines, so caching turns a
+ *  `toLowerCase()`/`toUpperCase()` pair plus two small array allocations per character into a Map
+ *  lookup after the first sighting. */
+function variantsOf(ch: string): string[] {
+  let cached = VARIANTS_CACHE.get(ch);
+  if (cached !== undefined) return cached;
+  if (VARIANTS_CACHE.size >= VARIANTS_CACHE_MAX) VARIANTS_CACHE.clear();
+  cached = variantsOfUncached(ch);
+  VARIANTS_CACHE.set(ch, cached);
+  return cached;
 }
 
 function literalSet(ch: string): CharSet {
@@ -353,6 +376,102 @@ function parsePattern(pattern: string): Ast {
   const ast = parseAlternation();
   if (pos < src.length) throw invalid(`unexpected "${peek()}" at position ${pos}.`);
   return ast;
+}
+
+// ---------------------------------------------------------------- required-literal prefilter
+
+/**
+ * The exact character this AST node is guaranteed to consume, if — and only if — it is a plain,
+ * non-negated, single-code-point `set` node (a literal character or an escaped metacharacter; not
+ * `.`, not a class like `\d`, not a multi-character range like `[a-z]`). Used only to find
+ * consecutive literal characters in a `concat` to merge into a single longer required substring.
+ */
+function definiteChar(node: Ast): string | null {
+  if (node.kind !== 'set') return null;
+  const { set } = node;
+  if (set.negated || set.items.length !== 1) return null;
+  const item = set.items[0] as SetItem;
+  if (item.type !== 'range' || item.from !== item.to) return null;
+  return String.fromCodePoint(item.from);
+}
+
+/**
+ * Ripgrep's own trick, in miniature: derives a set of literal substrings of which AT LEAST ONE
+ * must appear (as a plain substring, ignoring where) in anything this pattern matches — or `null`
+ * when no such set can be derived (the safe default: "no information", never wrong, just not
+ * useful for skipping). `LocalFSAdapter.searchJs` uses this to reject a whole file, or a single
+ * line, with one `String.includes` check per candidate literal, before ever running the NFA over
+ * it — the NFA is linear in the subject length, but a `.includes` scan is a small constant
+ * factor of that, so this turns "run the automaton over every line of every candidate file" into
+ * "run it only over the line/file that could possibly match".
+ *
+ * Two shapes are recognised, matching this module's own reduced grammar:
+ *  - a run of consecutive literal characters anywhere in a `concat` (e.g. `\d{4}-\d{2}-\d{2}`'s
+ *    two `-` characters are each a length-1 run; `colou?r`'s `colo` — up to the optional `u` — is
+ *    a length-4 run) — the LONGEST such run (or, when no run beats it, the strongest recursive
+ *    requirement of a non-literal child, e.g. a nested alternation) is kept;
+ *  - a top-level alternation where EVERY branch itself has a derivable requirement (e.g.
+ *    `invoice|receipt` → `{"invoice","receipt"}`) — the union of every branch's alternatives,
+ *    since a match follows exactly one branch and so is guaranteed to contain that branch's own
+ *    required substring. A branch with no derivable requirement (it could match without any
+ *    particular substring present) makes the WHOLE alternation undecidable, not just that branch.
+ *
+ * Not attempted: combining more than one independent requirement with AND (e.g. `invoice` AND
+ * `number` both required by `(invoice|receipt)[- ]?(number|no\.?)`) — only the single strongest
+ * one found is kept. Weaker than possible, never wrong: the result is still a sound (if not
+ * maximally selective) required-literal set.
+ */
+function deriveRequiredLiterals(ast: Ast): string[] | null {
+  /** The requirement itself, plus how selective it is (the length of its shortest alternative —
+   *  a longer literal is rarer, and so filters more), so `concat` can pick the best candidate
+   *  among several unrelated ones instead of just the first non-null one found. */
+  function requirementOf(node: Ast): { literals: string[]; score: number } | null {
+    switch (node.kind) {
+      case 'empty':
+        return null;
+      case 'set': {
+        const ch = definiteChar(node);
+        return ch === null ? null : { literals: [ch], score: ch.length };
+      }
+      case 'repeat':
+        // min === 0: the whole thing can be absent, so nothing about it is guaranteed present.
+        // min >= 1: it occurs at least once, so whatever it requires is still required.
+        return node.min === 0 ? null : requirementOf(node.node);
+      case 'alt': {
+        const literals: string[] = [];
+        for (const option of node.options) {
+          const req = requirementOf(option);
+          if (req === null) return null; // one undecidable branch undecides the whole alternation
+          literals.push(...req.literals);
+        }
+        const unique = [...new Set(literals)];
+        return { literals: unique, score: Math.min(...unique.map((s) => s.length)) };
+      }
+      case 'concat': {
+        let best: { literals: string[]; score: number } | null = null;
+        let run = '';
+        const consider = (candidate: { literals: string[]; score: number } | null): void => {
+          if (candidate !== null && (best === null || candidate.score > best.score))
+            best = candidate;
+        };
+        for (const part of node.parts) {
+          const ch = definiteChar(part);
+          if (ch !== null) {
+            run += ch;
+            continue;
+          }
+          if (run.length > 0) {
+            consider({ literals: [run], score: run.length });
+            run = '';
+          }
+          consider(requirementOf(part));
+        }
+        if (run.length > 0) consider({ literals: [run], score: run.length });
+        return best;
+      }
+    }
+  }
+  return requirementOf(ast)?.literals ?? null;
 }
 
 // ---------------------------------------------------------------- NFA
@@ -598,12 +717,17 @@ export interface SafeSearchMatcher {
    * before any can be preferred; this needs only the highest-priority one still alive).
    */
   find(line: string): SafeSearchMatch | null;
-}
-
-interface SearchThread {
-  index: number;
-  /** Code-point offset where this thread's match attempt began. */
-  startCp: number;
+  /**
+   * True when `text` is GUARANTEED not to contain a match — every literal `deriveRequiredLiterals`
+   * could derive from the pattern is checked with one `String.includes` (case-folded together
+   * when the matcher is case-insensitive) before any NFA thread ever runs. `false` never means
+   * "there is a match", only "cannot rule one out" — a pattern with no derivable requirement (most
+   * uses of `.`, a class, or an unconstrained quantifier at the top level) always returns `false`,
+   * the same as if this check did not exist. Safe, and useful, on a whole file's text (skip
+   * reading every line of a file that plainly cannot match) as well as on one line (skip that
+   * line's `find()` call) — see `LocalFSAdapter.searchJs`.
+   */
+  cannotMatch(text: string): boolean;
 }
 
 /**
@@ -625,18 +749,58 @@ export function compileSafeSearch(
     throw invalid(`regex pattern exceeds ${MAX_PATTERN_CHARS} characters (got ${pattern.length}).`);
   }
   const caseSensitive = opts.caseSensitive === true;
-  const { states, start } = buildNfa(parsePattern(pattern));
+  const ast = parsePattern(pattern);
+  const { states, start } = buildNfa(ast);
   const marks = new Int32Array(states.length).fill(-1);
   let generation = 0;
 
-  // Epsilon closure of `from`, appended to `list` in the pattern's own priority order (the
-  // quantifier/alternation branch written — and therefore compiled — first is explored, and so
-  // appended, first): a plain stack-based DFS that always pushes the LOWER-priority child (`b`)
+  const requiredLiterals = deriveRequiredLiterals(ast);
+  // Compared case-insensitively (the matcher's default) unless caseSensitive was requested — see
+  // `cannotMatch`'s own doc comment on the interface above.
+  const requiredNeedles = requiredLiterals?.map((lit) => (caseSensitive ? lit : lit.toLowerCase()));
+
+  function cannotMatch(text: string): boolean {
+    if (requiredNeedles === undefined) return false; // no derivable requirement: never skip
+    const haystack = caseSensitive ? text : text.toLowerCase();
+    for (const needle of requiredNeedles) {
+      if (haystack.includes(needle)) return false; // this literal is present: might match
+    }
+    return true; // none of the required literals appear anywhere in `text`
+  }
+
+  // Two thread lists, each a pair of parallel Int32Arrays (NFA state index, code-point start
+  // offset) sized to the worst case (every state alive in one generation) — reused across every
+  // step of every `find()` call, and across every `find()` call this matcher ever makes (a vault
+  // search calls `find()` once per candidate line, often thousands of times), never reallocated;
+  // ping-ponged by swapping which pair is "current" and which is "next" rather than by copying.
+  const cap = states.length;
+  const stateA = new Int32Array(cap);
+  const startA = new Int32Array(cap);
+  const stateB = new Int32Array(cap);
+  const startB = new Int32Array(cap);
+  // The epsilon-closure DFS's own scratch stack: also reused, grown (never shrunk) on demand —
+  // cheap, since a JS array's backing store growing by push() amortizes to O(1), and this stack
+  // empties completely (length reset to 0) between every `addThread` call.
+  const stack: number[] = [];
+
+  // Epsilon closure of `from`, appended into (stateBuf, startBuf) starting at `count`, in the
+  // pattern's own priority order (the quantifier/alternation branch written — and therefore
+  // compiled — first is explored, and so appended, first): pushes the LOWER-priority child (`b`)
   // before the higher-priority one (`a`), so `a`'s whole subtree pops — and is visited — first.
   // (Contrast `compileSafePattern`'s own `addState`, which pushes `a` then `b`: fine there, since
   // `test()` only asks "is any thread in a match state", never "which one gets to answer first".)
-  function addThread(list: SearchThread[], gen: number, from: number, startCp: number): void {
-    const stack: number[] = [from];
+  // Returns the new count.
+  function addThread(
+    stateBuf: Int32Array,
+    startBuf: Int32Array,
+    count: number,
+    gen: number,
+    from: number,
+    startCp: number,
+  ): number {
+    let n = count;
+    stack.length = 0;
+    stack.push(from);
     while (stack.length > 0) {
       const index = stack.pop() as number;
       if (marks[index] === gen) continue;
@@ -646,12 +810,16 @@ export function compileSafeSearch(
         stack.push(state.b);
         stack.push(state.a);
       } else {
-        list.push({ index, startCp });
+        stateBuf[n] = index;
+        startBuf[n] = startCp;
+        n += 1;
       }
     }
+    return n;
   }
 
   function find(line: string): SafeSearchMatch | null {
+    if (cannotMatch(line)) return null;
     // Same guarantee as compileSafePattern's test(): a subject over the cap is refused outright
     // rather than scanned partially, bounding the worst case a single very long note line (a
     // minified .canvas/.base file, say) can cost — ripgrep has no such cap, but no test in the
@@ -668,46 +836,61 @@ export function compileSafeSearch(
 
     let matched: SafeSearchMatch | null = null;
     generation += 1;
-    let clist: SearchThread[] = [];
-    addThread(clist, generation, start, 0);
+    let curState = stateA;
+    let curStart = startA;
+    let nextState = stateB;
+    let nextStart = startB;
+    let curCount = addThread(curState, curStart, 0, generation, start, 0);
 
     for (let sp = 0; sp <= n; sp += 1) {
       // Highest-priority match in the current thread list wins; anything after it in the
       // (priority-ordered) list is strictly worse — whether a different, later start (unanchored
       // search always keeps threads sorted oldest-start/highest-priority first, since a new
       // thread is only ever appended at the end) or the same start via a lower-priority path —
-      // and is dropped rather than allowed to also extend into `nlist`.
+      // and is dropped rather than allowed to also extend to the next step.
       let cut = -1;
-      for (let i = 0; i < clist.length; i += 1) {
-        const t = clist[i] as SearchThread;
-        if ((states[t.index] as NfaState).kind === 'match') {
-          matched = { start: t.startCp, end: sp };
+      for (let i = 0; i < curCount; i += 1) {
+        if ((states[curState[i] as number] as NfaState).kind === 'match') {
+          matched = { start: curStart[i] as number, end: sp };
           cut = i;
           break;
         }
       }
-      if (cut !== -1) clist = clist.slice(0, cut);
+      if (cut !== -1) curCount = cut;
       if (sp >= n) break;
-      if (clist.length === 0 && matched !== null) break; // nothing left could ever beat `matched`
+      if (curCount === 0 && matched !== null) break; // nothing left could ever beat `matched`
 
       generation += 1;
-      const nlist: SearchThread[] = [];
+      let nextCount = 0;
       const ch = cps[sp] as string;
       const variants = caseSensitive ? [ch] : variantsOf(ch);
-      for (const t of clist) {
-        const state = states[t.index] as NfaState;
+      for (let i = 0; i < curCount; i += 1) {
+        const state = states[curState[i] as number] as NfaState;
         if (state.kind === 'char' && setMatches(state.set, variants)) {
-          addThread(nlist, generation, state.next, t.startCp);
+          nextCount = addThread(
+            nextState,
+            nextStart,
+            nextCount,
+            generation,
+            state.next,
+            curStart[i] as number,
+          );
         }
       }
       // A new thread may start at the next position — but only while no match has been found
       // yet: any thread starting now begins no earlier than `matched.start` already does, so it
       // can never improve on it (leftmost start always wins over anything else).
-      if (matched === null) addThread(nlist, generation, start, sp + 1);
-      clist = nlist;
+      if (matched === null) {
+        nextCount = addThread(nextState, nextStart, nextCount, generation, start, sp + 1);
+      }
+      // Swap: what was "next" becomes "current" for the following step, and vice versa — no
+      // array is ever allocated or copied to make this happen.
+      [curState, nextState] = [nextState, curState];
+      [curStart, nextStart] = [nextStart, curStart];
+      curCount = nextCount;
     }
     return matched;
   }
 
-  return { source: pattern, find };
+  return { source: pattern, find, cannotMatch };
 }

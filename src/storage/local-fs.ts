@@ -1015,6 +1015,12 @@ export class LocalFSAdapter implements StorageAdapter {
       } catch {
         continue;
       }
+      // The required-literal prefilter (src/vault/safe-regex.ts) rules out a whole file with one
+      // pass over its raw text, before ever splitting it into lines: `find()` below already runs
+      // the same check per LINE, but a file that fails it can never have a matching line, so this
+      // skips the split (and every per-line NFA run `find()` would otherwise have to reject one
+      // at a time) entirely for a file the required literal doesn't appear in anywhere.
+      if (regexMatcher?.cannotMatch(text)) continue;
       const lines = text.split('\n');
       for (let i = 0; i < lines.length && out.length < limit; i += 1) {
         const line = lines[i] ?? '';

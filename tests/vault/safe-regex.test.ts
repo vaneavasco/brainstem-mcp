@@ -290,3 +290,175 @@ describe('compileSafeSearch — linear-time guarantee on a pathological pattern'
     expect(elapsedMs).toBeLessThan(5_000);
   });
 });
+
+describe('compileSafeSearch — cannotMatch (the required-literal prefilter)', () => {
+  it('rejects text missing every alternative of a top-level alternation', () => {
+    const m = compileSafeSearch('invoice|receipt');
+    expect(m.cannotMatch('nothing relevant here')).toBe(true);
+    expect(m.cannotMatch('please find the invoice attached')).toBe(false);
+    expect(m.cannotMatch('a receipt is enclosed')).toBe(false);
+  });
+
+  it('rejects text missing a plain literal pattern', () => {
+    const m = compileSafeSearch('needle');
+    expect(m.cannotMatch('haystack haystack haystack')).toBe(true);
+    expect(m.cannotMatch('a needle in it')).toBe(false);
+  });
+
+  it('finds the longest literal run up to an optional character, not just one character', () => {
+    // colou?r: "colo" (4 chars, before the optional "u") beats "r" (1 char).
+    const m = compileSafeSearch('colou?r');
+    expect(m.cannotMatch('nothing relevant in this line at all')).toBe(true); // no "colo" substring
+    expect(m.cannotMatch('the color is nice')).toBe(false);
+    expect(m.cannotMatch('the colour is nice')).toBe(false);
+  });
+
+  it('derives the union of every branch of the real invoice/receipt example pattern', () => {
+    const m = compileSafeSearch('(invoice|receipt)[- ]?(number|no\\.?)\\s*[0-9]{3,}');
+    expect(m.cannotMatch('nothing about billing here')).toBe(true);
+    expect(m.cannotMatch('invoice number 48213 is overdue')).toBe(false);
+    expect(m.cannotMatch('see receipt no. 991')).toBe(false);
+  });
+
+  it('never rejects (always returns false) for a pattern with no derivable required literal', () => {
+    for (const pattern of ['.*', '\\d+', '[a-z]+', 'a*', 'a?', '(a|.)']) {
+      const m = compileSafeSearch(pattern);
+      expect(m.cannotMatch('literally anything, xyz 123 !@#'), pattern).toBe(false);
+      expect(m.cannotMatch(''), pattern).toBe(false);
+    }
+  });
+
+  it('is case-insensitive by default and case-sensitive on request, matching find()', () => {
+    const insensitive = compileSafeSearch('Invoice');
+    expect(insensitive.cannotMatch('an INVOICE is attached')).toBe(false);
+    const sensitive = compileSafeSearch('Invoice', { caseSensitive: true });
+    expect(sensitive.cannotMatch('an invoice is attached')).toBe(true); // wrong case
+    expect(sensitive.cannotMatch('an Invoice is attached')).toBe(false);
+  });
+
+  it('never rejects a line find() actually matches, across the whole class of patterns above', () => {
+    // Every case above already double-checks find() agrees with cannotMatch; this is the same
+    // property stated directly, once, as the invariant the fuzz test below generalizes.
+    for (const [pattern, line] of [
+      ['invoice|receipt', 'my receipt is late'],
+      ['colou?r', 'nice color'],
+      ['(invoice|receipt)[- ]?(number|no\\.?)\\s*[0-9]{3,}', 'invoice-number 12345'],
+    ] as const) {
+      const m = compileSafeSearch(pattern);
+      if (m.find(line) !== null) expect(m.cannotMatch(line), pattern).toBe(false);
+    }
+  });
+});
+
+describe('compileSafeSearch — cannotMatch is sound (fuzz)', () => {
+  /** Deterministic PRNG (mulberry32), matching the convention used elsewhere in this repo's
+   *  fixture generators (e.g. tests/scale/vault.scale.ts) — reproducible across runs. */
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // A small alphabet, deliberately overlapping between "pattern literals" and "line content" —
+  // maximizes the chance that a random line actually matches a random pattern, which is the only
+  // case this test cares about (cannotMatch must never reject a line find() matches; a fuzz run
+  // where nothing ever matches would trivially "pass" without checking anything meaningful).
+  const ALPHABET = ['a', 'b', 'c', '0', '1', '-', '.', '@', ' '];
+
+  function randomPattern(rand: () => number, depth: number): string {
+    const pick = (n: number): number => Math.floor(rand() * n);
+    const literalChar = (): string => ALPHABET[pick(ALPHABET.length)] as string;
+
+    function atom(d: number): string {
+      if (d <= 0) return literalChar();
+      switch (pick(5)) {
+        case 0:
+          return literalChar();
+        case 1:
+          return '.';
+        case 2: {
+          const n = 1 + pick(3);
+          return `[${Array.from({ length: n }, literalChar).join('')}]`;
+        }
+        case 3:
+          return `(${concat(d - 1)})`;
+        default:
+          return `(?:${alt(d - 1)})`;
+      }
+    }
+    function quantified(d: number): string {
+      const a = atom(d);
+      switch (pick(5)) {
+        case 0:
+          return `${a}*`;
+        case 1:
+          return `${a}+`;
+        case 2:
+          return `${a}?`;
+        case 3:
+          return `${a}{1,2}`;
+        default:
+          return a;
+      }
+    }
+    function concat(d: number): string {
+      const n = 1 + pick(3);
+      return Array.from({ length: n }, () => quantified(d)).join('');
+    }
+    function alt(d: number): string {
+      const n = 1 + pick(2);
+      return Array.from({ length: n }, () => concat(d)).join('|');
+    }
+    return alt(depth);
+  }
+
+  function randomLine(rand: () => number): string {
+    const pick = (n: number): number => Math.floor(rand() * n);
+    const n = pick(24);
+    return Array.from({ length: n }, () => ALPHABET[pick(ALPHABET.length)] as string).join('');
+  }
+
+  it('prefilter-reject implies find() === null, for a few hundred random patterns × random lines', () => {
+    const rand = mulberry32(0xc0ffee);
+    const pick = (n: number): number => Math.floor(rand() * n);
+    let patternsChecked = 0;
+    let comparisonsMade = 0;
+    let realMatchesSeen = 0;
+    for (let i = 0; i < 400; i += 1) {
+      const pattern = randomPattern(rand, 3);
+      const caseSensitive = pick(2) === 0;
+      let matcher: ReturnType<typeof compileSafeSearch>;
+      try {
+        matcher = compileSafeSearch(pattern, { caseSensitive });
+      } catch {
+        continue; // an unsupported/too-complex random pattern isn't this test's concern
+      }
+      patternsChecked += 1;
+      for (let j = 0; j < 8; j += 1) {
+        const line = randomLine(rand);
+        const found = matcher.find(line);
+        comparisonsMade += 1;
+        if (found !== null) {
+          realMatchesSeen += 1;
+          // The property under test, stated as the task requires it: prefilter-reject ⇒
+          // find() === null. Contrapositive, checked directly: a real match ⇒ NOT rejected.
+          expect(
+            matcher.cannotMatch(line),
+            `pattern=${JSON.stringify(pattern)} line=${JSON.stringify(line)} caseSensitive=${caseSensitive}`,
+          ).toBe(false);
+        }
+      }
+    }
+    // Guards against a change to the generator (or the grammar) quietly making every pattern fail
+    // to compile, or every line fail to match, which would let this test pass without checking
+    // the property it exists to check.
+    expect(patternsChecked).toBeGreaterThan(200);
+    expect(comparisonsMade).toBeGreaterThan(1500);
+    expect(realMatchesSeen).toBeGreaterThan(50);
+  });
+});
