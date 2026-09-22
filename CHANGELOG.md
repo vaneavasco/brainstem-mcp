@@ -42,6 +42,10 @@ below — both apply everywhere, not only on the platforms that surfaced them.
   writer comes: the containment check every operation runs, the case check above, and the file
   watcher each did so. None of the three touches anything that is not a plain file or a folder
   now. (Found by the macOS leg of the suite, three runs in a row.)
+- **A note deleted or moved by a tool can no longer be put back into the index by the file
+  watcher.** On macOS a rename reaches the watcher as a change; its refresh had read the note
+  before the move and wrote it back after the tool's own removal. A refresh that began before
+  such a removal now discards its result. (Found by the macOS leg of the suite, once.)
 - **`VAULT_READ_ONLY` is read in every usual spelling** (`true`/`false`, `1`/`0`, `yes`/`no`,
   `on`/`off`, any case; empty means not set), because an install form substitutes a boolean into
   the environment in a spelling nothing documents, and a server that refuses to start over `True`

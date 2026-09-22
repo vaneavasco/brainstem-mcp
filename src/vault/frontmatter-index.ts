@@ -148,6 +148,13 @@ export class FrontmatterIndex {
   private readonly unindexable = new Map<string, string>();
   /** Notes whose last read failed; see `unreadableCount`. */
   private readonly unreadablePaths = new Set<string>();
+  /** How many times each path was removed or renamed away, so a refresh that began before such
+   *  a withdrawal knows not to write its stale result (see `refreshPath`). */
+  private readonly withdrawals = new Map<string, number>();
+
+  private withdraw(path: string): void {
+    this.withdrawals.set(path, (this.withdrawals.get(path) ?? 0) + 1);
+  }
 
   private constructor() {
     this.builtAt = new Date();
@@ -325,6 +332,7 @@ export class FrontmatterIndex {
   }
 
   remove(path: string): void {
+    this.withdraw(path);
     this.unreadablePaths.delete(path); // a note that is gone is not an unreadable note
     const existing = this.entries.get(path);
     if (!existing) return;
@@ -335,6 +343,7 @@ export class FrontmatterIndex {
   }
 
   rename(from: string, to: string): void {
+    this.withdraw(from);
     // an unreadable note moves like any other (a rename needs no read permission)
     if (this.unreadablePaths.delete(from)) this.unreadablePaths.add(to);
     const existing = this.entries.get(from);
@@ -429,8 +438,14 @@ export class FrontmatterIndex {
 
   async refreshPath(adapter: StorageAdapter, path: string): Promise<void> {
     if (!isMarkdownPath(path)) return;
+    // A tool that removes or renames this path while the read below is in flight must win: on
+    // macOS a rename into .trash reaches the watcher as a change, whose refresh had read the
+    // note before the move and would have put it back after vault_delete's index.remove.
+    const withdrawn = this.withdrawals.get(path) ?? 0;
     try {
-      this.upsert(FrontmatterIndex.fromNote(await adapter.read(path)));
+      const note = await adapter.read(path);
+      if ((this.withdrawals.get(path) ?? 0) !== withdrawn) return;
+      this.upsert(FrontmatterIndex.fromNote(note));
     } catch (error) {
       // Gone, or not a file at all (a folder, a FIFO or socket named like a note: no listing
       // ever shows those, only a watcher event can bring one here): not a note, so not counted.
