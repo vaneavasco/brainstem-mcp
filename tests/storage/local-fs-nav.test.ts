@@ -375,3 +375,29 @@ describe('watch', () => {
     expect(polled.capabilities().watch).toBe(true);
   });
 });
+
+describe.skipIf(process.platform === 'win32')('the watcher and a FIFO', () => {
+  it('never watches a FIFO — chokidar would fs.watch it, which opens it on macOS and never returns', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-watch-fifo-')),
+    );
+    const adapter = await LocalFSAdapter.create(dir, { ripgrepPath: null, watchPollMs: 50 });
+    const events: string[] = [];
+    const unsubscribe = adapter.watch?.((e) => events.push(`${e.type}:${e.path}`));
+    try {
+      await new Promise((r) => setTimeout(r, 200)); // past the initial scan
+      execFileSync('mkfifo', [path.join(dir, 'pipe.md')]);
+      await fs.writeFile(path.join(dir, 'plain.md'), '# plain\n');
+      const deadline = Date.now() + 5_000;
+      while (!events.some((e) => e === 'create:plain.md') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(events).toContain('create:plain.md'); // the watcher is alive and past the FIFO
+      expect(events.filter((e) => e.endsWith(':pipe.md'))).toEqual([]);
+    } finally {
+      unsubscribe?.();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+});

@@ -1122,9 +1122,15 @@ export class LocalFSAdapter implements StorageAdapter {
   watch(onChange: (event: ChangeEvent) => void, onError?: (error: unknown) => void): Unsubscribe {
     const watcher = chokidarWatch(this.root, {
       ignoreInitial: true,
-      ignored: (absPath: string) => {
+      ignored: (absPath: string, stats?: Stats) => {
         if (absPath === this.root) return false;
         if (path.basename(absPath).startsWith('.')) return true;
+        // chokidar puts an fs.watch on every file it tracks; on macOS that OPENS the file (kqueue
+        // needs a descriptor), and opening a FIFO blocks until a writer comes — never, here. So
+        // anything that is not a plain file or a folder is not watched at all (a FIFO or socket
+        // named like a note was never a note: no listing shows it). Measured: a FIFO in the vault
+        // froze the whole suite on macOS, three runs in a row, while Linux never noticed.
+        if (stats !== undefined && !stats.isFile() && !stats.isDirectory()) return true;
         return path.relative(this.root, absPath).split(path.sep)[0] === RESERVED_DIR;
       },
       awaitWriteFinish: false,
