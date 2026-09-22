@@ -105,6 +105,13 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
     expect(stdioTools.length).toBeGreaterThan(0);
   });
 
+  it('listPrompts over stdio returns the five novice prompts on a writable vault', async () => {
+    const stdio = await startStdioSession();
+    cleanups.push(() => stdio.close());
+    const { prompts } = await stdio.client.listPrompts();
+    expect(prompts).toHaveLength(5);
+  });
+
   it('brainstem_guide includes the "vault without owner instructions" section until the owner writes one, and drops it once they have', async () => {
     const first = await startStdioSession();
     const root = first.root;

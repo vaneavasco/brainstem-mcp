@@ -12,6 +12,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
+import { VAULT_PROMPTS, type VaultPrompt } from '../src/mcp/prompts.ts';
 import { registerVaultTools } from '../src/tools/register.ts';
 import { createLocalRuntime, type VaultRuntime } from '../src/vault/runtime.ts';
 import { renderIconPng } from './bundle-icon.ts';
@@ -30,6 +31,27 @@ interface PackageJson {
 export interface ManifestTool {
   name: string;
   description?: string;
+}
+
+/** MCPB v0.3's own prompt shape (`node_modules/@anthropic-ai/mcpb/dist/mcpb-manifest-v0.3.schema.json`
+ *  → `properties.prompts`): `arguments` is just the names, and `text` is the prompt rendered with
+ *  every argument left as its own `{name}` placeholder — Claude Desktop substitutes it, not us. */
+export interface ManifestPrompt {
+  name: string;
+  description: string;
+  arguments: string[];
+  text: string;
+}
+
+/** `VAULT_PROMPTS` (`src/mcp/prompts.ts`) rendered into the MCPB manifest shape: each argument
+ *  left as its own `{name}` placeholder, MCPB's own convention for a prompt's stored `text`. */
+export function manifestPrompts(prompts: readonly VaultPrompt[]): ManifestPrompt[] {
+  return prompts.map((p) => ({
+    name: p.name,
+    description: p.description,
+    arguments: p.args.map((a) => a.name),
+    text: p.text(Object.fromEntries(p.args.map((a) => [a.name, `{${a.name}}`]))),
+  }));
 }
 
 /**
@@ -71,8 +93,14 @@ export async function generateToolList(): Promise<ManifestTool[]> {
 }
 
 /** Pure — takes everything it needs as arguments, so `tests/release/version-consistency.test.ts`
- *  (and any other test) can check its shape without touching the filesystem or booting a vault. */
-export function buildManifest(pkg: PackageJson, tools: ManifestTool[]): Record<string, unknown> {
+ *  (and any other test) can check its shape without touching the filesystem or booting a vault.
+ *  `prompts` is `VAULT_PROMPTS` itself (a plain, synchronous import — unlike `tools`, it needs no
+ *  vault runtime to produce), mapped here to the MCPB shape by `manifestPrompts`. */
+export function buildManifest(
+  pkg: PackageJson,
+  tools: ManifestTool[],
+  prompts: readonly VaultPrompt[],
+): Record<string, unknown> {
   return {
     manifest_version: '0.3',
     name: 'brainstem-mcp',
@@ -113,6 +141,7 @@ export function buildManifest(pkg: PackageJson, tools: ManifestTool[]): Record<s
     },
     tools,
     tools_generated: false,
+    prompts: manifestPrompts(prompts),
     user_config: {
       vault: {
         type: 'directory',
@@ -162,7 +191,7 @@ export async function writeManifest(outPath: string): Promise<Record<string, unk
     await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8'),
   ) as PackageJson;
   const tools = await generateToolList();
-  const manifest = buildManifest(pkg, tools);
+  const manifest = buildManifest(pkg, tools, VAULT_PROMPTS);
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   return manifest;
@@ -183,6 +212,6 @@ if (isMain) {
   const manifest = await writeManifest(manifestPath);
   await writeIcon(iconPath);
   console.log(
-    `wrote ${path.relative(repoRoot, manifestPath)} (v${(manifest as { version: string }).version}, ${(manifest.tools as unknown[]).length} tools) and ${path.relative(repoRoot, iconPath)}`,
+    `wrote ${path.relative(repoRoot, manifestPath)} (v${(manifest as { version: string }).version}, ${(manifest.tools as unknown[]).length} tools, ${(manifest.prompts as unknown[]).length} prompts) and ${path.relative(repoRoot, iconPath)}`,
   );
 }

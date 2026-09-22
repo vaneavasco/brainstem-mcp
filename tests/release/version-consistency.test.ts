@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { writeManifest } from '../../scripts/bundle-manifest.ts';
+import { VAULT_PROMPTS } from '../../src/mcp/prompts.ts';
 import { serverVersion } from '../../src/version.ts';
 
 /**
@@ -49,6 +50,20 @@ describe('the version says the same thing everywhere', () => {
       expect(manifest.version).toBe(pkgVersion);
       const onDisk = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { version: string };
       expect(onDisk.version).toBe(pkgVersion);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('the generated manifest lists the same prompts as VAULT_PROMPTS', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-manifest-prompts-'));
+    try {
+      const manifestPath = path.join(tmpDir, 'manifest.json');
+      const manifest = await writeManifest(manifestPath);
+      const prompts = manifest.prompts as Array<{ name: string }>;
+      expect(prompts.map((p) => p.name).sort()).toEqual(
+        VAULT_PROMPTS.map((p) => p.name).toSorted(),
+      );
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
