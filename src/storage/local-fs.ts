@@ -1,6 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { type Dirent, promises as fs, realpath as realpathCallback, type Stats } from 'node:fs';
+import {
+  createReadStream,
+  type Dirent,
+  promises as fs,
+  realpath as realpathCallback,
+  type Stats,
+} from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
@@ -196,27 +202,30 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 /** Every regular file under `dir`, keyed by its path relative to `dir`, valued by its size — cheap
  *  enough to call twice (source and copy) and specific enough to catch a copy that silently
  *  dropped or truncated a file, without hashing every byte of a folder that may hold attachments. */
-async function collectFileSizes(dir: string, base = dir): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+/** Every file under `dir`, relative path → SHA-256 of its bytes. */
+async function collectFileHashes(dir: string, base = dir): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
   for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      for (const [rel, size] of await collectFileSizes(abs, base)) out.set(rel, size);
+      for (const [rel, hash] of await collectFileHashes(abs, base)) out.set(rel, hash);
     } else if (entry.isFile()) {
-      out.set(path.relative(base, abs), (await fs.stat(abs)).size);
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(abs)) hash.update(chunk as Buffer);
+      out.set(path.relative(base, abs), hash.digest('hex'));
     }
   }
   return out;
 }
 
-/** True when every file under `fromDir` has a same-named, same-sized file under `toDir` — the
- *  "verify" of "copy everything, verify, then remove": cheap, and enough to catch a copy that
- *  didn't actually finish, without trusting `fs.cp` blindly. */
+/** True when every file under `fromDir` has a same-named file with the same bytes under `toDir`:
+ *  the "verify" of "copy everything, verify, then remove". Bytes, not sizes: this stands between
+ *  a note and its deletion, and a same-sized wrong copy is exactly what a size check misses. */
 async function verifyRecursiveCopy(fromDir: string, toDir: string): Promise<boolean> {
-  const [source, copy] = await Promise.all([collectFileSizes(fromDir), collectFileSizes(toDir)]);
+  const [source, copy] = await Promise.all([collectFileHashes(fromDir), collectFileHashes(toDir)]);
   if (source.size !== copy.size) return false;
-  for (const [rel, size] of source) {
-    if (copy.get(rel) !== size) return false;
+  for (const [rel, hash] of source) {
+    if (copy.get(rel) !== hash) return false;
   }
   return true;
 }

@@ -132,6 +132,8 @@ A `tests/server.test.ts` drain-window test also failed once on macOS (`elapsed` 
 
 All three legs green: `platforms` is now in `publish-images`'s `needs`, so an image is never published from a commit whose tests did not pass on Windows and macOS, not only Linux.
 
+Left open by phase 6, to be checked on a real Mac in phase 7: GitHub's macOS runners delivered no native file-watch event at all (polling mode worked on the same runner), so the native watcher test is skipped there, on `CI` only. If a real Mac showed the same, the index would heal only through the reconcile pass (5 minutes on the HTTP server; the settling pass at every stdio start): usable, but to be known. Also to be checked there: the drain window at HTTP shutdown, which one macOS run cut short without a reproducible cause.
+
 ### Phase 7 — proof with readers
 
 The five costliest prompts of the reader test, run through stdio in Claude Code on the large vault and compared with the HTTP runs (calls, characters, errors), then one session by a person on macOS or Windows with the installed bundle. Findings are fixed or listed.
