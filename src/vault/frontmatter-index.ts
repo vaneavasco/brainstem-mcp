@@ -148,8 +148,8 @@ export class FrontmatterIndex {
   private readonly unindexable = new Map<string, string>();
   /** Notes whose last read failed; see `unreadableCount`. */
   private readonly unreadablePaths = new Set<string>();
-  /** How many times each path was removed or renamed away, so a refresh that began before such
-   *  a withdrawal knows not to write its stale result (see `refreshPath`). */
+  /** How many times each path was removed, renamed or rewritten by a tool, so a refresh that
+   *  began before such a withdrawal knows not to write its stale result (see `refreshPath`). */
   private readonly withdrawals = new Map<string, number>();
 
   private withdraw(path: string): void {
@@ -317,6 +317,10 @@ export class FrontmatterIndex {
   /** Applies a just-written (or just-read) Note without another disk read: markdown notes are
    *  (re)indexed, anything else is tracked as an asset. */
   applyNote(note: Note): void {
+    // The tool that just wrote this note knows its content better than any read still in flight
+    // for the previous version: on macOS a watcher's refresh for the old file landed after the
+    // write and put the old links and tags back. Such a refresh is withdrawn here.
+    this.withdraw(note.path);
     if (isMarkdownPath(note.path)) this.upsert(FrontmatterIndex.fromNote(note));
     else this.addAsset(note.path);
   }
@@ -344,6 +348,7 @@ export class FrontmatterIndex {
 
   rename(from: string, to: string): void {
     this.withdraw(from);
+    this.withdraw(to); // whatever a refresh read under the new name before the move is stale too
     // an unreadable note moves like any other (a rename needs no read permission)
     if (this.unreadablePaths.delete(from)) this.unreadablePaths.add(to);
     const existing = this.entries.get(from);

@@ -634,6 +634,39 @@ describe('what a hostile or odd note cannot do to the index', () => {
   });
 });
 
+describe('a refresh that read a note before a tool rewrote it never overwrites the rewrite', () => {
+  it('applyNote() during a slow read wins over the read', async () => {
+    // Seen on the macOS runner: the watcher's refresh for the previous version of a note landed
+    // after vault_write had applied the new one, and the index held the old links and tags
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-index-race2-'));
+    try {
+      await fs.writeFile(path.join(root, 'a.md'), '---\ntags: [old]\n---\nold');
+      const adapter = await LocalFSAdapter.create(root, { ripgrepPath: null });
+      const index = await FrontmatterIndex.build(adapter);
+      let release: () => void = () => {};
+      const held = new Promise<void>((r) => {
+        release = r;
+      });
+      const read = adapter.read.bind(adapter);
+      adapter.read = async (p) => {
+        const note = await read(p); // the OLD version
+        await held;
+        return note;
+      };
+      const refresh = index.refreshPath(adapter, 'a.md');
+      adapter.read = read;
+      const written = await adapter.write('a.md', '---\ntags: [new]\n---\n[[b]]');
+      index.applyNote(written);
+      release();
+      await refresh;
+      expect(index.get('a.md')?.tags).toEqual(['new']);
+      expect(index.get('a.md')?.links).toHaveLength(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('a refresh started by a watcher event never resurrects a note a tool removed meanwhile', () => {
   it('remove() during a slow read wins over the read', async () => {
     // macOS reports a rename as a change: the watcher's refreshPath had stat'ed the note before

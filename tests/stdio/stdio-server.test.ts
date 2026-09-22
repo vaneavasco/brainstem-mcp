@@ -550,9 +550,18 @@ describe('a boot that does not make the client wait (deferIndex end to end)', ()
       // Never waited for the fill: well under half the time the (slowed) fill alone takes.
       expect(bootAndListMs).toBeLessThan(EXPECTED_FILL_MS / 2);
 
-      const ping = await client.callTool({ name: 'brainstem_ping', arguments: {} });
-      const body = ping.structuredContent as { index: { building: boolean; total: number } };
+      // `total` is known once the fill has listed the vault, which a loaded runner can take
+      // longer to do than the handshake above (seen: 0 on macOS and Windows, once each), so it is
+      // polled; `building` must be true on the very first answer, and that is the point.
+      let body = (await client.callTool({ name: 'brainstem_ping', arguments: {} }))
+        .structuredContent as { index: { building: boolean; total: number } };
       expect(body.index.building).toBe(true);
+      const deadline = Date.now() + 10_000;
+      while (body.index.total === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+        body = (await client.callTool({ name: 'brainstem_ping', arguments: {} }))
+          .structuredContent as { index: { building: boolean; total: number } };
+      }
       expect(body.index.total).toBe(NOTES);
     } finally {
       await client.close();
