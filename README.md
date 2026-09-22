@@ -32,6 +32,14 @@ Issues and pull requests are welcome — see `CHANGELOG.md` for what shipped and
 - Node.js 24.x
 - git
 
+## Platforms
+
+The whole test suite runs, unmodified, on Linux, macOS and Windows 11 in CI (`platforms` in `.github/workflows/ci.yml`, gating every published image and bundle) — the Docker/tunnel path is Linux-only (that's what the container runs), but the code itself, and `./brainstem stdio` in particular, is exercised on all three.
+
+A vault path is **exact on every platform**, including the two (Windows, and macOS by default) whose filesystem otherwise treats `Notes/x.md` and `notes/x.md` as the same file: reading a path that differs only by letter case from an existing note answers `NOT_FOUND` (with a "did you mean" suggestion) exactly as it would if the file were simply missing, and writing one is refused with `CONFLICT` naming the real path — never a silent read of the wrong file, and never a second index entry for the one file already on disk under a different spelling. This is decided once per boot from the filesystem, not the OS: it costs nothing on a case-sensitive one.
+
+Graceful stop differs by how a platform can even ask a process to stop: SIGTERM (or SIGINT) works everywhere `./brainstem stdio` runs from a shell, but a client's OS-level `kill` on Windows terminates the process at once rather than asking it — there, closing stdin is what a client (Claude Desktop, Claude Code) actually does to disconnect, and it triggers the same orderly shutdown (drain running calls, flush, then exit) as a signal does elsewhere.
+
 ## Quick start
 
 ```bash

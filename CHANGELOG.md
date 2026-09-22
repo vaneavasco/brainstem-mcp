@@ -6,6 +6,35 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+Phase 6 of the Claude Desktop integration plan: the whole test suite now runs on Linux, macOS
+and Windows 11 in CI (`platforms` in `.github/workflows/ci.yml`), which found the two defects
+below — both apply everywhere, not only on the platforms that surfaced them.
+
+### Fixed (both)
+
+- **A vault path is exact on every platform.** On a case-insensitive filesystem (Windows, and
+  macOS by default) reading a path that differed only by letter case from an existing note
+  silently returned the wrong note's content, and writing one silently overwrote it under a
+  second index entry. `LocalFSAdapter` now detects, once per boot, whether the vault's
+  filesystem folds letter case (zero cost when it doesn't — the common case in CI and in Docker)
+  and, when it does, treats a case-only near-miss the same way every platform already treats a
+  genuinely missing file: `NOT_FOUND` with a "did you mean" suggestion for a read, `CONFLICT`
+  naming the real path for a write that would create or overwrite. `src/storage/local-fs.ts`;
+  `caseInsensitive`/`realpathNative` adapter options exist so the check can be exercised on any
+  CI runner regardless of what its own filesystem does.
+- **`vault_delete` of a folder could fail on Windows** with a bare `IO` error — a rename into
+  `.trash/` racing a handle the file watcher still held open inside it. Every rename this server
+  makes (a delete, a move, and the tmp-to-real rename behind every write) now retries a few times
+  with a short backoff on `EPERM`/`EBUSY`/`EACCES` before giving up; a folder delete that still
+  can't rename falls back to a verified copy-then-remove (copy everything, verify the copy, only
+  then remove the original — never the other order). `src/storage/local-fs.ts`.
+
+### Changed
+
+- `platforms` (the three-OS suite above) is now required for `publish-images`: an image is never
+  published from a commit whose tests didn't pass on Windows and macOS, not only Linux.
+  `.github/workflows/ci.yml`.
+
 ## [0.6.0] — 2026-09-21
 
 The stdio server becomes something a colleague can be given: a read-only mode, a setup that

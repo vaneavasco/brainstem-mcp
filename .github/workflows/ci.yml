@@ -104,7 +104,7 @@ jobs:
   # every commit on main, plus vX.Y.Z and latest for release tags. Both images
   # build from the repo root; multi-arch so Apple-silicon/ARM hosts pull too.
   publish-images:
-    needs: [verify, docker-smoke]
+    needs: [verify, docker-smoke, platforms]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
