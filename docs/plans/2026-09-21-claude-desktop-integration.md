@@ -113,6 +113,63 @@ What installing it looks like, which is the point of the phase: download `brains
 - **Signing (proposed, to be confirmed by the owner).** Facts from the MCPB CLI docs: `mcpb sign --cert … --key …` takes an X.509 certificate and key in PEM, self-signed or CA-issued ("should have Code Signing extended key usage"); the signature is a detached PKCS#7 appended to the zip; `mcpb verify` shows subject, fingerprint and a warning when self-signed. What Claude Desktop shows for an unsigned, a self-signed and a CA-signed bundle is **not documented: measure it here** before spending money. Proposal: (1) a project certificate, self-signed, Code Signing EKU, long-lived; its private key is a GitHub Actions secret in a protected environment that only release tags reach (the owner generates and stores it; it is never in the repository or in a log); its fingerprint is published in README and SECURITY.md so anyone can run `mcpb verify` and compare; (2) `SHA256SUMS` and a GitHub build-provenance attestation on every release asset (`gh attestation verify`), which for an open-source project says more than the certificate does: exactly which commit and workflow produced the file; (3) a CA-issued certificate only if the measurement shows Desktop treats it materially differently or the directory requires it, and only after checking that such a key can be used at all: CA code-signing keys now live on hardware or in a cloud HSM and cannot be exported, while `mcpb sign` wants a PEM key file.
 - **Who should install it.** The bundle needs the vault on the machine. For a personal vault that is the point. For a vault shared by a team it means a copy of the data on every laptop, which is an access decision, not a packaging one: there the HTTP server with a connector (one copy, controlled access) stays the right path, and the bundle is for whoever holds the data anyway.
 
+**Done (2026-09-22).** Regex search without ripgrep first, since the bundle would otherwise ship
+with a functionality gap (`docs/plans/…` Phase 0's own finding): `compileSafeSearch` in
+`src/vault/safe-regex.ts` extends the existing Thompson-NFA engine (already used for
+`vault_query`'s `regex` op) to unanchored, `caseSensitive`-aware search, and `LocalFSAdapter`
+falls back to it when `rg` is not on `PATH` instead of throwing `UNSUPPORTED`. Measured on a
+generated 40,000-note vault (`tests/scale/regex-search.scale.ts`): a required-literal prefilter
+(ripgrep's own trick — derive a substring at least one of which must appear in any match, from a
+literal run in a `concat` or the union of a top-level alternation's branches; a ~400-pattern fuzz
+test proves it never rejects a real match) plus a hot-path rewrite (two reusable `Int32Array`
+thread-list pairs instead of per-character object allocation, a memoized case-fold lookup) took
+well-filtered patterns (a literal, an email-like pattern, the real
+`(invoice|receipt)[- ]?(number|no\.?)\s*[0-9]{3,}` example) from ~10–12 s to ~4.5 s on this
+machine — now dominated by this environment's raw file-read time for 40,000 files (~3.5 s of
+that alone), not by the NFA; `(a+)+b`, with no derivable required literal, is unaffected, as
+expected, and stays linear rather than exponential.
+
+The bundle itself: `scripts/bundle-build.ts` (esbuild, `platform: node`, `target: node24`,
+`format: esm`, `packages: 'bundle'`, external sourcemap, a version banner) produces
+`bundle/dist/stdio-main.js` in well under 150 ms; unpacked it is about 2.0 MB (the whole stdio
+graph — the MCP SDK, zod, pino, chokidar, picomatch, yaml, date-fns, diff — inlined; a
+`tests/bundle/build.test.ts` grep proves Express, `cloudflared`, `OWNER_SECRET`'s VALUE (the
+field name is present, unused, in the one `EnvSchema` both `loadConfig` and `loadVaultConfig`
+parse — documented, not a leak) and the actual authorization-server/tunnel/CLI source files never
+come along). One shim was needed: pino's CJS internals `require('node:os')` in a way esbuild
+cannot statically resolve into an ESM import, which throws "Dynamic require of … is not
+supported" under `format: 'esm'` without it — the banner injects a real `require` via
+`createRequire(import.meta.url)`, the documented fix. The version is fixed at build time
+(`process.env.BRAINSTEM_BUNDLE_VERSION`, `esbuild`'s `define`) since the bundle carries no
+`package.json` of its own for `src/version.ts` to read at import time.
+
+`scripts/bundle-manifest.ts` generates `manifest.json` (0.3) and a small PNG icon (rendered at
+build time — raw pixel buffer, `node:zlib` deflate, no image library or binary asset committed);
+the `tools` array comes from `registerVaultTools` on a throwaway in-memory-transport `McpServer`
+(30 tools, `brainstem_ping`/`brainstem_guide` deliberately excluded — server plumbing, not vault
+tools), so it cannot drift from the registry. `env.VAULT_TIMEZONE` (not `TZ`, which does nothing
+useful here — `src/config.ts` reads `VAULT_TIMEZONE` for `dailyNotes.timezone`) and
+`env.DAILY_NOTES_FOLDER` carry the optional settings, each with a `default` (`"UTC"`, `""`) equal
+to `src/config.ts`'s own default, so an untouched field substitutes to exactly what stdio would
+already assume — `loadVaultConfig` already treats an empty env value as unset, so an empty
+substitution is harmless either way. `npm run bundle` (build + manifest + icon + LICENSE/README
+excerpt + `mcpb validate` + `mcpb pack` + `SHA256SUMS`) takes well under a second end to end;
+`release/brainstem-mcp-X.Y.Z.mcpb` (and the fixed-name copy) is about 0.40 MiB packed. `npm run
+test:bundle` (`vitest.bundle.config.ts` running `tests/stdio/**` — the exact suite that proves
+the source — against the bundled file via `BRAINSTEM_STDIO_ENTRY`, read by one shared
+`tests/helpers/stdio-entry.ts`) passes in about 17 s. Found along the way: the bundled process
+boots fast enough that `tests/stdio/index-cache.test.ts`'s freshly written fixture files were
+still inside the index cache's 3 s "racily clean" window when the first boot's save ran, flaking
+the second boot's cache-hit assertion deterministically against the bundle (it had passed against
+the source, whose slower cold start happened to land outside the window) — fixed by backdating
+the fixture files' mtime past the window, removing the race regardless of boot speed rather than
+papering over it with a sleep.
+
+Left as documented, not built: signing (the proposal above stands; `SHA256SUMS` plus a GitHub
+build-provenance attestation, `actions/attest-build-provenance@v3` in the new `bundle` CI job,
+ship from the first release instead) and a bundled ripgrep binary (still a later, measured
+decision — the fallback above means it is no longer required for parity).
+
 ### Phase 6 — three operating systems
 
 - CI matrix `ubuntu | macos | windows` for unit tests (Docker smoke stays on Linux). Expected trouble, to be found by tests rather than by users: backslashes reaching the path policy, case-insensitive file systems (two notes that differ only by case; near-miss suggestions), atomic rename over an open file on Windows, watcher behaviour (FSEvents, ReadDirectoryChangesW), `\r\n` in notes, long paths.
