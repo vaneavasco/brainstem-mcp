@@ -62,6 +62,12 @@ describe('MCP prompts (the "+" menu entry points for someone new to Obsidian)', 
         await h.client.getPrompt({ name: 'weekly_review', arguments: { days: '30' } }),
       );
       expect(explicit).toContain('last 30 days');
+
+      // A blank optional field in a client form arrives as '' (arguments are strings only).
+      const blank = messageText(
+        await h.client.getPrompt({ name: 'weekly_review', arguments: { days: '' } }),
+      );
+      expect(blank).toContain('last 7 days');
     } finally {
       await h.close();
     }

@@ -39,7 +39,9 @@ function dailyNoteText(args: Record<string, string | undefined>): string {
 }
 
 function weeklyReviewText(args: Record<string, string | undefined>): string {
-  const days = args.days ?? '7';
+  // Falsy, not nullish: a client with a blank optional field in a form sends '' rather than
+  // omitting the key (prompt arguments are strings only), and '' must mean "the default".
+  const days = args.days?.trim() || '7';
   return `Review the last ${days} days of this vault. Use vault_recent for what changed, read the changed notes by section (vault_outline, then vault_read with sections) for open items and decisions, and vault_analytics_findings for broken links and orphan notes. Give me a short review: what moved, what is open, what needs a decision from me, and what you propose to tidy. Do not change anything in this review; ask first.`;
 }
 
