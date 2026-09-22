@@ -410,15 +410,29 @@ describe('vault_outline', () => {
   });
 
   it('counts outgoing links and backlinks from the index', async () => {
-    await h.call('vault_write', { path: 'linker.md', content: '[[outline]] [[outline]]' });
-    await h.call('vault_write', {
-      path: 'outline.md',
-      content: '---\ntitle: Outline\n---\n[[linker]]\n# A',
-    });
-    const r = await h.call('vault_outline', { path: 'outline.md' });
-    const body = r.structuredContent as OutlineResult;
-    expect(body.linkCount).toBe(1);
-    expect(body.backlinkCount).toBe(2);
+    // Failed on the macOS runner (linkCount 0) with no trace of why: every watcher event and the
+    // index entry are collected so a failure explains itself there.
+    const events: string[] = [];
+    const unsubscribe = h.runtime.adapter.watch?.((e) => events.push(`${e.type}:${e.path}`));
+    try {
+      await h.call('vault_write', { path: 'linker.md', content: '[[outline]] [[outline]]' });
+      await h.call('vault_write', {
+        path: 'outline.md',
+        content: '---\ntitle: Outline\n---\n[[linker]]\n# A',
+      });
+      const r = await h.call('vault_outline', { path: 'outline.md' });
+      const body = r.structuredContent as OutlineResult;
+      const why = () =>
+        JSON.stringify({
+          events,
+          entry: h.runtime.index.get('outline.md'),
+          version: h.runtime.index.version,
+        });
+      expect(body.linkCount, why()).toBe(1);
+      expect(body.backlinkCount, why()).toBe(2);
+    } finally {
+      unsubscribe?.();
+    }
   });
 
   it('fails with NOT_FOUND for an unknown note', async () => {
