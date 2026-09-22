@@ -135,7 +135,7 @@ sha256sum -c SHA256SUMS --ignore-missing   # Linux
 shasum -a 256 -c SHA256SUMS --ignore-missing  # macOS
 ```
 
-and, for the stronger check (that it was built by GitHub Actions from this exact commit, not hand-assembled and uploaded), verify the build attestation with the [GitHub CLI](https://cli.github.com/):
+and, for the stronger check (that it was built by GitHub Actions from this exact commit, not hand-assembled and uploaded), verify the build attestation with the [GitHub CLI](https://cli.github.com/) (version 2.49 or newer: the one in Ubuntu's own repositories is older and does not know the command):
 
 ```bash
 gh attestation verify brainstem-mcp-X.Y.Z.mcpb --repo vaneavasco/brainstem-mcp
