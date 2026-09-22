@@ -24,7 +24,9 @@ interface StdioSession {
   client: Client;
   root: string;
   stateHome: string;
-  close(): Promise<void>;
+  /** `keepRoot: true` ends the client (and so the child process) without removing the vault
+   *  folder — for a test that boots a second session against the same, now-edited, vault. */
+  close(opts?: { keepRoot?: boolean }): Promise<void>;
 }
 
 async function startStdioSession(
@@ -60,9 +62,9 @@ async function startStdioSession(
     client,
     root: vaultRoot,
     stateHome: homes.BRAINSTEM_STATE_HOME,
-    async close() {
+    async close(opts) {
       await client.close(); // ends the child's stdin — the same shutdown path a real client uses
-      await fs.rm(vaultRoot, { recursive: true, force: true });
+      if (!opts?.keepRoot) await fs.rm(vaultRoot, { recursive: true, force: true });
       await fs.rm(homes.BRAINSTEM_STATE_HOME, { recursive: true, force: true });
       await fs.rm(homes.BRAINSTEM_CACHE_HOME, { recursive: true, force: true });
     },
@@ -102,6 +104,29 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
     expect(stdioTools).toEqual(httpTools);
     expect(stdioTools.length).toBeGreaterThan(0);
   });
+
+  it('brainstem_guide includes the "vault without owner instructions" section until the owner writes one, and drops it once they have', async () => {
+    const first = await startStdioSession();
+    const root = first.root;
+    const before = await first.client.callTool({ name: 'brainstem_guide', arguments: {} });
+    expect((before.content[0] as { text: string }).text).toContain(
+      '## Vault without owner instructions',
+    );
+    await first.close({ keepRoot: true });
+
+    await fs.mkdir(path.join(root, '_brainstem'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '_brainstem', 'instructions.md'),
+      '- Widgets live in widgets/.\n',
+    );
+
+    const second = await startStdioSession(root);
+    const after = await second.client.callTool({ name: 'brainstem_guide', arguments: {} });
+    const afterText = (after.content[0] as { text: string }).text;
+    expect(afterText).not.toContain('## Vault without owner instructions');
+    expect(afterText).toContain('Widgets live in widgets/.');
+    await second.close();
+  }, 30_000);
 
   it('reads, writes with expectedHash, and rejects a stale hash with CONFLICT', async () => {
     const stdio = await startStdioSession();

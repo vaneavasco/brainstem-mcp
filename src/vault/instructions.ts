@@ -22,6 +22,22 @@ export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access t
 - Owner instructions below, if any, describe how this particular vault is organised — follow them over general habits.`;
 
 /**
+ * Sent after `DEFAULT_INSTRUCTIONS` whenever the owner has written no `_brainstem/instructions.md`
+ * of their own (see `compose` below) — the vault may belong to someone new to Obsidian, so this
+ * spells out plain-words behaviour and a starter layout instead of assuming familiarity with the
+ * words note, frontmatter, tag or link. Dropped the moment the owner's own text takes its place.
+ */
+export const NO_OWNER_INSTRUCTIONS_SECTION = `## Vault without owner instructions
+Nobody has told you how this vault is organised, and the owner may be new to Obsidian: do not assume they know the words note, frontmatter, tag or link. Say what you do in plain terms, offer what you can do for them (find and summarise, capture new notes, a daily journal, review what changed, keep things linked and tidy) and use the vault's features on their behalf instead of asking them to learn them. If the vault is empty or nearly so, propose and keep to: \`inbox/\` for quick captures, \`projects/<name>.md\`, \`people/<name>.md\`, \`attachments/\` for files, daily notes where vault_daily_note_path says; every note starts with frontmatter \`type\`, \`created\` (YYYY-MM-DD) and \`tags\`; one note per topic, named in plain words, linked with [[wikilinks]] so that vault_links, vault_query and vault_tags pay off later. If notes exist already, follow their layout instead. Once conventions settle, draft them and ask the owner to paste the text into \`_brainstem/instructions.md\` in the vault folder (any text editor): it reaches you on every new connection and replaces this section.`;
+
+/** `DEFAULT_INSTRUCTIONS` plus `NO_OWNER_INSTRUCTIONS_SECTION` — what a connection gets before
+ *  the owner has written anything. Shared by `compose` and by tests/the factory so the two never
+ *  drift apart. */
+export function defaultInstructionsWithoutOwner(): string {
+  return `${DEFAULT_INSTRUCTIONS}\n\n${NO_OWNER_INSTRUCTIONS_SECTION}`;
+}
+
+/**
  * One extra sentence, appended to the instructions sent at `initialize`, telling the model which
  * regex syntax `vault_search({ regex: true })` actually accepts on THIS connection — needed only
  * when ripgrep is not on PATH (the builtin engine's syntax is a reduced subset; see
@@ -69,6 +85,9 @@ where things live, which frontmatter keys you use, naming rules,
 what it must never touch. Keep it short — this text is sent on every
 connection. HTML comments like this one and the frontmatter above are
 NOT sent. Changes apply to the next connection; no restart needed.
+Until you write something here, Claude also gets a short "vault without
+owner instructions" section that proposes a starter layout and helps
+someone new to Obsidian.
 
 Example:
 - Projects live in 10-projects/<slug>/README.md; people in 20-people/.
@@ -84,7 +103,8 @@ export function stripPrivateParts(text: string): string {
 }
 
 export interface InstructionsProvider {
-  /** Defaults, plus the owner's text when the file has any. Never throws. */
+  /** Defaults plus the owner's text when the file has any, or defaults plus
+   *  `NO_OWNER_INSTRUCTIONS_SECTION` while it doesn't. Never throws. */
   get(): Promise<string>;
   /** How many times the file body was actually read — for tests. */
   readonly reads: number;
@@ -108,7 +128,7 @@ export function createInstructionsProvider(
   const stat = opts.stat ?? ((p: string) => fs.stat(p));
   const readFile = opts.readFile ?? ((p: string) => fs.readFile(p, 'utf8'));
   let cachedKey: string | null = null;
-  let cachedText = DEFAULT_INSTRUCTIONS;
+  let cachedText = defaultInstructionsWithoutOwner();
   let reads = 0;
 
   return {
@@ -121,10 +141,10 @@ export function createInstructionsProvider(
         const s = await stat(file);
         key = `${s.mtimeMs}:${s.size}`;
       } catch {
-        // Missing (the usual case) or unreadable: defaults only, and forget any
+        // Missing (the usual case) or unreadable: defaults + the novice section, and forget any
         // earlier owner text so a deleted file also takes effect.
         cachedKey = null;
-        cachedText = DEFAULT_INSTRUCTIONS;
+        cachedText = defaultInstructionsWithoutOwner();
         return cachedText;
       }
       if (key === cachedKey) return cachedText;
@@ -143,7 +163,7 @@ export function createInstructionsProvider(
 }
 
 function compose(owner: string): string {
-  if (owner === '') return DEFAULT_INSTRUCTIONS;
+  if (owner === '') return defaultInstructionsWithoutOwner();
   // Code points, not UTF-16 units: a cut inside a surrogate pair would send a lone surrogate.
   const chars = Array.from(owner);
   const body =
