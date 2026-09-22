@@ -29,6 +29,16 @@ below — both apply everywhere, not only on the platforms that surfaced them.
   can't rename falls back to a verified copy-then-remove (copy everything, verify the copy, only
   then remove the original — never the other order). `src/storage/local-fs.ts`.
 
+- **A FIFO, socket or device named like a note no longer freezes the server on macOS.** There,
+  unlike on Linux, resolving or watching such a path opens it, and opening a FIFO blocks until a
+  writer comes: the containment check every operation runs, the case check above, and the file
+  watcher each did so. None of the three touches anything that is not a plain file or a folder
+  now. (Found by the macOS leg of the suite, three runs in a row.)
+- **`VAULT_READ_ONLY` is read in every usual spelling** (`true`/`false`, `1`/`0`, `yes`/`no`,
+  `on`/`off`, any case; empty means not set), because an install form substitutes a boolean into
+  the environment in a spelling nothing documents, and a server that refuses to start over `True`
+  would be the installer's first experience of it.
+
 ### Changed
 
 - `platforms` (the three-OS suite above) is now required for `publish-images`: an image is never
