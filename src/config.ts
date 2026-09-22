@@ -159,7 +159,9 @@ function buildVaultSettings(
   }
   let folder = d.DAILY_NOTES_FOLDER;
   try {
-    normalizeVaultPath(folder);
+    // kept normalized ("Daily\\Notes" typed on Windows, a trailing slash): the tools compare this
+    // string with note paths, which are always normalized
+    folder = folder.trim() === '' ? '' : normalizeVaultPath(folder);
   } catch {
     bad(
       'DAILY_NOTES_FOLDER',

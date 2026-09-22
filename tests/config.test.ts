@@ -302,6 +302,18 @@ describe('loadVaultConfig is lenient with the optional settings an install form 
     ]);
   });
 
+  it('keeps the daily-notes folder normalized, as the tools compare it with note paths', () => {
+    // a Windows user types a backslash; analytics compared the raw string and called every
+    // daily note an orphan
+    const cfg = loadVaultConfig({ VAULT_PATH: '/tmp/v', DAILY_NOTES_FOLDER: 'Daily\\Notes/' });
+    expect(cfg.vaultSettings.dailyNotes.folder).toBe('Daily/Notes');
+    expect(cfg.warnings).toEqual([]);
+    expect(
+      loadVaultConfig({ VAULT_PATH: '/tmp/v', DAILY_NOTES_FOLDER: '   ' }).vaultSettings.dailyNotes
+        .folder,
+    ).toBe('');
+  });
+
   it('valid settings produce no warning', () => {
     expect(
       loadVaultConfig({ VAULT_PATH: '/tmp/v', VAULT_TIMEZONE: 'Europe/Berlin' }).warnings,
