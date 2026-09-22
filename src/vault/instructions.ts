@@ -21,6 +21,22 @@ export const DEFAULT_INSTRUCTIONS = `brainstem-mcp gives you read/write access t
 - _brainstem/ is the server's own folder and is invisible to every tool; never try to write there.
 - Owner instructions below, if any, describe how this particular vault is organised — follow them over general habits.`;
 
+/**
+ * One extra sentence, appended to the instructions sent at `initialize`, telling the model which
+ * regex syntax `vault_search({ regex: true })` actually accepts on THIS connection — needed only
+ * when ripgrep is not on PATH (the builtin engine's syntax is a reduced subset; see
+ * `src/vault/safe-regex.ts` and `brainstem_ping`'s `search.regexEngine`). Not every client shows
+ * a model its tool descriptions before the first call, so this is the one place a model is told
+ * up front rather than discovering it from an INVALID_INPUT error.
+ */
+export function ripgrepAbsentInstructionsNote(nativeSearch: boolean): string {
+  return nativeSearch
+    ? ''
+    : '\n\nripgrep is not installed: vault_search regex:true runs on the builtin engine, a ' +
+        'reduced syntax (literals, ., character classes, quantifiers, alternation, grouping — ' +
+        'no anchors, lookaround or backreferences); see the tool description for the exact list.';
+}
+
 /** Heading under which the owner's own text is appended to the defaults. */
 export const OWNER_INSTRUCTIONS_HEADING = '## Owner instructions';
 

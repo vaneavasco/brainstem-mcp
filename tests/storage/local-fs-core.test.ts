@@ -438,9 +438,15 @@ describe('.base files (Obsidian Bases — read/write/search as plain text, never
 });
 
 describe('search: regex and paths options (JS fallback, always runs)', () => {
-  it('regex:true without ripgrep throws UNSUPPORTED', async () => {
+  it('regex:true without ripgrep now runs through the builtin engine instead of throwing UNSUPPORTED', async () => {
     await vault.write('a.md', 'foo bar\n');
-    expect(await code(vault.search('fo+', { regex: true }))).toBe('UNSUPPORTED');
+    const hits = await vault.search('fo+', { regex: true });
+    expect(hits.map((m) => m.path)).toEqual(['a.md']);
+  });
+
+  it('a construct outside the builtin engine’s reduced syntax is INVALID_INPUT, not UNSUPPORTED', async () => {
+    await vault.write('a.md', 'foo bar\n');
+    expect(await code(vault.search('fo+$', { regex: true }))).toBe('INVALID_INPUT');
   });
 
   it('rejects an over-length regex pattern before ever checking ripgrep availability', async () => {
@@ -597,51 +603,77 @@ describe('search: ripgrep argv construction (mocked spawn, no real rg binary nee
   });
 });
 
-describe.skipIf(!hasRipgrep())('search: regex (real ripgrep binary)', () => {
+// Regex-result parity: the same pattern, against the same files, must find the same matches
+// whether ripgrep is doing the searching or (when it is not installed) the builtin engine
+// (src/vault/safe-regex.ts's compileSafeSearch) is. `ripgrepPath: null` forces the JS fallback
+// regardless of whether `rg` happens to be on this machine's PATH, so the 'builtin' row always
+// runs; the 'ripgrep' row only exists (and only needs to) when a real binary is actually
+// available to spawn.
+const regexBackends: { name: string; ripgrepPath: string | null | undefined }[] = [
+  { name: 'builtin (JS fallback, ripgrepPath: null)', ripgrepPath: null },
+  ...(hasRipgrep() ? [{ name: 'ripgrep (real binary)', ripgrepPath: undefined }] : []),
+];
+
+describe.each(regexBackends)('search: regex ($name)', ({ ripgrepPath }) => {
   it('supports alternation, is case-insensitive by default', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
-    await rgVault.write('pets.md', 'I have a cat\nI have a Dog\nI have a bird\n');
-    const alt = await rgVault.search('cat|dog', { regex: true });
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+    await rVault.write('pets.md', 'I have a cat\nI have a Dog\nI have a bird\n');
+    const alt = await rVault.search('cat|dog', { regex: true });
     expect(alt.map((m) => m.line).sort()).toEqual([1, 2]);
   });
 
-  it('supports anchors', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
-    await rgVault.write('pets.md', 'I have a cat\nbird has a cat\n');
-    const anchored = await rgVault.search('^I have a cat$', { regex: true });
+  // Anchors (^, $) are outside the builtin engine's reduced syntax on purpose (matching is
+  // always a full match there — see src/vault/safe-regex.ts) and rejected with INVALID_INPUT, so
+  // these two only run against a real ripgrep binary.
+  it.skipIf(ripgrepPath === null)('supports anchors', async () => {
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+    await rVault.write('pets.md', 'I have a cat\nbird has a cat\n');
+    const anchored = await rVault.search('^I have a cat$', { regex: true });
     expect(anchored.map((m) => m.line)).toEqual([1]);
   });
 
+  it.skipIf(ripgrepPath === null)(
+    'is case-sensitive only when explicitly requested (anchored)',
+    async () => {
+      const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+      await rVault.write('case.md', 'Cat\ncat\n');
+      const r = await rVault.search('^cat$', { regex: true, caseSensitive: true });
+      expect(r.map((m) => m.line)).toEqual([2]);
+    },
+  );
+
   it('is case-sensitive only when explicitly requested', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
-    await rgVault.write('case.md', 'Cat\ncat\n');
-    const r = await rgVault.search('^cat$', { regex: true, caseSensitive: true });
-    expect(r.map((m) => m.line)).toEqual([2]);
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+    await rVault.write('case2.md', 'Cat\ncat\n');
+    const insensitive = await rVault.search('cat', { regex: true });
+    expect(insensitive.map((m) => m.line).sort()).toEqual([1, 2]);
+    const sensitive = await rVault.search('cat', { regex: true, caseSensitive: true });
+    expect(sensitive.map((m) => m.line)).toEqual([2]);
   });
 
   it('treats "." as any-character only in regex mode, not in literal mode', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
-    await rgVault.write('dotted.md', 'a.c\nabc\n');
-    const literal = await rgVault.search('a.c');
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+    await rVault.write('dotted.md', 'a.c\nabc\n');
+    const literal = await rVault.search('a.c');
     expect(literal.map((m) => m.line)).toEqual([1]);
-    const regexed = await rgVault.search('a.c', { regex: true });
+    const regexed = await rVault.search('a.c', { regex: true });
     expect(regexed.map((m) => m.line).sort()).toEqual([1, 2]);
   });
 
   it('restricts to the given paths, ignoring files outside the set', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
-    await rgVault.write('x1.md', 'needle\n');
-    await rgVault.write('x2.md', 'needle\n');
-    await rgVault.write('x3.md', 'needle\n');
-    const r = await rgVault.search('needle', { paths: ['x1.md', 'x3.md'] });
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+    await rVault.write('x1.md', 'needle\n');
+    await rVault.write('x2.md', 'needle\n');
+    await rVault.write('x3.md', 'needle\n');
+    const r = await rVault.search('needle', { paths: ['x1.md', 'x3.md'] });
     expect(r.map((m) => m.path).sort()).toEqual(['x1.md', 'x3.md']);
   });
 
   it('regex + paths together', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
-    await rgVault.write('y1.md', 'foo123\n');
-    await rgVault.write('y2.md', 'foo123\n');
-    const r = await rgVault.search('foo\\d+', { regex: true, paths: ['y1.md'] });
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
+    await rVault.write('y1.md', 'foo123\n');
+    await rVault.write('y2.md', 'foo123\n');
+    const r = await rVault.search('foo\\d+', { regex: true, paths: ['y1.md'] });
     expect(r.map((m) => m.path)).toEqual(['y1.md']);
   });
 
@@ -650,16 +682,37 @@ describe.skipIf(!hasRipgrep())('search: regex (real ripgrep binary)', () => {
   // own pre-filter in search(), not by the --glob args handed to ripgrep. Same case as the
   // JS-fallback test above ("drops reserved and dot-segment entries...").
   it('drops reserved and dot-segment entries from an explicit paths list even when passed to ripgrep', async () => {
-    const rgVault = await LocalFSAdapter.create(root);
+    const rVault = await LocalFSAdapter.create(root, { ripgrepPath });
     await fs.mkdir(path.join(root, '_brainstem', 'tx'), { recursive: true });
     await fs.writeFile(path.join(root, '_brainstem', 'tx', 'leaked.md'), 'needle secret\n');
     await fs.mkdir(path.join(root, '.obsidian'), { recursive: true });
     await fs.writeFile(path.join(root, '.obsidian', 'app.json'), '{"needle":true}');
-    await rgVault.write('ok2.md', 'needle here\n');
-    const r = await rgVault.search('needle', {
+    await rVault.write('ok2.md', 'needle here\n');
+    const r = await rVault.search('needle', {
       paths: ['_brainstem/tx/leaked.md', '.obsidian/app.json', 'ok2.md'],
     });
     expect(r.map((m) => m.path)).toEqual(['ok2.md']);
+  });
+});
+
+describe('search: regex — INVALID_INPUT when ripgrep is absent', () => {
+  it('names the unsupported construct and says the reduced syntax is why', async () => {
+    const builtinVault = await LocalFSAdapter.create(root, { ripgrepPath: null });
+    const err = await builtinVault
+      .search('^abc', { regex: true })
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VaultError);
+    expect((err as VaultError).code).toBe('INVALID_INPUT');
+    expect((err as VaultError).message).toContain('not supported');
+    expect((err as VaultError).message).toContain('ripgrep is not installed');
+  });
+
+  it('does not reject the same pattern when ripgrep IS available', async () => {
+    if (!hasRipgrep()) return;
+    const rgVault = await LocalFSAdapter.create(root, { ripgrepPath: undefined });
+    await rgVault.write('anchored.md', 'abc\n');
+    await expect(rgVault.search('^abc', { regex: true })).resolves.not.toEqual([]);
   });
 });
 

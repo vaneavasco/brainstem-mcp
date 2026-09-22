@@ -84,7 +84,15 @@ On your own machine, Claude Code and Claude Desktop can start the server themsel
 claude mcp add brainstem -- /path/to/brainstem stdio
 ```
 
-A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. Claude Desktop will use an installable bundle for this instead — coming soon. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
+A second vault is a second entry with its own name: `claude mcp add brainstem-work -- /path/to/brainstem stdio --vault <path>`. `--vault <path>` overrides `VAULT_PATH` from `.env` if you have one. The index builds in the background so the connection is never blocked on a large vault: tools that need it wait briefly and, if it's still building, say so (`brainstem_ping`'s `index.building`/`index.indexed`/`index.total`); `vault_read` and the daily-note/canvas reads work immediately regardless.
+
+**Recommended: install ripgrep.** `vault_search({ regex: true })` works either way, but ripgrep gives it the full regular-expression syntax and is faster; without it, regex search runs on a builtin linear-time engine that supports a reduced syntax (see the tool's own description for the exact list). The server detects ripgrep once, at startup, by looking for `rg` on `PATH` — `brainstem_ping`'s `search.regexEngine` says which one is active (`"ripgrep"` or `"builtin"`).
+
+```bash
+brew install ripgrep                          # macOS
+winget install BurntSushi.ripgrep.MSVC        # Windows
+sudo apt install ripgrep                      # Debian/Ubuntu
+```
 
 ### Where stdio keeps its state
 

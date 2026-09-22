@@ -202,12 +202,13 @@ export function registerSearchTools(server: McpServer, tc: ToolContext): void {
       title: 'Full-text search',
       description:
         'Literal substring search across text files, case-insensitive by default. Set ' +
-        `regex:true for a ripgrep regular expression (max ${MAX_SEARCH_PATTERN_CHARS} chars; ` +
-        'UNSUPPORTED if ripgrep is not installed — the Docker image always has it). Narrow the ' +
-        'files searched first with tags (any/all/none), where (same conditions as vault_query) ' +
-        'and/or glob before matching text — this can turn a vault-wide scan into a scan of a ' +
-        `handful of files. Returns up to ${MAX_SEARCH_RESULTS} matching lines grouped per file ` +
-        'in "files" (prefer this); "matches" is the same hits as a flat array, kept for ' +
+        `regex:true for a pattern (max ${MAX_SEARCH_PATTERN_CHARS} chars, faster and with the ` +
+        'full syntax when ripgrep is installed): without ripgrep, only literals, ., ' +
+        '[...]/[^...], quantifiers * + ? {m,n}, alternation | and grouping are supported (an ' +
+        'unsupported construct is INVALID_INPUT). Narrow first with tags (any/all/none), where ' +
+        '(vault_query conditions) and/or glob. ' +
+        `Returns up to ${MAX_SEARCH_RESULTS} matching lines grouped per file in "files" ` +
+        '(prefer this); "matches" is the same hits flat, kept for ' +
         `compatibility. ${GUIDE_POINTER}`,
       inputSchema: z.strictObject({
         query: z.string().min(1).max(MAX_SEARCH_QUERY_CHARS),

@@ -40,7 +40,7 @@ scripts/              docker-smoke.sh, mcp-call.ts (headless OAuth + tool calls)
 
 ```bash
 npm ci                      # dev install (the ./brainstem launcher installs runtime-only)
-npm test                    # vitest; 15 ripgrep tests skip when `rg` is not installed
+npm test                    # vitest; 10 ripgrep-only tests skip when `rg` is not installed (regex-result tests run either way, against the builtin engine)
 npm run test:scale          # 40,000-note run: memory, build time, bounded results (about a minute)
 npm run typecheck           # tsc --noEmit
 npm run lint                # biome check .   (npm run lint:fix to apply)

@@ -564,3 +564,150 @@ export function compileSafePattern(pattern: string): SafeMatcher {
 
   return { source: pattern, test };
 }
+
+// ---------------------------------------------------------------- unanchored search (find)
+
+export interface SafeSearchMatch {
+  /** Code-point offset (not UTF-16 units) of the first matched character. */
+  start: number;
+  /** Code-point offset one past the last matched character (exclusive), so `end - start` is the
+   *  match length in code points. */
+  end: number;
+}
+
+export interface SafeSearchMatcher {
+  /** The pattern this matcher was compiled from, for error messages. */
+  readonly source: string;
+  /**
+   * The leftmost match in `line`, or `null`. Unanchored (the pattern may start anywhere in the
+   * line, unlike `SafeMatcher.test`, which requires a full match) and single-line (a `find` call
+   * is always given one line at a time by `LocalFSAdapter.searchJs`; there is no multi-line
+   * matching in either search backend).
+   *
+   * Leftmost-first semantics: among matches starting at the leftmost possible position, the one
+   * this returns is whichever a Thompson-NFA simulation that runs candidate threads in the
+   * pattern's own priority order (earlier alternatives first, a quantifier's "consume another"
+   * branch before its "stop here" branch — the same order `(a+)+` or `cat|dog` are written in)
+   * reaches a match state on first, with strictly lower-priority threads dropped the moment a
+   * higher-priority one accepts. For an unambiguous pattern (no alternation, no quantifier that
+   * could stop at more than one length) this coincides with the leftmost-LONGEST match too; for
+   * an ambiguous one (e.g. `a|ab` against "ab") it is whichever alternative is written first
+   * (here, "a"), matching Perl/PCRE-style backtracking precedence rather than POSIX
+   * leftmost-longest — chosen because it is what a person writing the pattern expects, and it is
+   * the cheaper of the two to keep linear (POSIX semantics need every thread run to exhaustion
+   * before any can be preferred; this needs only the highest-priority one still alive).
+   */
+  find(line: string): SafeSearchMatch | null;
+}
+
+interface SearchThread {
+  index: number;
+  /** Code-point offset where this thread's match attempt began. */
+  startCp: number;
+}
+
+/**
+ * Compiles `pattern` into a linear-time, unanchored, single-line search matcher — the JS-fallback
+ * counterpart of ripgrep's regex mode for `LocalFSAdapter.search({ regex: true })` when `rg` is
+ * not on PATH. Same reduced syntax as `compileSafePattern` (see the module doc comment) and the
+ * same `MAX_PATTERN_CHARS`/`MAX_NFA_STATES` caps; throws `VaultError('INVALID_INPUT', …)` on
+ * anything outside it, worded to say what is and is not supported.
+ *
+ * Unlike `compileSafePattern` (always case-insensitive, built for `vault_query`'s `where: [{ op:
+ * 'regex' }]`), this defaults to case-INsensitive but honours `caseSensitive: true` — matching
+ * ripgrep's own `--ignore-case`/`--case-sensitive` default and override.
+ */
+export function compileSafeSearch(
+  pattern: string,
+  opts: { caseSensitive?: boolean } = {},
+): SafeSearchMatcher {
+  if (pattern.length > MAX_PATTERN_CHARS) {
+    throw invalid(`regex pattern exceeds ${MAX_PATTERN_CHARS} characters (got ${pattern.length}).`);
+  }
+  const caseSensitive = opts.caseSensitive === true;
+  const { states, start } = buildNfa(parsePattern(pattern));
+  const marks = new Int32Array(states.length).fill(-1);
+  let generation = 0;
+
+  // Epsilon closure of `from`, appended to `list` in the pattern's own priority order (the
+  // quantifier/alternation branch written — and therefore compiled — first is explored, and so
+  // appended, first): a plain stack-based DFS that always pushes the LOWER-priority child (`b`)
+  // before the higher-priority one (`a`), so `a`'s whole subtree pops — and is visited — first.
+  // (Contrast `compileSafePattern`'s own `addState`, which pushes `a` then `b`: fine there, since
+  // `test()` only asks "is any thread in a match state", never "which one gets to answer first".)
+  function addThread(list: SearchThread[], gen: number, from: number, startCp: number): void {
+    const stack: number[] = [from];
+    while (stack.length > 0) {
+      const index = stack.pop() as number;
+      if (marks[index] === gen) continue;
+      marks[index] = gen;
+      const state = states[index] as NfaState;
+      if (state.kind === 'split') {
+        stack.push(state.b);
+        stack.push(state.a);
+      } else {
+        list.push({ index, startCp });
+      }
+    }
+  }
+
+  function find(line: string): SafeSearchMatch | null {
+    // Same guarantee as compileSafePattern's test(): a subject over the cap is refused outright
+    // rather than scanned partially, bounding the worst case a single very long note line (a
+    // minified .canvas/.base file, say) can cost — ripgrep has no such cap, but no test in the
+    // parity suite feeds either backend a line anywhere near it. Two stages, like test(): a cheap
+    // UTF-16-length pre-reject (no iteration) for anything astronomically long, then a precise
+    // code-point count that still bails out early instead of materializing the whole array first.
+    if (line.length > MAX_SUBJECT_CHARS * 2) return null;
+    const cps: string[] = [];
+    for (const ch of line) {
+      cps.push(ch);
+      if (cps.length > MAX_SUBJECT_CHARS) return null;
+    }
+    const n = cps.length;
+
+    let matched: SafeSearchMatch | null = null;
+    generation += 1;
+    let clist: SearchThread[] = [];
+    addThread(clist, generation, start, 0);
+
+    for (let sp = 0; sp <= n; sp += 1) {
+      // Highest-priority match in the current thread list wins; anything after it in the
+      // (priority-ordered) list is strictly worse — whether a different, later start (unanchored
+      // search always keeps threads sorted oldest-start/highest-priority first, since a new
+      // thread is only ever appended at the end) or the same start via a lower-priority path —
+      // and is dropped rather than allowed to also extend into `nlist`.
+      let cut = -1;
+      for (let i = 0; i < clist.length; i += 1) {
+        const t = clist[i] as SearchThread;
+        if ((states[t.index] as NfaState).kind === 'match') {
+          matched = { start: t.startCp, end: sp };
+          cut = i;
+          break;
+        }
+      }
+      if (cut !== -1) clist = clist.slice(0, cut);
+      if (sp >= n) break;
+      if (clist.length === 0 && matched !== null) break; // nothing left could ever beat `matched`
+
+      generation += 1;
+      const nlist: SearchThread[] = [];
+      const ch = cps[sp] as string;
+      const variants = caseSensitive ? [ch] : variantsOf(ch);
+      for (const t of clist) {
+        const state = states[t.index] as NfaState;
+        if (state.kind === 'char' && setMatches(state.set, variants)) {
+          addThread(nlist, generation, state.next, t.startCp);
+        }
+      }
+      // A new thread may start at the next position — but only while no match has been found
+      // yet: any thread starting now begins no earlier than `matched.start` already does, so it
+      // can never improve on it (leftmost start always wins over anything else).
+      if (matched === null) addThread(nlist, generation, start, sp + 1);
+      clist = nlist;
+    }
+    return matched;
+  }
+
+  return { source: pattern, find };
+}

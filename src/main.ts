@@ -13,6 +13,7 @@ import { waitForPublicUrl, watchPublicUrl } from './tunnel/public-url-file.ts';
 import { writeConnectionNote, writeInstanceFile } from './vault/connection-note.ts';
 import {
   createInstructionsProvider,
+  ripgrepAbsentInstructionsNote,
   writeInstructionsTemplateIfMissing,
 } from './vault/instructions.ts';
 import { createLocalRuntime } from './vault/runtime.ts';
@@ -124,6 +125,18 @@ async function main(): Promise<void> {
     'vault runtime ready',
   );
 
+  // Detected once at adapter creation; ripgrep is recommended, not required — regex search
+  // still works either way through the builtin engine (src/vault/safe-regex.ts) — so this is one
+  // info line, not a warning. The same fact reaches the model via ripgrepAbsentInstructionsNote
+  // below and `brainstem_ping`'s `search.regexEngine`.
+  const nativeSearch = runtime.adapter.capabilities().nativeSearch;
+  if (!nativeSearch) {
+    logger.info(
+      'ripgrep not found on PATH: regex search uses the built-in engine (a subset of the ' +
+        'syntax); installing ripgrep is recommended',
+    );
+  }
+
   let store: FileTokenStore;
   try {
     store = await FileTokenStore.open(path.join(stateDir, 'state.json'));
@@ -191,6 +204,7 @@ async function main(): Promise<void> {
     }
   }
   const instructions = createInstructionsProvider(stateDir);
+  const regexNote = ripgrepAbsentInstructionsNote(nativeSearch);
 
   const auth = createAuth(config, logger, store);
   const running = await startServer(
@@ -204,7 +218,7 @@ async function main(): Promise<void> {
         notes: () => runtime.index.size(),
         reconciledAt: () => runtime.index.reconciledAt,
         indexOverBudget: () => runtime.index.byteSize() > runtime.index.budgetBytes,
-        instructions: () => instructions.get(),
+        instructions: () => instructions.get().then((text) => `${text}${regexNote}`),
       },
     },
   );

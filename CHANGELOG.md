@@ -35,6 +35,22 @@ below — both apply everywhere, not only on the platforms that surfaced them.
   published from a commit whose tests didn't pass on Windows and macOS, not only Linux.
   `.github/workflows/ci.yml`.
 
+### Added (stdio)
+
+- **Regex search no longer needs ripgrep.** `vault_search({ regex: true })` used to throw
+  `UNSUPPORTED` ("the Docker image has it") when `rg` wasn't on `PATH` — wrong for a bundle or a
+  bare `stdio` install. It now falls back to a builtin linear-time regex engine
+  (`compileSafeSearch` in `src/vault/safe-regex.ts`, the same Thompson-NFA machinery `vault_query`'s
+  `regex` condition already used, extended with unanchored search and a `caseSensitive` option) —
+  a reduced syntax (literals, `.`, character classes, `* + ? {m,n}`, alternation, grouping; no
+  anchors, lookaround or backreferences), rejecting anything else with `INVALID_INPUT` naming the
+  construct. Ripgrep is recommended, not required: installed, it's still used (full syntax,
+  faster); either way, `brainstem_ping` gains `search.regexEngine: 'ripgrep' | 'builtin'`, the
+  `vault_search` description says which syntax applies, and the `initialize` instructions gain one
+  sentence when ripgrep is absent. `src/storage/local-fs.ts`, `src/vault/safe-regex.ts`,
+  `src/vault/instructions.ts`, `src/mcp/factory.ts`, `src/tools/search.ts`; `./brainstem doctor`
+  and the README name the install line per platform.
+
 ## [0.6.0] — 2026-09-21
 
 The stdio server becomes something a colleague can be given: a read-only mode, a setup that

@@ -145,10 +145,11 @@ describe('vault_search', () => {
     expect(sc.matches.map((m) => m.path)).toContain('00-inbox/todo.md');
   });
 
-  it('rejects regex:true without ripgrep with UNSUPPORTED (this harness runs the JS fallback)', async () => {
+  it('regex:true without ripgrep now runs through the builtin engine (this harness runs the JS fallback)', async () => {
     const r = await h.call('vault_search', { query: 'mi.k', regex: true });
-    expect(r.isError).toBe(true);
-    expect(text(r)).toMatch(/UNSUPPORTED/);
+    expect(r.isError).toBeFalsy();
+    const sc = r.structuredContent as { matches: { path: string }[] };
+    expect(sc.matches.map((m) => m.path)).toContain('00-inbox/todo.md');
   });
 
   // Regression: candidate filtering used to run one unscoped, alphabetically-ordered
@@ -202,17 +203,38 @@ describe('vault_search', () => {
   });
 });
 
-describe.skipIf(!hasRipgrep())('vault_search regex (real ripgrep)', () => {
+// Regex-result parity end-to-end: 'builtin' (ripgrepPath: null, always runs — see
+// src/vault/safe-regex.ts's compileSafeSearch) and, only when a real binary is on PATH,
+// 'ripgrep' — the same query through the same tool must find the same note either way.
+const regexToolBackends: { name: string; ripgrepPath: string | null }[] = [
+  { name: 'builtin (JS fallback)', ripgrepPath: null },
+  ...(hasRipgrep() ? [{ name: 'ripgrep (real binary)', ripgrepPath: 'rg' }] : []),
+];
+
+describe.each(regexToolBackends)('vault_search regex ($name)', ({ ripgrepPath }) => {
   it('runs a regex query end-to-end through the tool', async () => {
-    const rgHarness = await startHarness(undefined, 'rg');
+    const regexHarness = await startHarness(undefined, ripgrepPath);
     try {
-      await rgHarness.call('vault_write', { path: 'r.md', content: 'a cat and a dog\n' });
-      const r = await rgHarness.call('vault_search', { query: 'cat|dog', regex: true });
+      await regexHarness.call('vault_write', { path: 'r.md', content: 'a cat and a dog\n' });
+      const r = await regexHarness.call('vault_search', { query: 'cat|dog', regex: true });
       expect(r.structuredContent).toMatchObject({ regex: true, truncated: false });
       const sc = r.structuredContent as { matches: { path: string }[] };
       expect(sc.matches.map((m) => m.path)).toEqual(['r.md']);
     } finally {
-      await rgHarness.close();
+      await regexHarness.close();
+    }
+  });
+});
+
+describe('vault_search regex — INVALID_INPUT when ripgrep is absent', () => {
+  it('a construct outside the reduced syntax fails, naming why', async () => {
+    const builtinHarness = await startHarness(undefined, null);
+    try {
+      const r = await builtinHarness.call('vault_search', { query: '^abc', regex: true });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toContain('ripgrep is not installed');
+    } finally {
+      await builtinHarness.close();
     }
   });
 });

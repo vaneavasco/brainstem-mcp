@@ -35,6 +35,7 @@ const TUNNEL_MODES = new Set(['cloudflare', 'quick', 'none']);
 export const REMEDIES: {
   node: Record<'linux' | 'darwin' | 'win32', string>;
   docker: Record<'linux' | 'darwin' | 'win32', string>;
+  ripgrep: Record<'linux' | 'darwin' | 'win32', string>;
 } = {
   node: {
     linux:
@@ -46,6 +47,13 @@ export const REMEDIES: {
     linux: DOCKER_ENGINE_URL,
     darwin: DOCKER_DESKTOP_URL,
     win32: DOCKER_DESKTOP_URL,
+  },
+  // Recommended, not required (see the "ripgrep" check below): regex search runs on the builtin
+  // engine without it (src/vault/safe-regex.ts) — these are just the faster, full-syntax path.
+  ripgrep: {
+    linux: 'sudo apt install ripgrep',
+    darwin: 'brew install ripgrep',
+    win32: 'winget install BurntSushi.ripgrep.MSVC',
   },
 };
 
@@ -167,6 +175,22 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<Check[]> {
       nodeOk,
       nodeOk ? `Node ${nodeVersion}` : `Node ${nodeVersion} — need >= ${MIN_NODE_MAJOR}`,
       nodeOk ? undefined : REMEDIES.node[platform],
+    ),
+  );
+
+  // Recommended, not required: regex search works either way (the builtin engine, when ripgrep
+  // is absent, just supports a reduced syntax — see src/vault/safe-regex.ts and vault_search's
+  // description), so this check never fails doctor on its own — `ok` is always true.
+  const rgVersion = await probe.exec('rg', ['--version']);
+  const rgOk = rgVersion.code === 0;
+  checks.push(
+    check(
+      'ripgrep',
+      true,
+      rgOk
+        ? 'ripgrep found (regex search uses the full syntax)'
+        : 'ripgrep not found — recommended for faster, full-syntax regex search',
+      rgOk ? undefined : REMEDIES.ripgrep[platform],
     ),
   );
 
