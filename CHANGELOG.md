@@ -6,6 +6,14 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-22
+
+The Claude Desktop bundle: `brainstem-mcp-0.7.0.mcpb` on the release page, one file that
+installs the stdio server on macOS and Windows 11 with no Docker, no tunnel and no secret.
+Regex search works without ripgrep. The whole suite now runs on Linux, macOS and Windows, which
+found and fixed platform defects in the vault paths, the file watcher and the file renames.
+Phases 5 and 6 of the Claude Desktop integration plan.
+
 Phase 6 of the Claude Desktop integration plan: the whole test suite now runs on Linux, macOS
 and Windows 11 in CI (`platforms` in `.github/workflows/ci.yml`), which found the two defects
 below — both apply everywhere, not only on the platforms that surfaced them.
@@ -742,6 +750,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.7.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.0...v0.4.1

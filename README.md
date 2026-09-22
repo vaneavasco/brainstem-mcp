@@ -20,7 +20,7 @@ Handing this to someone non-technical — a manager, a marketer, anyone who just
 
 ## Status
 
-**v0.6.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
+**v0.7.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
 
 Verified end-to-end: Linux host · Claude Code · claude.ai web (all tools, via a live quick tunnel) · Docker smoke test in CI.
 Implemented but not yet verified by a real run: Claude mobile app · `cloudflare` (token) tunnel mode · Windows and macOS launchers · reconnect after a tunnel restart.
