@@ -20,7 +20,7 @@ Handing this to someone non-technical — a manager, a marketer, anyone who just
 
 ## Status
 
-**v0.7.1 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
+**v0.8.0 — beta.** Built for the owner and technically comfortable colleagues who clone this repo; not (yet) a hosted product.
 
 Verified end-to-end: Linux host · Claude Code · claude.ai web (all tools, via a live quick tunnel) · Docker smoke test in CI.
 Implemented but not yet verified by a real run: Claude mobile app · `cloudflare` (token) tunnel mode · Windows and macOS launchers · reconnect after a tunnel restart.
@@ -119,6 +119,8 @@ It lives next to the state folder above but is a **separate** machine-local fold
 
 On macOS and Windows, Claude Desktop can install this server as an extension — an `.mcpb` bundle: the same stdio server as above (no Docker, no tunnel, no Node to install, since Desktop carries its own), packaged as one file.
 
+**New to Obsidian?** You don't need Obsidian installed — a folder is enough, and this server will happily start with an empty one. Once it's installed, start with the "Get started with this vault" prompt (see "Prompts in the + menu" below).
+
 1. Download `brainstem-mcp-X.Y.Z.mcpb` (or the fixed-name `brainstem-mcp.mcpb`, which always points at the latest release) from the [releases page](https://github.com/vaneavasco/brainstem-mcp/releases).
 2. In Claude Desktop: **Settings → Extensions → Advanced settings → Install Extension…**, and pick the downloaded file. (A double-click or a drag onto the Extensions page works too, where Desktop offers it.)
 3. The install form asks for the **vault folder** (required — any folder works, including an empty one), whether it should be **read-only**, a **timezone** for daily notes (defaults to UTC), and a **daily notes folder** (defaults to the vault root). These match `--vault`, `--read-only`, `VAULT_TIMEZONE` and `DAILY_NOTES_FOLDER` above — the bundle is a wrapper around the same server, not a separate one.
@@ -142,6 +144,18 @@ gh attestation verify brainstem-mcp-X.Y.Z.mcpb --repo vaneavasco/brainstem-mcp
 ```
 
 **Recommended: install ripgrep** (see above): the full regex syntax, and searches in tens of milliseconds instead of about a second on a large vault — the same either way, whether Claude reaches the server through the bundle or through `claude mcp add`.
+
+### Prompts in the + menu
+
+Claude Desktop lists these under the extension in the conversation's **+** menu — one-click entry points, no need to know a tool name:
+
+| Prompt | What it does |
+|---|---|
+| Get started with this vault | A plain-words tour of what is in the vault and what Claude can do here; proposes a simple layout if it is empty. |
+| Capture a note | Turns a thought, a paste or a meeting into a well-placed note, linked to what it relates to. |
+| Today's daily note | Opens today's journal, sums up what is there and adds what you tell it. |
+| Weekly review | What changed in the last week, what is open, what needs a decision, what to tidy. |
+| Tidy the vault | Finds broken links, notes without frontmatter or tags, near-duplicate tags and orphans; fixes what you confirm. |
 
 ## Commands
 
@@ -202,6 +216,8 @@ Without a tunnel token, `setup` configures a quick tunnel: a random `*.trycloudf
 ## Teach Claude your vault's conventions
 
 On first start the server seeds `<vault>/_brainstem/instructions.md`. Open it in Obsidian and write, in plain markdown, how Claude should work in *your* vault — where things live, which frontmatter keys you use, what it must never touch. The text is sent to Claude on every new connection (as the MCP server's `instructions`), on top of the built-in guidance; frontmatter and `<!-- HTML comments -->` in that note are not sent. Edits apply to the next connection, no restart needed; it is capped at 12,000 characters.
+
+Until you write something there, Claude also receives a short section that proposes a starter layout and helps someone new to Obsidian — plain-words behaviour, no jargon, and a simple folder structure to propose if the vault is empty. It disappears as soon as the file has a body.
 
 ## What Claude can do
 

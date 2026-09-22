@@ -9,6 +9,7 @@ import { registerVaultTools, tracked } from '../tools/register.ts';
 import { DEFAULT_INSTRUCTIONS } from '../vault/instructions.ts';
 import type { RuntimeResolver } from '../vault/runtime.ts';
 import { SERVER_INFO } from '../version.ts';
+import { registerVaultPrompts } from './prompts.ts';
 
 export interface FactoryDeps {
   resolveRuntime: RuntimeResolver;
@@ -107,8 +108,9 @@ export async function createVaultServer(
   const server = new McpServer(SERVER_INFO, {
     instructions,
     // Built per request, this server has no channel to push `notifications/tools/list_changed`
-    // on, so it must not promise to: a client that believes the promise never asks again.
-    capabilities: { tools: { listChanged: false } },
+    // (or .../prompts/list_changed) on, so it must not promise to: a client that believes the
+    // promise never asks again.
+    capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
     // Five minutes. An hour meant that a release which added tool arguments stayed invisible to
     // connected clients well past the hour; the list is small and the same for everyone.
     cacheHints: {
@@ -193,5 +195,6 @@ export async function createVaultServer(
     log: (error) => deps.logger.error({ err: error }, 'tool failure'),
     readOnly,
   });
+  registerVaultPrompts(server, { readOnly });
   return server;
 }

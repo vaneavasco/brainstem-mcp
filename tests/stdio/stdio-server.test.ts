@@ -24,7 +24,9 @@ interface StdioSession {
   client: Client;
   root: string;
   stateHome: string;
-  close(): Promise<void>;
+  /** `keepRoot: true` ends the client (and so the child process) without removing the vault
+   *  folder — for a test that boots a second session against the same, now-edited, vault. */
+  close(opts?: { keepRoot?: boolean }): Promise<void>;
 }
 
 async function startStdioSession(
@@ -56,13 +58,17 @@ async function startStdioSession(
       stderr: 'pipe',
     }),
   );
+  let closed = false;
   return {
     client,
     root: vaultRoot,
     stateHome: homes.BRAINSTEM_STATE_HOME,
-    async close() {
+    async close(opts) {
+      // Idempotent: a test may close a session itself and still have it on the cleanup list.
+      if (closed) return;
+      closed = true;
       await client.close(); // ends the child's stdin — the same shutdown path a real client uses
-      await fs.rm(vaultRoot, { recursive: true, force: true });
+      if (!opts?.keepRoot) await fs.rm(vaultRoot, { recursive: true, force: true });
       await fs.rm(homes.BRAINSTEM_STATE_HOME, { recursive: true, force: true });
       await fs.rm(homes.BRAINSTEM_CACHE_HOME, { recursive: true, force: true });
     },
@@ -102,6 +108,39 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
     expect(stdioTools).toEqual(httpTools);
     expect(stdioTools.length).toBeGreaterThan(0);
   });
+
+  it('listPrompts over stdio returns the five novice prompts on a writable vault', async () => {
+    const stdio = await startStdioSession();
+    cleanups.push(() => stdio.close());
+    const { prompts } = await stdio.client.listPrompts();
+    expect(prompts).toHaveLength(5);
+  });
+
+  it('brainstem_guide includes the "vault without owner instructions" section until the owner writes one, and drops it once they have', async () => {
+    const first = await startStdioSession();
+    const root = first.root;
+    // Registered before any assertion, like every other session here: a failing expectation
+    // must not leave the child process (or the temp vault) behind for the rest of the run.
+    cleanups.push(() => first.close());
+    const before = await first.client.callTool({ name: 'brainstem_guide', arguments: {} });
+    expect((before.content[0] as { text: string }).text).toContain(
+      '## Vault without owner instructions',
+    );
+    await first.close({ keepRoot: true });
+
+    await fs.mkdir(path.join(root, '_brainstem'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '_brainstem', 'instructions.md'),
+      '- Widgets live in widgets/.\n',
+    );
+
+    const second = await startStdioSession(root);
+    cleanups.push(() => second.close());
+    const after = await second.client.callTool({ name: 'brainstem_guide', arguments: {} });
+    const afterText = (after.content[0] as { text: string }).text;
+    expect(afterText).not.toContain('## Vault without owner instructions');
+    expect(afterText).toContain('Widgets live in widgets/.');
+  }, 30_000);
 
   it('reads, writes with expectedHash, and rejects a stale hash with CONFLICT', async () => {
     const stdio = await startStdioSession();

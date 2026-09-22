@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createInstructionsProvider,
   DEFAULT_INSTRUCTIONS,
+  defaultInstructionsWithoutOwner,
   INSTRUCTIONS_FILE,
   MAX_OWNER_INSTRUCTIONS_CHARS,
+  NO_OWNER_INSTRUCTIONS_SECTION,
   OWNER_INSTRUCTIONS_HEADING,
   renderInstructionsTemplate,
   ripgrepAbsentInstructionsNote,
@@ -49,7 +51,10 @@ describe('DEFAULT_INSTRUCTIONS', () => {
     try {
       const { tools } = await h.client.listTools();
       const registered = new Set(tools.map((t) => t.name));
-      const mentioned = [...new Set(DEFAULT_INSTRUCTIONS.match(/vault_[a-z_]+/g) ?? [])];
+      // Includes the "vault without owner instructions" section too: it names tools on the
+      // owner's behalf (vault_list, vault_query, ...) just like the defaults do.
+      const combined = `${DEFAULT_INSTRUCTIONS}\n${NO_OWNER_INSTRUCTIONS_SECTION}`;
+      const mentioned = [...new Set(combined.match(/vault_[a-z_]+/g) ?? [])];
       expect(mentioned.length).toBeGreaterThan(5);
       for (const name of mentioned) expect(registered, name).toContain(name);
     } finally {
@@ -58,10 +63,34 @@ describe('DEFAULT_INSTRUCTIONS', () => {
   });
 });
 
+describe('NO_OWNER_INSTRUCTIONS_SECTION', () => {
+  it('stays short: it is sent on every connection until the owner writes something', () => {
+    expect(NO_OWNER_INSTRUCTIONS_SECTION.length).toBeLessThan(1_300);
+  });
+
+  it('tells the owner where to write their own instructions instead', () => {
+    expect(NO_OWNER_INSTRUCTIONS_SECTION).toContain('_brainstem/instructions.md');
+  });
+});
+
+describe('defaultInstructionsWithoutOwner', () => {
+  it('is the defaults plus the novice section, present only until the owner writes something', async () => {
+    expect(defaultInstructionsWithoutOwner()).toBe(
+      `${DEFAULT_INSTRUCTIONS}\n\n${NO_OWNER_INSTRUCTIONS_SECTION}`,
+    );
+    const withoutOwner = await createInstructionsProvider(dir).get();
+    expect(withoutOwner).toContain('## Vault without owner instructions');
+
+    await fs.writeFile(file(), '- Projects live in `10-projects/`.\n');
+    const withOwner = await createInstructionsProvider(dir).get();
+    expect(withOwner).not.toContain('## Vault without owner instructions');
+  });
+});
+
 describe('createInstructionsProvider', () => {
-  it('returns the defaults alone when the owner file does not exist', async () => {
+  it('returns the defaults plus the "no owner instructions" section when the owner file does not exist', async () => {
     const provider = createInstructionsProvider(dir);
-    expect(await provider.get()).toBe(DEFAULT_INSTRUCTIONS);
+    expect(await provider.get()).toBe(defaultInstructionsWithoutOwner());
   });
 
   it('appends the owner text under its own heading, without frontmatter or HTML comments', async () => {
@@ -81,7 +110,7 @@ describe('createInstructionsProvider', () => {
 
   it('treats a file that is only frontmatter, comments and whitespace as unset', async () => {
     await fs.writeFile(file(), renderInstructionsTemplate());
-    expect(await createInstructionsProvider(dir).get()).toBe(DEFAULT_INSTRUCTIONS);
+    expect(await createInstructionsProvider(dir).get()).toBe(defaultInstructionsWithoutOwner());
   });
 
   it('re-reads the file when its mtime changes and caches otherwise', async () => {
@@ -123,7 +152,7 @@ describe('createInstructionsProvider', () => {
         throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
       },
     });
-    expect(await provider.get()).toBe(DEFAULT_INSTRUCTIONS);
+    expect(await provider.get()).toBe(defaultInstructionsWithoutOwner());
   });
 });
 

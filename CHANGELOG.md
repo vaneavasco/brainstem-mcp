@@ -6,6 +6,27 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-22
+
+For colleagues who install the bundle on a folder and don't know Obsidian: a plain-words tour and
+four other one-click entry points, and guidance that proposes a starter layout until the owner
+writes their own conventions.
+
+### Added
+
+- **Five MCP prompts** (`prompts/list` + `prompts/get`, `src/mcp/prompts.ts`): `get_started`,
+  `capture`, `daily_note`, `weekly_review` and `tidy_up`. Claude Desktop lists them in the
+  conversation's "+" menu under the extension, so someone new to Obsidian has a one-click way in
+  without knowing a tool name. Read-only mode registers only `get_started` and `weekly_review`,
+  the same split `readOnlyHint` makes for tools. This touches the tool/prompt surface common to
+  both the HTTP server and the bundle, and is included in the generated Claude Desktop manifest.
+- **A "vault without owner instructions" section** (`src/vault/instructions.ts`): while the owner
+  has written nothing into `_brainstem/instructions.md`, the instructions Claude receives on every
+  connection also propose a plain-words starter layout (`inbox/`, `projects/`, `people/`,
+  `attachments/`, daily notes, frontmatter conventions) and ask Claude to behave accordingly —
+  no jargon, use the vault's features on the owner's behalf. It disappears the moment the owner
+  writes their own text. Same common surface as above: the HTTP server and the bundle both send it.
+
 ## [0.7.1] — 2026-09-22
 
 What the first real install of the bundle, on Windows 11, taught: a typed setting must never
@@ -771,6 +792,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.8.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.5.0...v0.6.0

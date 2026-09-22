@@ -211,6 +211,9 @@ The five costliest prompts of the reader test, run through stdio in Claude Code 
 8. macOS only: a FIFO in the vault would once have frozen the server; not worth reproducing by hand — covered by the suite on the macOS runner.
 9. Windows only: a vault under OneDrive or another synced folder: writes succeed (rename retries), and `brainstem_ping` reports `localPeers: 0` with one Desktop window open.
 10. Both: the vault on an external or network drive if anyone has one; a vault path with spaces and non-ASCII letters.
+11. Both: in a fresh chat, without calling `brainstem_guide`, ask "how should you edit notes in my vault?" — an answer that mentions `expectedHash` or editing by section proves Claude Desktop hands the server's instructions to the model; and the five prompts appear in the + menu under the extension (say which ones ran end to end).
+
+**2026-09-22.** The "vault without owner instructions" section (`src/vault/instructions.ts`) and the five MCP prompts (`src/mcp/prompts.ts`, item 11 above) were added for colleagues new to Obsidian: the instructions section proposes a starter layout in plain words until the owner writes their own, and the prompts (`get_started`, `capture`, `daily_note`, `weekly_review`, `tidy_up`) give a one-click way into the vault from Claude Desktop's + menu, without knowing a tool name.
 
 ## Out of scope
 
