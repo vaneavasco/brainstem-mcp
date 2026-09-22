@@ -160,6 +160,22 @@ describe('the stdio entrypoint (src/stdio-main.ts)', () => {
   });
 });
 
+describe('a wrong optional setting from the install form never stops the server', () => {
+  it('starts with VAULT_TIMEZONE=EEST, serves, and says so in brainstem_ping', async () => {
+    const session = await startStdioSession(undefined, { VAULT_TIMEZONE: 'EEST' });
+    try {
+      const ping = await session.client.callTool({ name: 'brainstem_ping', arguments: {} });
+      const body = structured(ping) as { configWarnings?: string[] };
+      expect(body.configWarnings).toHaveLength(1);
+      expect(body.configWarnings?.[0]).toMatch(/VAULT_TIMEZONE/);
+      const list = await session.client.listTools();
+      expect(list.tools.length).toBeGreaterThan(20);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
 describe('read-only mode (--read-only and VAULT_READ_ONLY=true, over a real stdio child)', () => {
   // Three real child processes, each a full spawn + MCP handshake: honest 60s rather than raising
   // the suite's default 15s, which a loaded (or just slower — the Windows CI runner) machine can

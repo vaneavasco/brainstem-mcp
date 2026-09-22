@@ -277,6 +277,42 @@ describe('storage and vault settings', () => {
   });
 });
 
+describe('loadVaultConfig is lenient with the optional settings an install form fills in', () => {
+  // Claude Desktop's install form is free text: a colleague typed "EEST" as the timezone and the
+  // server refused to start, which Desktop showed as a connection error. A wrong optional value
+  // falls back to its default and is reported; the vault path and read-only flag stay strict.
+  it('an invalid timezone falls back to UTC with a warning naming the value', () => {
+    const cfg = loadVaultConfig({ VAULT_PATH: '/tmp/v', VAULT_TIMEZONE: 'EEST' });
+    expect(cfg.vaultSettings.dailyNotes.timezone).toBe('UTC');
+    expect(cfg.warnings).toHaveLength(1);
+    expect(cfg.warnings[0]).toMatch(/VAULT_TIMEZONE.*EEST.*UTC/);
+  });
+
+  it('an invalid daily-notes folder or format falls back too, each with its own warning', () => {
+    const cfg = loadVaultConfig({
+      VAULT_PATH: '/tmp/v',
+      DAILY_NOTES_FOLDER: '../outside',
+      DAILY_NOTES_FORMAT: 'yyyy/',
+    });
+    expect(cfg.vaultSettings.dailyNotes.folder).toBe('');
+    expect(cfg.vaultSettings.dailyNotes.format).toBe('yyyy-MM-dd');
+    expect(cfg.warnings.map((w) => w.split(' ')[0]).sort()).toEqual([
+      'DAILY_NOTES_FOLDER',
+      'DAILY_NOTES_FORMAT',
+    ]);
+  });
+
+  it('valid settings produce no warning', () => {
+    expect(
+      loadVaultConfig({ VAULT_PATH: '/tmp/v', VAULT_TIMEZONE: 'Europe/Berlin' }).warnings,
+    ).toEqual([]);
+  });
+
+  it('the HTTP server (loadConfig) stays strict: a wrong timezone is still an error there', () => {
+    expect(() => loadConfig(baseEnv({ VAULT_TIMEZONE: 'EEST' }))).toThrow(/VAULT_TIMEZONE/);
+  });
+});
+
 describe('loadVaultConfig', () => {
   it('needs only VAULT_PATH — no PUBLIC_URL, no OWNER_SECRET, no tunnel settings', () => {
     const cfg = loadVaultConfig({ VAULT_PATH: '/tmp/my-vault' });
@@ -359,27 +395,19 @@ describe('loadVaultConfig', () => {
     expect(cfg.stateDir).toBe('/tmp/state');
   });
 
-  it('rejects an unknown timezone the same way loadConfig does', () => {
-    let err: unknown;
-    try {
-      loadVaultConfig({ VAULT_PATH: '/tmp/vault', VAULT_TIMEZONE: 'Mars/Olympus' });
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(ConfigError);
-    expect((err as ConfigError).invalid).toEqual(['VAULT_TIMEZONE']);
-    expect((err as ConfigError).message).toContain('IANA');
+  it('an unknown timezone is NOT an error here, unlike loadConfig: it falls back to UTC', () => {
+    // these values come from an install form, not from `setup`; see buildVaultSettings
+    const cfg = loadVaultConfig({ VAULT_PATH: '/tmp/vault', VAULT_TIMEZONE: 'Mars/Olympus' });
+    expect(cfg.vaultSettings.dailyNotes.timezone).toBe('UTC');
+    expect(cfg.warnings.map((w) => w.split(' ')[0])).toEqual(['VAULT_TIMEZONE']);
+    expect(cfg.warnings[0]).toContain('IANA');
   });
 
-  it('rejects a DAILY_NOTES_FOLDER that would escape the vault, the same way loadConfig does', () => {
-    let err: unknown;
-    try {
-      loadVaultConfig({ VAULT_PATH: '/tmp/vault', DAILY_NOTES_FOLDER: '../x' });
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(ConfigError);
-    expect((err as ConfigError).invalid).toEqual(['DAILY_NOTES_FOLDER']);
+  it('a DAILY_NOTES_FOLDER that would escape the vault falls back to the root, with a warning', () => {
+    // the fallback is the safe choice: the path policy still refuses '../x' everywhere else
+    const cfg = loadVaultConfig({ VAULT_PATH: '/tmp/vault', DAILY_NOTES_FOLDER: '../x' });
+    expect(cfg.vaultSettings.dailyNotes.folder).toBe('');
+    expect(cfg.warnings.map((w) => w.split(' ')[0])).toEqual(['DAILY_NOTES_FOLDER']);
   });
 
   it('defaults to process.env when called with no argument', () => {

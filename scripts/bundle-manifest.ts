@@ -133,7 +133,7 @@ export function buildManifest(pkg: PackageJson, tools: ManifestTool[]): Record<s
         type: 'string',
         title: 'Timezone',
         description:
-          'IANA timezone for daily notes (e.g. Europe/Berlin, America/New_York). Leave as UTC if unsure.',
+          'For daily notes. An IANA name from the tz database, region/city, such as Europe/Berlin, Europe/Bucharest or America/New_York; not an abbreviation like EET or CET, which is ignored. Leave as UTC if unsure.',
         required: false,
         default: 'UTC',
       },

@@ -133,46 +133,63 @@ interface VaultSettingsFields {
  * `resolveDailyNotePath`, so the two validate a vault's settings identically and cannot drift
  * apart on that logic.
  */
-function buildVaultSettings(d: VaultSettingsFields): VaultSettingsConfig {
+function buildVaultSettings(
+  d: VaultSettingsFields,
+  /** Lenient: an invalid OPTIONAL value falls back to its default and is reported in `warnings`
+   *  instead of throwing. The stdio server uses this, because its values come from an install
+   *  form typed by a person (a colleague wrote "EEST" and the server refused to start, which the
+   *  client showed as a connection error). The HTTP server stays strict: its `.env` is written by
+   *  `setup`, which validates. */
+  lenient = false,
+): { vaultSettings: VaultSettingsConfig; warnings: string[] } {
+  const warnings: string[] = [];
+  const bad = (key: string, message: string): undefined => {
+    if (!lenient) throw new ConfigError([], [key], message);
+    warnings.push(message);
+  };
+  let timezone = d.VAULT_TIMEZONE;
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: d.VAULT_TIMEZONE });
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
   } catch {
-    throw new ConfigError(
-      [],
-      ['VAULT_TIMEZONE'],
-      'VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Berlin)',
+    bad(
+      'VAULT_TIMEZONE',
+      `VAULT_TIMEZONE must be a valid IANA timezone (e.g. Europe/Berlin); "${timezone}" is not, using UTC`,
     );
+    timezone = 'UTC';
+  }
+  let folder = d.DAILY_NOTES_FOLDER;
+  try {
+    normalizeVaultPath(folder);
+  } catch {
+    bad(
+      'DAILY_NOTES_FOLDER',
+      `DAILY_NOTES_FOLDER must be a vault-relative folder (no .., no hidden folders); "${folder}" is not, using the vault root`,
+    );
+    folder = '';
+  }
+  let format = d.DAILY_NOTES_FORMAT;
+  const dailyNotes = (fmt: string) => ({
+    folder,
+    format: fmt,
+    template: d.DAILY_NOTES_TEMPLATE ?? null,
+    timezone,
+  });
+  try {
+    resolveDailyNotePath(dailyNotes(format), new Date());
+  } catch {
+    bad(
+      'DAILY_NOTES_FORMAT',
+      `DAILY_NOTES_FORMAT is not a valid date-fns/strftime pattern; "${format}" is not, using yyyy-MM-dd`,
+    );
+    format = 'yyyy-MM-dd';
   }
   const vaultSettings: VaultSettingsConfig = {
-    dailyNotes: {
-      folder: d.DAILY_NOTES_FOLDER,
-      format: d.DAILY_NOTES_FORMAT,
-      template: d.DAILY_NOTES_TEMPLATE ?? null,
-      timezone: d.VAULT_TIMEZONE,
-    },
+    dailyNotes: dailyNotes(format),
     requiredFrontmatter: d.REQUIRED_FRONTMATTER.split(',')
-      .map((s) => s.trim())
+      .map((x) => x.trim())
       .filter(Boolean),
   };
-  try {
-    normalizeVaultPath(vaultSettings.dailyNotes.folder);
-  } catch {
-    throw new ConfigError(
-      [],
-      ['DAILY_NOTES_FOLDER'],
-      'DAILY_NOTES_FOLDER must be a vault-relative folder (no .., no hidden folders)',
-    );
-  }
-  try {
-    resolveDailyNotePath(vaultSettings.dailyNotes, new Date());
-  } catch {
-    throw new ConfigError(
-      [],
-      ['DAILY_NOTES_FORMAT'],
-      'DAILY_NOTES_FORMAT is not a valid date-fns/strftime pattern',
-    );
-  }
-  return vaultSettings;
+  return { vaultSettings, warnings };
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -252,7 +269,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     d.STORAGE_BACKEND === 'localfs'
       ? { backend: 'localfs', vaultPath: d.VAULT_PATH as string }
       : { backend: 'drive' };
-  const vaultSettings = buildVaultSettings(d);
+  const vaultSettings = buildVaultSettings(d).vaultSettings;
 
   return {
     publicUrl,
@@ -289,6 +306,9 @@ export interface VaultConfig {
   /** When true, only tools whose annotations declare `readOnlyHint: true` are registered — see
    *  `src/tools/register.ts`. Applies to both ways in (HTTP and stdio). */
   readOnly: boolean;
+  /** Optional settings that were invalid and fell back to their default (lenient parsing; see
+   *  `buildVaultSettings`). Empty when everything was accepted as given. */
+  warnings: string[];
 }
 
 /** The env keys `loadVaultConfig` reads. Everything else (`PUBLIC_URL`, `OWNER_SECRET`, tunnel
@@ -336,7 +356,7 @@ export function loadVaultConfig(
   if (!d.VAULT_PATH) {
     throw new ConfigError(['VAULT_PATH'], [], 'pass --vault <path>, or set VAULT_PATH');
   }
-  const vaultSettings = buildVaultSettings(d);
+  const { vaultSettings, warnings } = buildVaultSettings(d, true);
   return {
     vaultPath: d.VAULT_PATH,
     vaultSettings,
@@ -346,5 +366,6 @@ export function loadVaultConfig(
     logLevel: d.LOG_LEVEL,
     stateDir: d.STATE_DIR ?? null,
     readOnly: d.VAULT_READ_ONLY,
+    warnings,
   };
 }

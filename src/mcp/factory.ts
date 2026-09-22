@@ -23,6 +23,9 @@ export interface FactoryDeps {
    *  `src/tools/register.ts`'s `withIndexGate`). Defaults to false. Threaded from `Config`/
    *  `VaultConfig`'s `readOnly` by `src/app.ts` and `src/stdio-main.ts`. */
   readOnly?: boolean;
+  /** Optional install settings that were invalid and fell back to a default (stdio only): in
+   *  `brainstem_ping` so a wrong timezone typed into the install form is visible, not silent. */
+  configWarnings?: string[];
   /** Counts other live stdio processes on this vault, on this machine (`src/storage/
    *  local-peers.ts`), at call time — stdio only; the HTTP server never sets this, so
    *  `brainstem_ping`'s `localPeers` field is absent there. */
@@ -77,6 +80,7 @@ const PingOutput = z.looseObject({
   /** True when this connection only exposes tools annotated `readOnlyHint: true` — see
    *  `FactoryDeps.readOnly`. */
   readOnly: z.boolean(),
+  configWarnings: z.array(z.string()).optional(),
   /** Other live stdio processes on this vault, on this machine, counted at call time — see
    *  `FactoryDeps.localPeers`. Absent on the HTTP server. */
   localPeers: z.number().optional(),
@@ -151,6 +155,7 @@ export async function createVaultServer(
             ...(runtime.indexCacheStats() ? { cache: runtime.indexCacheStats() } : {}),
           },
           readOnly,
+          ...(deps.configWarnings?.length ? { configWarnings: deps.configWarnings } : {}),
           ...(deps.localPeers ? { localPeers: await deps.localPeers() } : {}),
           search: {
             regexEngine: runtime.adapter.capabilities().nativeSearch ? 'ripgrep' : 'builtin',
