@@ -8,6 +8,7 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SERVER_INFO } from '../../src/version.ts';
 import { testMachineHomeEnv } from '../helpers/state-home.ts';
+import { STDIO_ENTRY as STDIO_MAIN } from '../helpers/stdio-entry.ts';
 import { startHarness } from '../tools/harness.ts';
 
 function hasRipgrep(): boolean {
@@ -18,8 +19,6 @@ function hasRipgrep(): boolean {
     return false;
   }
 }
-
-const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
 
 interface StdioSession {
   client: Client;

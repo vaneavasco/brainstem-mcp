@@ -9,8 +9,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { afterEach, describe, expect, it } from 'vitest';
-
-const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
+import { STDIO_ENTRY as STDIO_MAIN } from '../helpers/stdio-entry.ts';
 
 interface RunResult {
   code: number | null;

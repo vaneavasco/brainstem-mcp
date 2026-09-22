@@ -1,5 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { writeManifest } from '../../scripts/bundle-manifest.ts';
 import { serverVersion } from '../../src/version.ts';
 
 /**
@@ -34,6 +37,22 @@ describe('the version says the same thing everywhere', () => {
   it('the README names this version', () => {
     expect(read('README.md')).toContain(`**v${pkgVersion} — beta.**`);
   });
+
+  it('the generated Claude Desktop bundle manifest carries this version too', async () => {
+    // Generated to a temp path, never bundle/manifest.json itself (that file is gitignored build
+    // output — this proves scripts/bundle-manifest.ts's OWN generation matches package.json, the
+    // same way `npm run bundle` would, without depending on a previous build having run).
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-manifest-version-'));
+    try {
+      const manifestPath = path.join(tmpDir, 'manifest.json');
+      const manifest = await writeManifest(manifestPath);
+      expect(manifest.version).toBe(pkgVersion);
+      const onDisk = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { version: string };
+      expect(onDisk.version).toBe(pkgVersion);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe('the version a server reports', () => {

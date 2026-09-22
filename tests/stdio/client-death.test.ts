@@ -10,8 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { removeMachineHomes, testMachineHomeEnv } from '../helpers/state-home.ts';
+import { STDIO_ENTRY as STDIO_MAIN } from '../helpers/stdio-entry.ts';
 
-const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
 const BUSY_RELAY = path.resolve(import.meta.dirname, 'helpers', 'busy-relay.ts');
 
 function isAlive(pid: number): boolean {

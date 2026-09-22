@@ -13,8 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { vaultKey } from '../../src/storage/local-state.ts';
 import { INDEX_CACHE_SCHEMA } from '../../src/vault/frontmatter-index.ts';
 import { removeMachineHomes, testCacheHome, testMachineHomeEnv } from '../helpers/state-home.ts';
-
-const STDIO_MAIN = path.resolve(import.meta.dirname, '..', '..', 'src', 'stdio-main.ts');
+import { STDIO_ENTRY as STDIO_MAIN } from '../helpers/stdio-entry.ts';
 
 function structured(result: CallToolResult): Record<string, unknown> {
   return result.structuredContent as Record<string, unknown>;
@@ -32,11 +31,21 @@ interface PingIndex {
 }
 
 async function seedFixtureVault(root: string): Promise<void> {
-  await fs.writeFile(
-    path.join(root, 'a.md'),
-    '---\ntype: note\ntags: [x]\n---\n# A\n\nlinks to [[b]].\n',
-  );
-  await fs.writeFile(path.join(root, 'b.md'), '---\ntype: note\ntags: [y]\n---\n# B\n');
+  const files = [
+    ['a.md', '---\ntype: note\ntags: [x]\n---\n# A\n\nlinks to [[b]].\n'],
+    ['b.md', '---\ntype: note\ntags: [y]\n---\n# B\n'],
+  ] as const;
+  for (const [name, content] of files) await fs.writeFile(path.join(root, name), content);
+  // Backdate both files' mtime well past INDEX_CACHE_RACY_WINDOW_MS (3 s — src/storage/
+  // local-cache.ts): a save happening "close to" a write is deliberately excluded from the cache
+  // (git's own "racily clean" rule, adapted), so leaving them at their real (just-now) mtime made
+  // this test's first-boot save race that window — reliably against the bundled stdio-main.js
+  // (see npm run test:bundle), which loads as one pre-built file and so reaches "index ready" and
+  // saves the cache fast enough to still be inside the window; the unbundled source's slower
+  // per-module cold start happened to land outside it instead, which is what made this pass
+  // there before. Backdating removes the race regardless of how fast the boot itself is.
+  const past = new Date(Date.now() - 60_000);
+  await Promise.all(files.map(([name]) => fs.utimes(path.join(root, name), past, past)));
 }
 
 /** Connects, waits for stderr readiness, polls ping until the index is no longer building, and
