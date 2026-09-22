@@ -400,6 +400,19 @@ export class LocalFSAdapter implements StorageAdapter {
     for (; probeLen > 0; probeLen -= 1) {
       probeAbs = path.join(this.root, ...segments.slice(0, probeLen));
       try {
+        // Only a regular file or a folder is worth resolving. realpath on a FIFO OPENS it on
+        // macOS and never returns (measured: the suite hung there, three and a half hours, on the
+        // very test that guards reads against FIFOs) — that guard runs after this check, so this
+        // check must refuse to touch anything else itself. Whatever such a path is, the operation
+        // that follows answers for it; a case-only spelling of a FIFO is not worth telling apart.
+        // stat (not lstat, not realpath) follows the OS's own case folding without opening
+        // anything; a case-sensitive filesystem answers ENOENT here for a wrong spelling, and
+        // then this check is not needed at all.
+        const probed = await fs.stat(probeAbs).catch((error: unknown) => {
+          if (isEnoent(error)) return null; // nothing there: realpath cannot open anything either
+          throw error;
+        });
+        if (probed !== null && !probed.isFile() && !probed.isDirectory()) return null;
         real = await this.realpathNative(probeAbs);
         break;
       } catch (error) {

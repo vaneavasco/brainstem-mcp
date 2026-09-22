@@ -276,3 +276,37 @@ describe('LocalFSAdapter.create case detection', () => {
     }
   });
 });
+
+describe.skipIf(process.platform === 'win32')('the case check never resolves a FIFO', () => {
+  // realpath on a FIFO opens it on macOS and never returns; the suite hung there for hours, on
+  // the very test that guards reads against FIFOs, because this check ran first. So the check
+  // must not resolve anything that is not a file, a folder or a symlink — proven here with a
+  // realpath that would hang if it were reached.
+  it('read, hashOf and write on a FIFO answer at once, whatever realpath would do', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'brainstem-fifo-case-')));
+    try {
+      execFileSync('mkfifo', [path.join(dir, 'pipe.md')]);
+      let reached = false;
+      const adapter = await LocalFSAdapter.create(dir, {
+        ripgrepPath: null,
+        caseInsensitive: true,
+        realpathNative: async (p) => {
+          if (p.endsWith('pipe.md')) {
+            reached = true;
+            await new Promise(() => {}); // what the real one does on macOS: never returns
+          }
+          return p;
+        },
+      });
+      const started = performance.now();
+      expect(await code(adapter.read('pipe.md'))).toBe('INVALID_INPUT');
+      expect(await adapter.hashOf('pipe.md')).toBeNull();
+      await adapter.write('pipe.md', 'x'); // replaces the FIFO by tmp+rename, never opens it
+      expect(reached).toBe(false);
+      expect(performance.now() - started).toBeLessThan(2_000);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
+});
