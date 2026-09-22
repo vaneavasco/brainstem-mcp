@@ -214,6 +214,11 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
   }
 
   const logger: Logger = createLogger(vaultConfig.logLevel, stderr);
+  // An install form is free text: a wrong optional value fell back to its default (config.ts),
+  // and is said here and in brainstem_ping rather than stopping the server before its first byte.
+  for (const warning of vaultConfig.warnings) {
+    logger.warn({ setting: warning.split(' ')[0] }, `install setting ignored: ${warning}`);
+  }
 
   // Resolved once, real I/O, and reused everywhere below that needs to compare a machine-local
   // folder against the vault (F1) — already known to exist and be a directory (validateVaultPath
@@ -415,6 +420,7 @@ export async function runStdioServer(opts: StdioMainOptions = {}): Promise<void>
         logger,
         instructions: () => instructions.get().then((text) => `${text}${regexNote}`),
         readOnly: vaultConfig.readOnly,
+        configWarnings: vaultConfig.warnings,
         localPeers: () => listOtherLivePeers(stateDir, process.pid).then((peers) => peers.length),
       }),
     { onerror: (error) => onTransportError(error) },

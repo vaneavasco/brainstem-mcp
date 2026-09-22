@@ -6,6 +6,22 @@ All notable changes to brainstem-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-22
+
+What the first real install of the bundle, on Windows 11, taught: a typed setting must never
+stop the server.
+
+### Fixed (stdio)
+
+- **A wrong optional setting in the install form no longer stops the server.** The first
+  install on Windows 11 typed `EEST` as the timezone; the server refused to start before its
+  first byte, which Claude Desktop showed as "connection closed during the server/discover
+  probe". An invalid timezone, daily-notes folder or format now falls back to its default, with
+  a warning in the log and in `brainstem_ping` (`configWarnings`). The vault folder and the
+  read-only flag stay strict. The HTTP server keeps refusing an invalid `.env`, which `setup`
+  writes and validates. The form's timezone field says what it accepts (a region/city name, not
+  an abbreviation).
+
 ## [0.7.0] — 2026-09-22
 
 The Claude Desktop bundle: `brainstem-mcp-0.7.0.mcpb` on the release page, one file that
@@ -755,6 +771,7 @@ claude.ai web; see *Status* in `README.md` for what is not yet verified.
 - Docker Compose deployment (app + tunnel), CI with unit/integration suites
   and a Docker smoke test, `npm run mcp:call` headless client for developers.
 
+[0.7.1]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vaneavasco/brainstem-mcp/compare/v0.4.1...v0.5.0
