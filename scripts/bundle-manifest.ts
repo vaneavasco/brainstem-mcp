@@ -78,7 +78,11 @@ export function buildManifest(pkg: PackageJson, tools: ManifestTool[]): Record<s
     name: 'brainstem-mcp',
     display_name: 'Brainstem',
     version: pkg.version,
-    description: pkg.description,
+    // package.json describes the whole repository (Docker, the tunnel): this file describes what
+    // is installed, which is the stdio server alone.
+    description:
+      'Read and write an Obsidian vault on this machine from Claude Desktop: search, query, edit — ' +
+      'no server, no account, no network.',
     long_description:
       'Read and write your Obsidian vault from Claude Desktop: search, query by frontmatter, edit notes, canvases and bases, keep links intact on rename, and stay safe with optimistic-concurrency writes. Runs entirely on your machine — no server, no account, no network port. Regex search works either way; installing ripgrep (recommended, not required) gives it the full regular-expression syntax and makes it faster.',
     author: { name: pkg.author, url: pkg.homepage },
@@ -129,7 +133,7 @@ export function buildManifest(pkg: PackageJson, tools: ManifestTool[]): Record<s
         type: 'string',
         title: 'Timezone',
         description:
-          'IANA timezone for daily notes (e.g. Europe/Chisinau, America/New_York). Leave as UTC if unsure.',
+          'IANA timezone for daily notes (e.g. Europe/Berlin, America/New_York). Leave as UTC if unsure.',
         required: false,
         default: 'UTC',
       },
