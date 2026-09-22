@@ -69,6 +69,20 @@ below — both apply everywhere, not only on the platforms that surfaced them.
   regex engine; a pattern with no derivable literal (`(a+)+b`, deliberately chosen to stay
   catastrophic for a backtracking engine) is unaffected by the prefilter, as expected, and stays
   linear. `src/vault/safe-regex.ts`.
+- **A Claude Desktop bundle.** `npm run bundle` esbuild-bundles `src/stdio-main.ts` into one file
+  (`bundle/dist/stdio-main.js`, ~2.0 MB unpacked; no Express, tunnel supervisor, CLI or
+  authorization-server code — `tests/bundle/build.test.ts` proves it), generates
+  `bundle/manifest.json` (MCPB 0.3) and an icon, and packs
+  `release/brainstem-mcp-X.Y.Z.mcpb` (plus a fixed-name copy and `SHA256SUMS`) with `mcpb
+  pack` — about 0.40 MiB packed. The install form asks for the vault folder (required), read-only,
+  timezone and a daily-notes folder; the manifest's `tools` list is generated from the real tool
+  registry so it cannot drift. `npm run test:bundle` runs the same `tests/stdio/**` suite that
+  proves the source against the packed file. New CI job `bundle` (needs `verify`, `platforms`)
+  builds and tests it on every push and PR, uploads it as an artifact, and — on a `v*` tag —
+  attaches it to that tag's GitHub release (created as a draft if needed) with a build-provenance
+  attestation. README gains a "Claude Desktop" section with install and verification steps.
+  `scripts/bundle-build.ts`, `scripts/bundle-manifest.ts`, `scripts/bundle-icon.ts`,
+  `scripts/bundle-pack.ts`, `vitest.bundle.config.ts`, `.github/workflows/ci.yml`.
 
 ## [0.6.0] — 2026-09-21
 
