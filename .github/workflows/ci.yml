@@ -137,7 +137,7 @@ jobs:
       # a pull request from a fork runs with read-only permissions whatever the block above says
       - name: attest build provenance
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: release/*.mcpb
       - name: attach to the GitHub release for this tag
