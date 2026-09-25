@@ -127,7 +127,7 @@ jobs:
       - run: npm ci
       - run: npm run bundle
       - run: npm run test:bundle
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: brainstem-mcp-bundle
           path: |
